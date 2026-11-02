@@ -1,0 +1,21 @@
+# 本仓库只放「跑起来需要的东西」：Python 包 + MAXScript + 启动器 + 交接文档。
+# 以下都是开发期资产或跑出来的产物，不进仓库。
+
+# 一轮实跑生成的模型产物：单个 .max 191MB 超 GitHub 单文件 100MB 硬上限（直接拒推）；
+# .obj / .mtl / textures 是从游戏 .pmx 抽出来的资源，不该由本仓库分发。
+# 需要时一条命令重生成：python tools/run_model.py <模型.pmx> && python tools/obj_run.py ...
+test_runs/
+outputs/
+
+# 273 条单元测试：开发期资产，本地跑（tools/check_ms.py 那份静态体检随仓库分发）
+tests/
+
+# v2 时期的工作笔记（本项目是 v3，历史结论已并进 README_HANDOVER.md）
+v2_改进落地说明.txt
+v2_交叉验证与改进计划.txt
+研究笔记_联网核查60条.md
+
+# Python / 临时
+__pycache__/
+*.py[cod]
+.tmp_help/

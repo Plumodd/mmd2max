@@ -1,0 +1,69 @@
+{
+  "metadata": {
+    "name": "3dsMax_Biped_Definition",
+    "version": "1.0",
+    "note": "Biped 节点名按模式生成；脊柱/手指/脚趾节数可变，不可写死。"
+  },
+  "root": "Bip001",
+  "center_nodes": {
+    "ROOT": "Bip001",
+    "CENTER": "Bip001",
+    "WAIST": "Bip001 Pelvis",
+    "LOWER_BODY": "Bip001 Spine",
+    "SPINE_1": "Bip001 Spine1",
+    "SPINE_2": "Bip001 Spine2",
+    "NECK": "Bip001 Neck",
+    "HEAD": "Bip001 Head"
+  },
+  "sided_patterns": {
+    "SHOULDER": "{side} Clavicle",
+    "ARM_UPPER": "{side} UpperArm",
+    "ARM_LOWER": "{side} Forearm",
+    "HAND": "{side} Hand",
+    "LEG_UPPER": "{side} Thigh",
+    "LEG_LOWER": "{side} Calf",
+    "FOOT": "{side} Foot",
+    "TOE": "{side} Toe0"
+  },
+  "finger_index": {
+    "THUMB": "0",
+    "INDEX": "1",
+    "MIDDLE": "2",
+    "RING": "3",
+    "PINKY": "4"
+  },
+  "side_aliases": {
+    "L": [
+      "L",
+      "Left",
+      "left",
+      "LEFT",
+      "左",
+      "l"
+    ],
+    "R": [
+      "R",
+      "Right",
+      "right",
+      "RIGHT",
+      "右",
+      "r"
+    ]
+  },
+  "variable_links": [
+    "Spine Links",
+    "Neck Links",
+    "Leg Links",
+    "Fingers",
+    "Finger Links",
+    "Toes",
+    "Toe Links",
+    "Tail Links",
+    "Forearm Twist Links",
+    "Upper Arm Twist Links"
+  ],
+  "special_nodes": {
+    "HorseLink": "腿部链特殊节点，不可当作脚踝骨",
+    "Twist": "扭转节点，不可当作关节骨"
+  }
+}
