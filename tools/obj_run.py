@@ -16,7 +16,9 @@ import time
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
+PROJECT = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
+sys.path.insert(0, str(PROJECT))
 
 from desktop import (  # noqa: E402
     capture_region,
@@ -27,7 +29,12 @@ from desktop import (  # noqa: E402
     paste_text,
     press_keys,
 )
+from mmd2max.targets import TARGETS, cfg_values as target_cfg_values  # noqa: E402
 from uia_dialog import invoke_safe_button  # noqa: E402
+
+# 五个装配目标值在 CFG 里的键名（顺序 = mmd2max.targets.TARGETS 的声明顺序）。
+# 只在这里取一次 keys()：Max 侧 mmd2maxLoadCfg 逐键必读，名单和 targets 分叉就是缺键中止。
+TARGET_CFG_KEYS = tuple(TARGETS)
 
 MAX_EXE = r"C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe"
 STARTUP_DIR = (Path.home() / "AppData/Local/Autodesk/3dsMax"
@@ -111,7 +118,11 @@ CFG_KEYS = (
     "MMD2MAX_OUTPUT", "MMD2MAX_MAP", "MMD2MAX_MARKER", "MMD2MAX_LOG",
     "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
     "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
-    "MMD2MAX_FOOTBOXFLAT", "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
+    "MMD2MAX_FOOTBOXFLAT",
+    # 五个装配目标值（容差/开关），全部来自 mmd2max.targets —— M2 把它们从 .ms 里的
+    # `global MMD2MAX_DIRTOL = 3.0` 搬到这里：写的一方必须是有测试的一方。
+    *TARGET_CFG_KEYS,
+    "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
     "MMD2MAX_INTERACTIVE", "MMD2MAX_QUIET",
 )
 
@@ -192,6 +203,9 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_INTERACTIVE": "false",
         "MMD2MAX_QUIET": "true",
     }
+    # 目标值（容差/开关）只有一个来源：mmd2max.targets。以前它们是 .ms 里的 `global X = 3.0`，
+    # Python 侧看不见这些判据，也就没法校验（M2 的 verdicts 表要用的正是这几个数）。
+    cfg.update(target_cfg_values())
     bad = [k for k, v in cfg.items()
            if v in ("True", "False", "None", "") and k not in CFG_EMPTY_OK]
     if bad:
@@ -207,8 +221,15 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
 
 
 def cfg_text(cfg: dict) -> str:
-    """CFG 文件的正文：线格式 v2（第 1 行是列名 `key<TAB>value`），无 BOM。"""
-    lines = ["key\tvalue"] + [f"{key}\t{value}" for key, value in cfg.items()]
+    """CFG 文件的正文：线格式 v2（第 1 行是列名 `key<TAB>value`），无 BOM。
+
+    行序按 CFG_KEYS 排，不按 dict 的插入序：目标值那一批是 `cfg.update()` 加在最后的，
+    照插入序写出来就和 CFG_KEYS 不一致，而「两轮 CFG 逐行可比」正靠这个顺序。
+    """
+    missing = [k for k in CFG_KEYS if k not in cfg]
+    if missing:
+        raise SystemExit(f"CFG 缺键，写不出与 CFG_KEYS 同序的文件：{'、'.join(missing)}")
+    lines = ["key\tvalue"] + [f"{key}\t{cfg[key]}" for key in CFG_KEYS]
     return "\n".join(lines) + "\n"
 
 

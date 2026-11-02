@@ -85,8 +85,10 @@ spec 具名列；MAXScript 只写、只回读。v3 里 `widths.tsv`（手掌/手
 | --- | --- | --- |
 | M1 | 线格式 v2：每个 spec 第一行是列名表头，单一 Python writer，MAXScript 建 name→index 后按列名取值；去掉 `bones.tsv` 与 `香菱_bones.tsv` 双份 | 第十七轮的判据数字逐位不变 |
 | M1b | 配置单源：25 个 `MMD2MAX_*` 注入项收成一个 cfg 块 + `MMD2MAX.CFG`；缺块即 abort；删死 flag（`MMD2MAX_LENAXIS`）、`mode=="flat"` 死分支、从没走到的 DQ 分支；`foot_pitch` 三重反转改一条直读 | 手跑 .ms 与自动跑几何**不可能**不一致 |
+| M2a | 五个容差/开关（`DIRTOL 3.0 / ROLLTOL 1.0 / TOETOL 0.5 / GAPTOL 0.5 / FOOTREACH true`）从 `.ms` 硬赋值搬进 `mmd2max/targets.py`，经 `MMD2MAX.CFG` 下发；新增 `mmd2maxCfgNum`（`"abc" as float` 在 Max 给 0 不报错）；配置汇总在 `InitLog` 之后落日志 | `.ms` 里每个名字只许一行赋值、右边必须是 CFG 读取；实跑 diff_round exit 0 |
 
-**实跑记录**：M1 ✅（对 v3 第十七轮基线）；M1b ✅（第十九轮 `baselines/round19_objrun.log`）。
+**实跑记录**：M1 ✅（对 v3 第十七轮基线）；M1b ✅（第十九轮 `baselines/round19_objrun.log`）；
+M2a ✅（第二十轮 `baselines/round20_objrun.log`，与第十九轮 diff **只多一行**「配置: …」= 新可见的汇总）。
 判据是 `python tools/diff_round.py --allow "^配置:" <基线> <本轮日志>` ⇒ exit 0：
 17→19 与 18→19 都**只剩 M1b 新增的那一行「配置: …MMD2MAX.CFG」**，其余全是时间、耗时与路径。
 这个对比器本身是新写的（`tools/diff_round.py` + `tests/test_diff_round.py`），因为手写 sed 裁

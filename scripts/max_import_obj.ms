@@ -14,7 +14,8 @@
    配置（M1b 起单源）：这份脚本只认一个入口 —— 全局变量 MMD2MAX_CFG 指向
    tools/obj_run.py 写出的 MMD2MAX.CFG。文件里每一项（OBJ/BONES/WEIGHTS/VERTS/
    OUTPUT/MAP/MARKER/LOG/MORPHS/PHYSICS/LIMBS/WIDTHS/SPINE_LINKS/FINGERS/
-   FINGER_LINKS/FOOTBOXFLAT/SKIN/SHOT/SHOTDIR/QUIET/INTERACTIVE）都由 mmd2maxLoadCfg
+   FINGER_LINKS/FOOTBOXFLAT/DIRTOL/ROLLTOL/TOETOL/GAPTOL/FOOTREACH/
+   SKIN/SHOT/SHOTDIR/QUIET/INTERACTIVE）都由 mmd2maxLoadCfg
    读进来，缺文件、缺键、值不合法一律抛错中止，绝不退回默认值。
    MORPHS/PHYSICS/WIDTHS/SHOTDIR 允许是空串 = 该阶段整段跳过；LIMBS 及其余路径
    为空一律抛错（见 mmd2maxLoadCfg 的空路径校验，名单与 obj_run.py 的 CFG_EMPTY_OK 一致）。
@@ -54,6 +55,17 @@ global MMD2MAX_SKIN
 global MMD2MAX_SHOT
 global MMD2MAX_QUIET
 global MMD2MAX_INTERACTIVE
+/* 五个装配目标值（M2 起由 mmd2max/targets.py 写进 CFG，这里只声明、不给默认值）。
+   声明必须排在任何读取者之前：以前这几个数就写在声明行末尾，于是「这份脚本自己带着判据」，
+   Python 侧根本不知道有哪些数 —— 现在缺键一律中止，和路径/开关同一待遇。 */
+global MMD2MAX_DIRTOL
+global MMD2MAX_ROLLTOL
+global MMD2MAX_TOETOL
+global MMD2MAX_GAPTOL
+global MMD2MAX_FOOTREACH
+/* mmd2maxLoadCfg 算好的配置摘要，由 mmd2maxMain 在 mmd2maxInitLog **之后**打出来
+   （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
+global MMD2MAX_CFGSUMMARY
 
 /* 下面四个开关：值一定来自 CFG（mmd2maxLoadCfg 已验过是 bool），所以这里**不再**
    写 try/catch + 默认值。以前那种写法把「配置没读到」和「配置是 false」压成同一个
@@ -743,6 +755,42 @@ fn mmd2maxCfgInt key low high =
     value
 )
 
+fn mmd2maxCfgNum key low high =
+(
+    /* 浮点配置（容差那一批）。为什么不能直接 `s as float` 了事：Max 里
+       "abc" as float 不抛错、给出 0 —— 0 度容差会让每根骨都报超标，看着像「判据生效」，
+       实际是配置没读到，和 M1b 干掉的那类静默默认值是同一个形状。
+       校验：数字 + 至多一个小数点 + 可选负号，越界照抛。
+       上下限由 mmd2max/targets.py 声明、这里逐字重复一遍，tests/test_targets.py 钉住两边一致。 */
+    local s = mmd2maxCfgStr key
+    local digits = #("0","1","2","3","4","5","6","7","8","9")
+    local isNumber = s.count > 0
+    local dots = 0
+    for i = 1 to s.count while isNumber do
+    (
+        local ch = substring s i 1
+        local good = ((findItem digits ch) > 0)
+        if not good and ch == "." do ( good = true; dots += 1 )
+        if i == 1 and ch == "-" do good = true
+        if dots > 1 do good = false
+        if not good do isNumber = false
+    )
+    if not isNumber do
+    (
+        local msg = "CFG 键 " + (key as string) + " 的值不是数字："
+        msg = msg + (s as string)
+        throw msg
+    )
+    local value = s as float
+    if value < low or value > high do
+    (
+        local msg = "CFG 键 " + (key as string) + " 的值 " + (value as string)
+        msg = msg + " 超出允许范围 [" + (low as string) + "," + (high as string) + "]"
+        throw msg
+    )
+    value
+)
+
 /* 读 CFG 并把每一项写进对应的全局变量。调用点只有一个：mmd2maxMain 的第一行。
    之后各 pass 只读这些 global —— 读不到值就是这里没配齐，会抛而不是用默认值。 */
 fn mmd2maxLoadCfg =
@@ -784,6 +832,16 @@ fn mmd2maxLoadCfg =
     MMD2MAX_FINGERS = mmd2maxCfgInt "MMD2MAX_FINGERS" 1 5
     MMD2MAX_FINGER_LINKS = mmd2maxCfgInt "MMD2MAX_FINGER_LINKS" 1 3
     MMD2MAX_FOOTBOXFLAT = mmd2maxCfgBool "MMD2MAX_FOOTBOXFLAT"
+    /* 五个装配目标值（M2）：范围与 mmd2max/targets.py 的 TARGETS 元组逐字对应，
+       由 tests/test_targets.py 钉住。这里不给默认值 —— 容差没读到就中止，
+       比「按 0 度容差把每根骨都判成超标」或者「按上一轮的 5 度悄悄放行」都可诊断得多。
+       9999 那个上限是回滚位：DIRTOL/ROLLTOL/TOETOL 同时是「比它小就别动这根骨」的门控，
+       写 999 = 整段不动；上限压到 90 会让回滚操作自己在读 CFG 第一步就抛。 */
+    MMD2MAX_DIRTOL = mmd2maxCfgNum "MMD2MAX_DIRTOL" 0.0 9999.0
+    MMD2MAX_ROLLTOL = mmd2maxCfgNum "MMD2MAX_ROLLTOL" 0.0 9999.0
+    MMD2MAX_TOETOL = mmd2maxCfgNum "MMD2MAX_TOETOL" 0.0 9999.0
+    MMD2MAX_GAPTOL = mmd2maxCfgNum "MMD2MAX_GAPTOL" 0.0 50.0
+    MMD2MAX_FOOTREACH = mmd2maxCfgBool "MMD2MAX_FOOTREACH"
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
     MMD2MAX_QUIET = mmd2maxCfgBool "MMD2MAX_QUIET"
@@ -796,7 +854,16 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 手指 " + (MMD2MAX_FINGERS as string) + "x" + (MMD2MAX_FINGER_LINKS as string)
     cfgMsg = cfgMsg + " 脚盒压平轴=" + (MMD2MAX_FOOTBOXFLAT as string)
     cfgMsg = cfgMsg + " 蒙皮=" + (MMD2MAX_SKIN as string)
-    mmd2maxLog cfgMsg
+    cfgMsg = cfgMsg + " 方向容差=" + (MMD2MAX_DIRTOL as string)
+    cfgMsg = cfgMsg + " 扭转容差=" + (MMD2MAX_ROLLTOL as string)
+    cfgMsg = cfgMsg + " 趾落位容差=" + (MMD2MAX_TOETOL as string)
+    cfgMsg = cfgMsg + " 盒隙容差=" + (MMD2MAX_GAPTOL as string)
+    cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
+    /* 这条不能在这里 mmd2maxLog：mmd2maxInitLog 用 createFile 重建日志，比它晚，
+       于是「配置来自 …」这一行以前每次都被自己截掉 —— 第十九轮核对时才发现日志里
+       只有 InitLog 那几行，判据读数一句都看不见。改成存起来，由 mmd2maxMain 在
+       InitLog 之后打，落进日志才算有证据。 */
+    MMD2MAX_CFGSUMMARY = cfgMsg
     true
 )
 
@@ -1502,7 +1569,7 @@ fn mmd2maxShoeTip limbs name =
    （M1b 起中间不再取反，也不再有「单独打开这份脚本时默认斜轴」那条分叉 —— 现在
    没有 CFG 就直接中止）。
    **回滚**：翻导出侧那一个词 ⇒ 量截面与画骨盒一起回到斜轴；
-   再加上 `MMD2MAX_FOOTREACH = false` 就退回第十六轮那根牙签。 */
+   再加上 `MMD2MAX_FOOTREACH = false`（改 mmd2max/targets.py 重跑导出）就退回第十六轮那根牙签。 */
 
 fn mmd2maxBoxWantDir name headPos tailPos shoeTip =
 (
@@ -1760,24 +1827,17 @@ fn mmd2maxDumpBipedApi logTag =
         + " 命中关键词=" + (hits.count as string) + " " + wrote)
 )
 
-/* ===== 方向 / 落位 冲突时的取舍表（机制层的核心）===== */
-
-/* 方向容差（度）—— 这一阶段唯一的方向验收线，三处消费同一个数：
-     1. mmd2maxRotatePass 的尝试门控（比这个数小就不再去动那根骨）
-     2. mmd2maxFitScore 的「方向超标」计数（循环的收敛判据，必须和 1 同数，
-        否则「尝试=0 就等于方向全部达标」这条推理不成立）
-     3. 退出 Figure 模式后的 `结构向 复核：夹角>N度=`（用户看图前的最后一道数）
-   以前这个数在三个地方各写死一份 5.0，改一处就悄悄分家。
-   5.0 → 3.0：12:04 的 `脚骨偏航结论 趾=-4.61816度` 刚好落在旧门控下面，永远不会被
-   尝试；再往下（1~2 度）就是拿测量噪声当缺陷去转 —— 回滚阈值才 0.5 度，转了也判不出改善。 */
-global MMD2MAX_DIRTOL = 3.0
-
-/* 扭转容差（度）—— #36 那条腿的「还剩多少没转」的验收线，只有 mmd2maxLegRoll 消费。
-   和 MMD2MAX_DIRTOL 分开设：那个数是「骨盒画出来的朝向」，这个是「膝盖绕髋→踝轴的
-   方位」，后者的噪声小得多（同一个 3 度在膝上等于 1.9cm 的横向位移，用户一眼就看得到）。
-   1.0 度 ≈ 0.05cm，低于回滚阈值能分辨的改善下限，再多转就是拿噪声当缺陷。
-   **这条也是 #36 的单一回滚开关**：把它改成 999 就等于整段不动（一轮都不转腿）。 */
-global MMD2MAX_ROLLTOL = 1.0
+/* ===== 方向 / 落位 冲突时的取舍表（机制层的核心）=====
+   MMD2MAX_DIRTOL / MMD2MAX_ROLLTOL 的**数值与定价理由**都在 mmd2max/targets.py，
+   由 tools/obj_run.py 落进 MMD2MAX.CFG，这里只列消费点：
+     DIRTL  三处消费同一个数 —— ① mmd2maxRotatePass 的尝试门控（比它小就不再去动那根骨）
+            ② mmd2maxFitScore 的「方向超标」计数（循环的收敛判据，必须和 ① 同数，
+               否则「尝试=0 就等于方向全部达标」这条推理不成立）
+            ③ 退出 Figure 模式后的 `结构向 复核：夹角>N度=`（用户看图前的最后一道数）
+            以前这个数在三个地方各写死一份 5.0，改一处就悄悄分家。
+     ROLLTOL 只有 mmd2maxLegRoll 消费；同时是 #36「整段不转腿」的单一回滚开关。
+   值不再写死在这一行：这里是 5 个声明（见文件头），装配跑到一半才发现判据被本地的
+   默认值盖住，正是 M1b 之后不允许存在的那类「日志绿、口径错」。 */
 
 fn mmd2maxRotVecAbout v axis c s =
 (
@@ -1954,7 +2014,9 @@ fn mmd2maxLegRoll root limbs rotWay =
     rolled
 )
 
-global MMD2MAX_TOETOL = 0.5
+/* MMD2MAX_TOETOL（脚趾复摆的落位容差，厘米）来自 mmd2max/targets.py → CFG，
+   消费点只有 mmd2maxToeSnapBack：它同时是门控（已在容差内就不动），
+   所以写 999 等于整段复摆跳过。 */
 
 fn mmd2maxToeSnapBack root limbs =
 (
@@ -2303,11 +2365,9 @@ fn mmd2maxLogLocalBox tag node =
     bb
 )
 
-/* #41 的两个开关，都只作用于脚链，别的手不要顺手接过去：
-   MMD2MAX_FOOTREACH = false ⇒ 「把骨盒远端拉到子关节」整段跳过，退回第十六轮（牙签 + 空 3.29cm）
-   MMD2MAX_GAPTOL      = 盒隙容差（厘米），只当判据用，不改变任何写法 */
-global MMD2MAX_FOOTREACH = true
-global MMD2MAX_GAPTOL = 0.5
+/* #41 的两个开关，都只作用于脚链，别的手不要顺手接过去（数值在 mmd2max/targets.py）：
+   把 MMD2MAX_FOOTREACH 配成 false ⇒ 「把骨盒远端拉到子关节」整段跳过，退回第十六轮（牙签 + 空 3.29cm）
+   MMD2MAX_GAPTOL 是盒隙容差（厘米），只当判据用，不改变任何写法 */
 
 fn mmd2maxBoxFarEnd node axisIdx toward =
 (
@@ -4858,6 +4918,9 @@ fn mmd2maxMain =
        读不到就抛，整轮中止 —— 绝不带着默认值继续摆。 */
     mmd2maxLoadCfg()
     mmd2maxInitLog()
+    /* 摘要必须在 InitLog 之后：InitLog 用 createFile 重建日志文件，
+       之前写的每一行都会被截掉（第十九轮的日志里看不见「配置来自」就是这件事）。 */
+    mmd2maxLog MMD2MAX_CFGSUMMARY
     mmd2maxPrepareScene()
     mmd2maxImportObj()
     local boneNodes = mmd2maxCreateBones()
