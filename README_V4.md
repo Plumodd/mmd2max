@@ -86,6 +86,11 @@ spec 具名列；MAXScript 只写、只回读。v3 里 `widths.tsv`（手掌/手
 | M1 | 线格式 v2：每个 spec 第一行是列名表头，单一 Python writer，MAXScript 建 name→index 后按列名取值；去掉 `bones.tsv` 与 `香菱_bones.tsv` 双份 | 第十七轮的判据数字逐位不变 |
 | M1b | 配置单源：25 个 `MMD2MAX_*` 注入项收成一个 cfg 块 + `MMD2MAX.CFG`；缺块即 abort；删死 flag（`MMD2MAX_LENAXIS`）、`mode=="flat"` 死分支、从没走到的 DQ 分支；`foot_pitch` 三重反转改一条直读 | 手跑 .ms 与自动跑几何**不可能**不一致 |
 | M2a | 五个容差/开关（`DIRTOL 3.0 / ROLLTOL 1.0 / TOETOL 0.5 / GAPTOL 0.5 / FOOTREACH true`）从 `.ms` 硬赋值搬进 `mmd2max/targets.py`，经 `MMD2MAX.CFG` 下发；新增 `mmd2maxCfgNum`（`"abc" as float` 在 Max 给 0 不报错）；配置汇总在 `InitLog` 之后落日志 | `.ms` 里每个名字只许一行赋值、右边必须是 CFG 读取；实跑 diff_round exit 0 |
+| M2b | 判据拆成两张表：Python 写 `MMD2MAX.VERDICTS`（规格 = phase/check/subject/expected/tol/kind/when），Max 只往 `MMD2MAX.REPORT` **追加读数**（phase/check/subject/actual），Max 侧不出现 PASS/FAIL/verdict 任何字样；三种 kind 分工 —— `gate` 是真要求、`lock` 是已定价的缺陷（PASS 只等于没退步）、`report` 只要求这一行出现；锁只认被定价的那具模型，换模型退化成 `report` | 规格 121 行与 .ms 的 45 个通道**逐一对撞**（少一行=判据是装饰，多一行=读数没人判）；`--gen-only` 就能证明写侧接上；实跑报告 121 行全部拼上 |
+| M2c | `tools/check_verdicts.py`：把两张表拼起来判，只打挂掉的行 + 一句汇总（含 lock 警示），全量状态落 `MMD2MAX.CHECK`；`obj_run` 在产物齐之后**再过这道闸**，退出码新增 7（有 FAIL）/ 8（两张表没法用），GUI 从此报不出「产物在但没判过」的完成 | 坏读数必须换成非 0 退出码：缺 always 行、值不是数字、报告比规格旧、报告里有规格不认识的行 ⇒ 全部非 0；19 条契约用例 |
+| M3 | pass 注册表：`requires/writes/invalidates/gate_check/max_iters` 数据化，runner 拓扑排序 + 陈旧断言；收敛循环的退出条件从"撞 3 遍上限"改成"判据真达标" | 第十七轮实测：三遍的落位最大值 5.6995 一动不动、方向超标 4→5→5，是靠上限退出的，"尝试=0 ⇒ 方向达标"从来不成立 |
+| M4 | 真回读验收：蒙皮用 `skinOps.GetVertexBoneIDsAndWeights`，骨盒用节点世界包围盒，落位/转角用 `biped.getTransform`，Morpher 用通道名；`biped.saveFigFile` 快照 + 超差 `loadFigFile` 回滚 + 记 FAIL | 判据全部来自回读，写入侧计数不再参与验收 |
+| M5 | 测试重写：契约测试只钉表头/配置键；加金标准（脚盒 3.714×8.656×9.736 等）、判据回放、**变异测试**（改坏一个 pivot 必须至少一条判据变红）、**蜕变测试**（160cm vs 80cm 输出必须精确 0.5 倍；左右镜像必须镜像） | 变异注入全绿 = 验收层是装饰，直接判失败 |
 
 **实跑记录**：M1 ✅（对 v3 第十七轮基线）；M1b ✅（第十九轮 `baselines/round19_objrun.log`）；
 M2a ✅（第二十轮 `baselines/round20_objrun.log`，与第十九轮 diff **只多一行**「配置: …」= 新可见的汇总）。
@@ -96,10 +101,21 @@ M2a ✅（第二十轮 `baselines/round20_objrun.log`，与第十九轮 diff **�
 写它时又抓出它自己两个**会造成漏判**的缺陷（吃掉非时间戳行的行头、把 `累计误差=0.224741`
 的小数部分当字节数遮掉），已用三处注入变异复核。细节见
 [README_HANDOVER.md §7 第 24 条](file:///C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03/README_HANDOVER.md)。
-| M2 | 目标值全部搬到 Python + `verdicts.tsv`（phase/check/bone/expected/actual/tol/status/stale，ASCII）+ Python 侧报告校验器（schema、覆盖率、容差） | 任何 FAIL 或缺覆盖 ⇒ 退出码非 0 |
-| M3 | pass 注册表：`requires/writes/invalidates/gate_check/max_iters` 数据化，runner 拓扑排序 + 陈旧断言；收敛循环的退出条件从"撞 3 遍上限"改成"判据真达标" | 第十七轮实测：三遍的落位最大值 5.6995 一动不动、方向超标 4→5→5，是靠上限退出的，"尝试=0 ⇒ 方向达标"从来不成立 |
-| M4 | 真回读验收：蒙皮用 `skinOps.GetVertexBoneIDsAndWeights`，骨盒用节点世界包围盒，落位/转角用 `biped.getTransform`，Morpher 用通道名；`biped.saveFigFile` 快照 + 超差 `loadFigFile` 回滚 + 记 FAIL | 判据全部来自回读，写入侧计数不再参与验收 |
-| M5 | 测试重写：契约测试只钉表头/配置键；加金标准（脚盒 3.714×8.656×9.736 等）、判据回放、**变异测试**（改坏一个 pivot 必须至少一条判据变红）、**蜕变测试**（160cm vs 80cm 输出必须精确 0.5 倍；左右镜像必须镜像） | 变异注入全绿 = 验收层是装饰，直接判失败 |
+
+M2b/M2c 的实跑（第二十一、二十二轮）第一次把两张表真的拼起来，当场抓到三条只有实跑才会现形的毛病：
+
+1. **表头写成了函数名**：`format "%\n" (mmd2maxReportHeader)` 少一对括号，落地的是**函数本身**
+   （字面量 `mmd2maxReportHeader()`），列名行变 1 列，后面 121 行读数每行都「比列名多 3 列」
+   ⇒ `parse_table` 抛。写文件的调用自己成功了，日志里一个异常都没有。
+2. **`链向 断开` 的阈值在两边各刻了一遍**：`.ms` 里写死 3.0，Python 侧又拿 `DIRTOL` 定尺
+   ⇒ 改成 `MMD2MAX_DIRTOL`，并用契约测试钉住「这一段的门槛不许是字面量」。
+3. **骨盆三段有一条永远不可能通过的 gate**：Max 在 `mmd2maxHipAnchor` 把 Pelvis→{L Thigh,
+   R Thigh, Spine} 的目标改写成「离两髋中点的距离」（腿根 9.03→7.00、脊柱 6.49→3.51），
+   而 Python 的尺还按 PMX 腰→子骨的长度刻 —— 第二十一轮判红 3 行就是这个分叉。
+   现在 `verdicts.segment_expectation` 用同一批 limbs 坐标列、同一个 0.05 门槛、同一对中点
+   重算这三行，并拿第二十轮日志里的 `目标=` 做实证对照。
+   **注意方向**：这条不是「改判据去迁就 Max」—— Max 报的是场景里量到的长度，改的只是
+   期望值该按哪个锚点算；几何一个字节没动（diff_round 见下）。
 
 `test_maxscript_contract.py` 现在 1885 行 / 118 个方法 / 153 处源码切片 / 499 个
 assertIn —— 它从不执行 MAXScript，只把中文日志措辞钉死。这不是测试，是**给重构上锁**。

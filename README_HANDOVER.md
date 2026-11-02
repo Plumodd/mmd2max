@@ -83,11 +83,13 @@ PYTHONIOENCODING=utf-8 ~/.local/bin/python3.12.exe tools/check_ms.py            
 ## 3. 目录结构
 
 ```
-mmd2max_v3_src_2026-11-01/
+mmd2max_v4_src_2026-11-03/
 ├── mmd2max/
 │   ├── pmx.py            # PMX 2.0/2.1 二进制解析；含骨变形 vec4 + 末尾不变式
 │   ├── coords.py         # ★ 坐标/手性唯一事实来源（det=−1）
 │   ├── semantic.py       # MMD 骨名 → 语义角色 → Biped 目标；手指/脊柱去重；左右自检
+│   ├── targets.py        # ★ M2a：五个容差/开关的唯一来源 → 进 MMD2MAX.CFG
+│   ├── verdicts.py       # ★ M2b：判据规格表（gate/lock/report）+ 报告通道 + 线格式 v2 读写
 │   ├── export_obj.py     # ★ OBJ/MTL/贴图 + 全部 TSV（多进程写权重）
 │   └── configs/          # biped_definition / pmx_definition / biped_to_pmx_mapping
 ├── scripts/
@@ -96,6 +98,7 @@ mmd2max_v3_src_2026-11-01/
 │   ├── run_model.py      # ★★ 一键：模型目录 → 导出 → 生成 .ms（--gen-only，不启动 Max）→ 体检
 │   ├── gui.py            # ★★ 调参台：build_plan 即时数字对照 + 三视图预览 + ①导出②生成脚本③跑 Max
 │   ├── obj_run.py        # 生成 mmd2max_run.ms；驱动 Max 轮询/截图（不传 --gen-only 才动进程）
+│   ├── check_verdicts.py # ★ M2c：拼规格表 × 报告 ⇒ 逐行状态 + 非 0 退出码（判闸）
 │   ├── diff_round.py     # ★ 两轮日志归一对比（判「重构有没有动几何」就靠它，别手搓 sed）
 │   ├── uia_dialog.py     # UIA 读写启动弹窗：按**确切按钮名** Invoke（Qt 弹窗没有子 HWND，坐标法点不准）
 │   ├── check_ms.py       # MAXScript 静态体检（保留字/括号/字符串/if-do-else/localTime/续行）
@@ -103,9 +106,11 @@ mmd2max_v3_src_2026-11-01/
 │   ├── boot_interact.py  # 旧「自动点弹窗」驱动，保留参考
 │   └── desktop.py        # 窗口枚举/截图/剪贴板（ctypes，非必需）
 ├── tests/                # unittest + fixtures/sample_model（合成 PMX 由 make_sample.py 生成）
+├── baselines/            # 各轮冻结件（日志 / CFG / 判据三张表），回归锁只指这里，不指 test_runs/
 ├── test_runs/            # 运行产物，可随时删
 ├── 研究笔记_联网核查60条.md   # 联网核查结论（PMX 规范 / Biped API / 坐标系）
 ├── v2_改进落地说明.txt / v2_交叉验证与改进计划.txt  # v2 历史；其中命令含旧 `biped` 位置参数，已不适用
+├── README_V4.md          # ★ v4 的架构决定与里程碑（M1…M5），先读它再动代码
 └── README_HANDOVER.md    # 本文件
 ```
 
@@ -136,15 +141,30 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 | `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_box_flat` —— 装配侧只取 `spine_links fingers finger_links foot_box_flat` 四个键，写进 `MMD2MAX.CFG`；**缺任一个键 = 直接中止**（不接受默认值，见 §4b） |
 | `<名>_materials.tsv` | `index name texture alpha spec_* sphere_* draw_flags` —— **Max 侧目前没有任何读取点**（#56 待删） |
 
-## 4b. 配置单源：`MMD2MAX.CFG`（M1b + M2a）
+判据的三张表（M2b/M2c，同在 `test_runs/<模型名>/`，ASCII 定名、不带模型前缀）：
 
-生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 26 个输入与开关
+| 文件 | 谁写 | 列名 |
+| --- | --- | --- |
+| `MMD2MAX.VERDICTS` | Python（`verdicts.spec_text`，每轮开头由 `obj_run` 重写） | `phase check subject expected tol kind when` |
+| `MMD2MAX.REPORT` | **Max 只追加**（`mmd2maxReportInit` 每轮截断重建，`mmd2maxReport` 一次调用一行） | `phase check subject actual` |
+| `MMD2MAX.CHECK` | Python（`check_verdicts` 判完落盘） | `status phase check subject expected tol kind when actual note` |
+
+前三列是两张表的**拼接键**，逐字相同；第四列刻意不同名 —— `expected` 是尺、`actual` 是读数，
+同名会让拼表时把尺当成读数。`kind` ∈ `gate`（真要求）/ `lock`（已定价的缺陷，PASS 只等于没退步）/
+`report`（只要求这一行出现）；`when` ∈ `always`（没报就是 FAIL）/ `if_present`（按设计可以合法缺席）。
+报告带 UTF-8 BOM + CRLF：那是 `createFile … encoding:#utf8` 的指纹，用来证明这张表**真是 Max 写的**，
+不是 Python 事后补的（`FrozenRoundReplayTests` 钉住这一点）。
+
+## 4b. 配置单源：`MMD2MAX.CFG`（M1b + M2a + M2b）
+
+生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 28 个输入与开关
 全部从 `test_runs/<模型名>/MMD2MAX.CFG` 读（同样是线格式 v2：第 1 行 `key<TAB>value`）。
 键名 = MAXScript 全局名，两边同一套词，没有任何映射表可写错：
 
 `MMD2MAX_OBJ / BONES / WEIGHTS / MAP / LIMBS / WIDTHS / MORPHS / PHYSICS / OUTPUT / MARKER / LOG /
 VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTDIR / INTERACTIVE / QUIET`
 （以上 M1b）+ `DIRTOL / ROLLTOL / TOETOL / GAPTOL / FOOTREACH`（以上 M2a，见 `mmd2max/targets.py`）
++ `VERDICTS / REPORT`（以上 M2b：两张判据表的路径，见 `mmd2max/verdicts.py`）
 
 规则（违反任何一条都在 **Python 侧**就中止，不留到 Max）：
 
@@ -175,6 +195,17 @@ VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTD
   （两套独立实现，任一边漏一个键就红）。
 - **CFG 读失败也留证据**：错误写进 `mmd2max_cfg.error.txt`（此时 `MMD2MAX_MARKER` 还没值，
   所以不能用 `<标记>.error.txt`）；`obj_run` 认这个文件，退出码 4，GUI 不许报「完成」。
+- **判据的两张表也走同一条路（M2b）**：`MMD2MAX_VERDICTS` / `MMD2MAX_REPORT` 是 CFG 的两个键，
+  文件名单源在 `verdicts.SPEC_NAME` / `REPORT_NAME`，`obj_run` 拼路径、`.ms` 只管往里写行。
+  报告**每轮开头重建**（`mmd2maxReportInit` 用 `createFile` 截断），规格表由 Python 先写；
+  两个键都不在 `CFG_EMPTY_OK` 名单里，也不许「没路径就跳过」—— 通道坏了这一轮就没法验收，
+  退化成绿日志 + 没证据正是 §1 那个病根。契约测试两头钉：`test_obj_run_guard` 从 CFG 反查
+  这两个键与文件名，`test_verdicts.MaxChannelContractTests` 拿规格表的 45 个通道与 `.ms` 里
+  `mmd2maxReport "…" "…"` 的字面量逐一对撞，并要求 `.ms` 全程不出现 PASS/FAIL/verdict 字样。
+- **退出码（`tools/obj_run.py`）**：0 = 产物齐**且判据全过**；2 = 用法/规格表来源缺失；
+  3 = 报错弹窗；4 = error.txt；5 = 超时；6 = 有标记但 `.max` 缺失；
+  **7 = 判据有 FAIL**；**8 = 两张表不可用**（缺文件、列名分叉、报告比规格旧）。
+  7/8 是 M2c 新加的，刻意不复用 3~6：那是「Max 出事了」，这是「Max 没事但验收没过」。
 
 手跑 `scripts/max_import_obj.ms` 与自动跑 `mmd2max_run.ms` 现在读到的是**同一份** CFG，
 所以「手动 fileIn 摆出不同几何」这条路在结构上不存在了。
@@ -580,6 +611,40 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
     - **本轮没做的事（别当成已完成）**：判据通道（M2b 的 `verdicts.tsv` + Max 侧只报数）与 Python 侧
       校验器（M2c）**尚未实现** —— 现在这些数仍然只是「进了 CFG、进了日志」，验收仍然是读日志里
       的成功计数，也就是 §1 那个病根还没被结构性地治掉。M2a 是它的前置。
+
+26. **M2b + M2c「判据拆成两张表 + Python 侧判闸」落地（2026-11-03 03:28 第二十二轮，香菱，
+    退出码 0，`香菱.max` 落盘，Max 自行 `quitMax`，无弹窗）：Max 从此只报数，判定与退出码在 Python**
+    - 通道：`MMD2MAX.VERDICTS`（Python 写的规格，121 行 × 7 列）+ `MMD2MAX.REPORT`（Max 只追加的
+      读数，121 行 × 4 列）+ `MMD2MAX.CHECK`（判完落盘的逐行状态）。前三列是两张表的拼接键，
+      第四列刻意不同名（`expected` = 尺，`actual` = 读数）。
+    - 三种 kind：`gate` 真要求 / `lock` 已定价的缺陷（PASS 只等于没退步）/ `report` 只要求出现。
+      开关只**降级**行的 `when`，从不删行；锁只在 `PRICED_MODEL`（香菱）上是锁，换模型退化成 `report`。
+    - `tools/check_verdicts.py` 只打挂掉的行 + 一句汇总（含 lock 警示），`obj_run` 在产物齐之后
+      再过这道闸：**新增退出码 7（有 FAIL）/ 8（两张表不可用）**，GUI 那条「完成」的文案同时改掉
+      —— 现在「`.max` 在但没判过」不可能被读成交付成功。
+    - **实跑当场抓到三条只有真跑才会现形的毛病**（写日志/静态检查都看不出来）：
+      ① 表头写成了函数名。`format "%\n" (mmd2maxReportHeader)` 少一对括号，落地的是**函数本身**
+      （字面量 `mmd2maxReportHeader()`），列名行变 1 列 ⇒ 后面 121 行「每行都比列名多 3 列」，
+      `parse_table` 直接抛。第二十一轮就是这么退 1 的；`mmd2maxReportInit` 自己一行错误都没记。
+      ② `链向 断开` 的阈值在两边各刻了一遍：`.ms` 写死 3.0，Python 侧的尺用 `DIRTOL` ⇒ 换成
+      `MMD2MAX_DIRTOL`，契约测试钉「这一段不许出现字面量阈值」。
+      ③ **骨盆三段有一条永远不可能通过的 gate**：Max 在 `mmd2maxHipAnchor` 把 Pelvis→{L Thigh,
+      R Thigh, Spine} 的目标改写成「离两髋中点的距离」（9.0278→7.0013、6.4912→3.5096），
+      Python 的尺还按 PMX 腰→子骨刻 ⇒ 第二十一轮判红 3 行。改的是**期望值的口径**
+      （`verdicts.segment_expectation` 用同一批 limbs 坐标列、同一个 0.05 门槛、同一对中点重算），
+      不是把判据放松去迁就 Max：Max 报的仍是场景里量到的长度。方向搞反就成了「拿读数刻尺」。
+    - 中性证明：`tools/diff_round.py --allow "^配置" baselines/round20_objrun.log
+      baselines/round22_objrun.log` ⇒ 归一后 415 vs 415 行、exit 0。放行的那一行只装了
+      「CFG 26→28 项」与汇总尾部新增的「规格=… 报告=…」。
+    - 离线回归（`tests/test_check_verdicts.py::FrozenRoundReplayTests`）：拿冻结在 `baselines/` 的
+      第二十二轮三张表重放判据，逐行状态必须和实跑当时落盘的 `CHECK` 完全一致。
+      这条只能抓「判据变严」；**变松**由同一文件里那 19 条「坏读数必须红」的用例抓 ——
+      已用注入变异核对：把 `grade` 的超差分支改成 PASS ⇒ 5 条用例立刻红。
+    - 报告文件带 UTF-8 BOM + CRLF 是 **Max 侧写的指纹**（`createFile … encoding:#utf8` 落 BOM，
+      Python 永远不写）。`parse_table` 剥 BOM；这条指纹单独钉了一条用例，防止哪天这张表被
+      Python 覆盖写出去 —— 那它就不再是「Max 报的数」了。
+    - 本轮之后仍然没做：M3 的 pass 注册表（谁写了什么、谁作废谁）、M4 的真回读 + 超差回滚
+      （现在的 `actual` 里有几项仍是 pass 内部自量，不是独立回读）、`--strict` 那 64 条结构性债。
 
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。

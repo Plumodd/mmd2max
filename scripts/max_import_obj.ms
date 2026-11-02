@@ -45,6 +45,8 @@ global MMD2MAX_PHYSICS
 global MMD2MAX_OUTPUT
 global MMD2MAX_MARKER
 global MMD2MAX_LOG
+global MMD2MAX_VERDICTS
+global MMD2MAX_REPORT
 global MMD2MAX_SHOTDIR
 global MMD2MAX_VERTS
 global MMD2MAX_SPINE_LINKS
@@ -168,6 +170,42 @@ fn mmd2maxInitLog =
         )
     )
     catch ()
+)
+
+/* ===== 判据通道（M2b）：Max 只报数，不判定 ===== */
+
+/* 报告文件表头（线格式 v2）。前三列与 MMD2MAX.VERDICTS 逐字相同 —— 那是两张表的拼接键；
+   第四列两张表刻意不同名（规格表 expected = 尺，报告 actual = 读数），同名反而会在拼表
+   时把尺当成读数。两边各写一份、靠测试互相对撞：改一边不改另一边 = 拼表全部对不上。 */
+fn mmd2maxReportHeader = "phase\tcheck\tsubject\tactual"
+
+fn mmd2maxReportInit =
+(
+    /* 每轮开头重建报告文件。为什么这里**不许**退回 try/catch：
+       报告通道一坏，这一轮就永远没法验收；把它写成一行日志继续跑，等于
+       「绿日志 + 没有证据」—— 正是本项目反复踩的那类事故。缺路径或打不开 = 中止。 */
+    if MMD2MAX_REPORT == undefined or MMD2MAX_REPORT == "" do
+        throw "MMD2MAX_REPORT 为空：判据报告无处可写，装配中止"
+    local f = createFile MMD2MAX_REPORT encoding:#utf8
+    if f == undefined do
+        throw ("判据报告打不开：" + (MMD2MAX_REPORT as string))
+    /* 必须写成 (mmd2maxReportHeader())。第二十一轮实跑只写了 (mmd2maxReportHeader)
+       —— 不带调用的函数名传给 format 打出的是**函数本身**，文件第一行落地成字面量
+       "mmd2maxReportHeader()"，表头从此对不上，Python 侧整轮判据直接作废。 */
+    format "%\n" (mmd2maxReportHeader()) to:f
+    close f
+)
+
+fn mmd2maxReport phase check subject actual =
+(
+    /* 一次调用 = 一行读数，立刻落盘。不缓存到数组最后统一写：装配中途抛错时，
+       已经量到的那些行正是「死在哪一段」的唯一证据。 */
+    local f = openFile MMD2MAX_REPORT mode:"a" encoding:#utf8
+    if f == undefined do
+        throw ("判据报告写不进：" + (MMD2MAX_REPORT as string))
+    format "%\t%\t%\t%\n" (phase as string) (check as string) \
+        (subject as string) (actual as string) to:f
+    close f
 )
 
 fn mmd2maxSceneBox =
@@ -814,6 +852,11 @@ fn mmd2maxLoadCfg =
     MMD2MAX_OUTPUT = mmd2maxCfgStr "MMD2MAX_OUTPUT"
     MMD2MAX_MARKER = mmd2maxCfgStr "MMD2MAX_MARKER"
     MMD2MAX_LOG = mmd2maxCfgStr "MMD2MAX_LOG"
+    /* 判据通道（M2b）：VERDICTS 是 Python 写的规格表（Max 只把路径打进日志留证据，
+       **不读它的内容** —— 读了就等于让被验收的一方拿到了判据）；REPORT 是 Max 追加
+       读数的地方。两个路径都必需非空：没有 REPORT 就没法验收这一轮，不许静默跳过。 */
+    MMD2MAX_VERDICTS = mmd2maxCfgStr "MMD2MAX_VERDICTS"
+    MMD2MAX_REPORT = mmd2maxCfgStr "MMD2MAX_REPORT"
     MMD2MAX_SHOTDIR = mmd2maxCfgStr "MMD2MAX_SHOTDIR"
     /* 空串只允许出现在「这个阶段可以整段跳过」的四项上（WIDTHS/MORPHS/PHYSICS/SHOTDIR）；
        其余路径为空 = Max 一定打不开，在这里抛，比在导入器里报一句看不懂的错早一整轮。
@@ -823,7 +866,9 @@ fn mmd2maxLoadCfg =
                    #("MMD2MAX_WEIGHTS", MMD2MAX_WEIGHTS), #("MMD2MAX_MAP", MMD2MAX_MAP),
                    #("MMD2MAX_LIMBS", MMD2MAX_LIMBS),
                    #("MMD2MAX_OUTPUT", MMD2MAX_OUTPUT), #("MMD2MAX_MARKER", MMD2MAX_MARKER),
-                   #("MMD2MAX_LOG", MMD2MAX_LOG) ) do
+                   #("MMD2MAX_LOG", MMD2MAX_LOG),
+                   #("MMD2MAX_VERDICTS", MMD2MAX_VERDICTS),
+                   #("MMD2MAX_REPORT", MMD2MAX_REPORT) ) do
     (
         if pair[2] == "" do throw ("CFG 里 " + (pair[1] as string) + " 是空路径")
     )
@@ -859,6 +904,10 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 趾落位容差=" + (MMD2MAX_TOETOL as string)
     cfgMsg = cfgMsg + " 盒隙容差=" + (MMD2MAX_GAPTOL as string)
     cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
+    /* 判据通道两个路径进摘要：日志里要能看出「这轮按哪张规格表验收、读数落在哪个文件」，
+       否则事后只剩一份日志、拼不出任何判定。 */
+    cfgMsg = cfgMsg + " 规格=" + (MMD2MAX_VERDICTS as string)
+    cfgMsg = cfgMsg + " 报告=" + (MMD2MAX_REPORT as string)
     /* 这条不能在这里 mmd2maxLog：mmd2maxInitLog 用 createFile 重建日志，比它晚，
        于是「配置来自 …」这一行以前每次都被自己截掉 —— 第十九轮核对时才发现日志里
        只有 InitLog 那几行，判据读数一句都看不见。改成存起来，由 mmd2maxMain 在
@@ -2006,6 +2055,14 @@ fn mmd2maxLegRoll root limbs rotWay =
                         msg = msg + " 净改善"
                     )
                     mmd2maxLog msg
+                    /* 报的是**当下回读**的膝/踝偏差，不是循环里的计数器：
+                       计数器只说「我试着改过」，回读才说「现在离 PMX 目标多远」。
+                       没进步的那根骨（残差本来就小于 ROLLTOL）也照样留一行，
+                       否则判据表里会缺它，看上去像「这根骨没被量过」。 */
+                    mmd2maxReport "thigh_roll" "knee_err_cm" tName \
+                        (distance knode.transform.translationpart kneeTgt)
+                    mmd2maxReport "thigh_roll" "ankle_err_cm" tName \
+                        (distance fnode.transform.translationpart ankleTgt)
                 )
                 else mmd2maxLog ("  大腿扭转 " + tName + " 跳过：髋→踝只有 " + (seg as string))
             )
@@ -2018,7 +2075,7 @@ fn mmd2maxLegRoll root limbs rotWay =
    消费点只有 mmd2maxToeSnapBack：它同时是门控（已在容差内就不动），
    所以写 999 等于整段复摆跳过。 */
 
-fn mmd2maxToeSnapBack root limbs =
+fn mmd2maxToeSnapBack root limbs checkNm =
 (
     /* 脚趾复摆（#38，#36 带出来的回归）。round-10 回读：
        `段校验 Bip001 L Foot -> Bip001 L Toe0 目标=11.2281 实际=9.7335 误差=1.49461`
@@ -2062,6 +2119,7 @@ fn mmd2maxToeSnapBack root limbs =
                 (
                     mmd2maxLog ("  脚趾复摆 " + cName + " 偏差=" + (dev0 as string) \
                         + " 已在容差" + (MMD2MAX_TOETOL as string) + " 内，不动")
+                    mmd2maxReport "toe_snap" checkNm cName dev0
                 )
                 else
                 (
@@ -2092,6 +2150,8 @@ fn mmd2maxToeSnapBack root limbs =
                             + " 踝回读=" + (backA as string)
                     )
                     mmd2maxLog msg
+                    mmd2maxReport "toe_snap" checkNm cName \
+                        (distance cnode.transform.translationpart ballPos)
                 )
             )
             else mmd2maxLog ("  脚趾复摆 " + cName + " 跳过：节点或踝目标缺失")
@@ -2827,6 +2887,9 @@ fn mmd2maxFitSegments root limbs axis method =
     sumMsg = sumMsg + " 失败=" + (failCount as string)
     sumMsg = sumMsg + " 累计误差=" + (totalErr as string)
     mmd2maxLog sumMsg
+    mmd2maxReport "fit" "segment_count" "-" okCount
+    mmd2maxReport "fit" "failed_segments" "-" failCount
+    mmd2maxReport "fit" "cum_len_err_cm" "-" totalErr
     okCount
 )
 
@@ -3426,7 +3489,9 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        肢段表里的 desired 是 PMX 腰→子骨的长度（腿根 9.03、脊柱 6.49），照它缩就把
        髋撑到 ±8.97（PMX 要 ±7.00，左右各偏 2.23），Pelvis->Spine 也变成 6.49 而
        摆位后实测只有 3.51（段校验误差 2.98）。改按锚点量，缩放目标与摆位目标才同源。
-       直接改写 item[3]：拟合与段校验读同一个值，两处不会各算各的。 */
+       直接改写 item[3]：拟合与段校验读同一个值，两处不会各算各的。
+       Python 侧的同一把尺在 verdicts.segment_expectation（门槛 0.05、锚点=两髋中点
+       都由 test_the_ms_side_uses_the_same_inputs 钉在一起，改一边不改另一边就红）。 */
     local hipAnchor = mmd2maxHipAnchor limbs
     if hipAnchor != undefined do
     (
@@ -3515,6 +3580,10 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     poseMsg = poseMsg + " 髋中点残余偏差=" + (pelvisErr as string)
     poseMsg = poseMsg + " 锚点=" + ((if hipTarget == undefined then "腰" else "髋中点") as string)
     mmd2maxLog poseMsg
+    mmd2maxReport "pose" "placed_nodes" "-" pose[1]
+    mmd2maxReport "pose" "failed_nodes" "-" pose[2]
+    mmd2maxReport "pose" "missing_nodes" "-" pose[3]
+    mmd2maxReport "pose" "hip_residual_cm" "-" pelvisErr
 
     /* ===== 踝关节优先复核 =====
        Biped 的脚骨有最短长度限制（本模型 11.70，而 MMD 的 踝->趾 只有 9.90）。
@@ -3709,6 +3778,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             + " 改善=" + (rp[2] as string) + " 未改善=" + (rp[3] as string) \
             + " 抛错=" + (rp[4] as string) + " | 方向超标=" + (sc[1] as string) \
             + " 落位偏差和=" + (sc[2] as string) + " 落位最大=" + (sc[3] as string))
+        local pn = passNo as string
+        mmd2maxReport "converge" "raised" pn rp[4]
+        mmd2maxReport "converge" "not_improved" pn rp[3]
+        mmd2maxReport "converge" "dir_over" pn sc[1]
+        mmd2maxReport "converge" "place_sum_cm" pn sc[2]
+        mmd2maxReport "converge" "place_max_cm" pn sc[3]
         if rp[1] == 0 do break
     )
     /* ===== 大腿扭转闭环（#36，两膝被拽向中线 = 用户看到的「内八」）=====
@@ -3732,11 +3807,16 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         local poseEnd = mmd2maxPlaceBipedNodes root lines rowIds targetNames passList false
         mmd2maxLog ("收尾重摆(全摆，含方向优先的骨): 成功=" + (poseEnd[1] as string) \
             + " 失败=" + (poseEnd[2] as string) + " 节点缺失=" + (poseEnd[3] as string))
+        mmd2maxReport "pose_end" "placed_nodes" "-" poseEnd[1]
+        mmd2maxReport "pose_end" "failed_nodes" "-" poseEnd[2]
+        mmd2maxReport "pose_end" "missing_nodes" "-" poseEnd[3]
         local rd = mmd2maxRotatePass root lines rowIds targetNames limbs rotWay \
             (lastPass + 1) true
         mmd2maxLog ("收尾转角(只转方向优先的骨): 尝试=" + (rd[1] as string) \
             + " 改善=" + (rd[2] as string) + " 未改善=" + (rd[3] as string) \
             + " 抛错=" + (rd[4] as string))
+        mmd2maxReport "rotate_end" "raised" "-" rd[4]
+        mmd2maxReport "rotate_end" "not_improved" "-" rd[3]
         rotTotal += rd[1]
         rotBetter += rd[2]
         rotWorse += rd[3]
@@ -3748,7 +3828,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        尝试=0 再没人回头）。不按 legRolled 加门控 —— 容差本身就是门控：摆到位的
        趾骨 dev≈1e-06 会被直接跳过，只有真被拽走的才补一刀，所以它也顺手当第九轮
        那种「没人碰它」情况下的保险。 */
-    local toeSnapped = mmd2maxToeSnapBack root limbs
+    local toeSnapped = mmd2maxToeSnapBack root limbs "residual_after_roll_cm"
     if toeSnapped > 0 do
     (
         mmd2maxLog ("脚趾复摆：净改善 " + (toeSnapped as string) + " 根跟回 PMX 脚掌落位")
@@ -3810,7 +3890,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             )
         )
         /* 上面每一刀 #scale 都把孩子沿轴推走一次，这里统一跟回 PMX 脚掌 */
-        local toeSnapped2 = mmd2maxToeSnapBack root limbs
+        local toeSnapped2 = mmd2maxToeSnapBack root limbs "residual_after_reach_cm"
         if toeSnapped2 > 0 do
             mmd2maxLog ("足盒接趾复摆：净改善 " + (toeSnapped2 as string) + " 根跟回 PMX 脚掌落位")
     )
@@ -3867,6 +3947,8 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 /* 一行结论，方便和用户的截图对齐：正负号 = 朝哪边偏 */
                 mmd2maxLog ("  脚骨偏航结论 " + fName + " 骨=" + (yawF as string) \
                     + "度 趾=" + (yawT as string) + "度")
+                mmd2maxReport "foot_yaw" "bone_yaw_deg" fName yawF
+                mmd2maxReport "foot_yaw" "toe_yaw_deg" fName yawT
                 /* #40 的护栏：**骨轴 vs 自己的子关节**。
                    上面两行比的是 mmd2maxBoxWantDir 给的目标，而那个目标就是写进去的
                    方向 —— 同源即恒等式，第十五轮压平之后它照样读 骨=0.0 趾=0.0 全绿，
@@ -3888,12 +3970,13 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     local cmsg = "  链向 " + fName + " -> " + cName
                     cmsg = cmsg + " 骨轴与子关节夹角=" + (minAng as string) + "度"
                     cmsg = cmsg + " 连线长=" + ((length childVec) as string)
-                    if minAng > 3.0 do
+                    if minAng > MMD2MAX_DIRTOL do
                     (
                         cmsg = cmsg + "  **断开：盒子不指向自己的子关节**"
                         chainBad = chainBad + 1
                     )
                     mmd2maxLog cmsg
+                    mmd2maxReport "foot_chain" "chain_angle_deg" (fName + " -> " + cName) minAng
                 )
                 /* #41 的护栏：**两个盒子之间那段看得见的空气**。链向 只证明「父盒的轴
                    指得到子关节」，量不到父盒**前端面**与子盒**起点**之间的距离 ——
@@ -3934,6 +4017,9 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                         gapBad = gapBad + 1
                     )
                     mmd2maxLog gmsg
+                    mmd2maxReport "foot_chain" "gap_cm" (fName + " -> " + cName) ggap
+                    mmd2maxReport "foot_chain" "gap_covered" \
+                        (fName + " -> " + cName) cover
                 )
             )
         )
@@ -3942,9 +4028,14 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        注意这两行量的是**两件不同的事**：链向 = 轴的箭头指没指向孩子（平轴口径下
        脚骨必然读 ~30 度，那是 #39 换来的代价，见 README 第 22/23 条）；
        盒隙 = 两块盒子在屏幕上接没接上 —— 用户两张图判的是后者。 */
-    mmd2maxLog ("  链向结论 断开=" + (chainBad as string) + " 根（门槛 3.0 度）")
+    /* 门槛读 MMD2MAX_DIRTOL，不写死：链向 断开 这个数现在是 Python 侧的一条判据
+       （foot_chain/broken_roots），阈值再留一份字面量就等于「尺在两边各刻一遍」。 */
+    mmd2maxLog ("  链向结论 断开=" + (chainBad as string) \
+        + " 根（门槛 " + (MMD2MAX_DIRTOL as string) + " 度）")
     mmd2maxLog ("  盒隙结论 没接上=" + (gapBad as string) + " 根（门槛 " \
         + (MMD2MAX_GAPTOL as string) + " 厘米，且子关节须落在父盒端面矩形内）")
+    mmd2maxReport "foot_chain" "broken_roots" "-" chainBad
+    mmd2maxReport "foot_chain" "gap_unconnected" "-" gapBad
 
     /* 肢段长度复核：摆位之后重新量每节实际长度，与肢段表的目标值对比。
        这是判断「骨骼网格是否真的被拉到位」的唯一硬指标——位置对了不等于长度对了，
@@ -3962,6 +4053,10 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             smsg = smsg + " 实际=" + (got as string)
             smsg = smsg + " 误差=" + (err as string)
             mmd2maxLog smsg
+            /* 报「实际量到的长度」而不是「我自己算的误差」：期望值由 Python 从 limbs
+               的坐标列算（骨盆三段按髋中点，其余就是 desired_len），连 Max 这一侧
+               目标值算错没有都被一起管住。见 verdicts.segment_expectation。 */
+            mmd2maxReport "segment" "len_cm" (item[1] + " -> " + item[2]) got
         )
     )
 
@@ -4010,10 +4105,15 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                             local clavNode = getNodeByName clavName exact:true
                             local rayT = mmd2maxShoulderRayTarget clavNode want
                             if rayT != undefined do
+                            (
                                 vmsg = vmsg + " 射线目标=" + (rayT as string) \
                                     + " 对射线偏差=" + ((distance got rayT) as string) + "（b 方案认这个）"
+                                mmd2maxReport "placement" "ray_err_cm" targetName \
+                                    (distance got rayT)
+                            )
                         )
                         mmd2maxLog vmsg
+                        mmd2maxReport "placement" "pos_err_cm" targetName dd
                     )
                 )
             )
@@ -4074,6 +4174,9 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     mmd2maxLog ("结构向 复核：可测=" + (structTotal as string) \
         + " 夹角>" + (MMD2MAX_DIRTOL as string) + "度=" + (structBad as string) \
         + " 短骨不计=" + (structStub as string))
+    mmd2maxReport "struct_dir" "measurable" "-" structTotal
+    mmd2maxReport "struct_dir" "over_tol" "-" structBad
+    mmd2maxReport "struct_dir" "short_skipped" "-" structStub
 
     /* 把 Biped 节点写回 boneNodes 的对应位置 */
     for k = 1 to targetNames.count do
@@ -4103,6 +4206,9 @@ fn mmd2maxLogAccessoryStats nodes =
     statMsg = statMsg + "，挂 Bone=" + (childOfBone as string)
     statMsg = statMsg + "，无父级=" + (noParent as string)
     mmd2maxLog statMsg
+    mmd2maxReport "accessory" "on_biped" "-" childOfBiped
+    mmd2maxReport "accessory" "on_bone" "-" childOfBone
+    mmd2maxReport "accessory" "no_parent" "-" noParent
 )
 
 fn mmd2maxCreateBones =
@@ -4261,6 +4367,7 @@ fn mmd2maxApplySkin meshes boneNodes =
         meshObj = convertTo meshObj Editable_Mesh
     local meshVertexCount = meshObj.numVerts
     mmd2maxLog ("网格顶点数（取自网格对象）：" + (meshVertexCount as string))
+    mmd2maxReport "mesh" "vertex_count" "-" meshVertexCount
 
     local skinMod = Skin()
     addModifier meshObj skinMod
@@ -4325,6 +4432,7 @@ fn mmd2maxApplySkin meshes boneNodes =
     local addElapsed = ((timeStamp() - addStart) / 1000.0) as string
     local boneTotal = (skinOps.GetNumberBones skinMod) as string
     mmd2maxLog ("添加骨骼耗时：" + addElapsed + " 秒，Skin 内骨骼数 " + boneTotal)
+    mmd2maxReport "skin" "bones" "-" boneTotal
     if failedBones > 0 do
         throw ("有 " + (failedBones as string) + " 根骨骼加入 Skin 失败：" + (failedBoneNames as string))
 
@@ -4436,6 +4544,8 @@ fn mmd2maxApplySkin meshes boneNodes =
     local wmsg = "权重写入耗时：" + weightElapsed + " 秒，已写入顶点 " + (applied as string)
     wmsg = wmsg + "，失败顶点 " + (failedVerts as string)
     mmd2maxLog wmsg
+    mmd2maxReport "skin" "written_vertices" "-" applied
+    mmd2maxReport "skin" "failed_vertices" "-" failedVerts
     /* #35 判据（离线算好的期望值，别拿「大概」当通过）：
        Toe0 从 0 变 74、Foot 从 377/380 降到 363/366 —— 两边一涨一落、总数不变
        （L:363+74=437 与改绑前的 377+60 同量级，差的是过渡带里被混权重的那批）。
@@ -4643,6 +4753,14 @@ fn mmd2maxBuildMorpher meshObj morphFile =
     mmd2maxLog ("Morpher 通道：" + (built as string) + " / " + (blocks.count as string) \
         + "，有目标=" + (chUsed as string) + " 有名=" + (chNamed as string) \
         + "，通道容量=" + (chTotal as string))
+    /* 四个数分别管四件事，所以分别报：blocks = Max 到底从表情表解析出几条（文件被
+       截断/表头读错时这里就少），built = 通道真建了几条，有目标/有名 = 回读能不能
+       拿到内容与表情名（#24 空索引、#25 default001 两个坑各管一条）。
+       通道容量故意**不**报：WM3_NumberOfChannels 是已分配容量，不是已用数量。 */
+    mmd2maxReport "morpher" "blocks" "-" blocks.count
+    mmd2maxReport "morpher" "built" "-" built
+    mmd2maxReport "morpher" "with_target" "-" chUsed
+    mmd2maxReport "morpher" "with_name" "-" chNamed
     /* 自检分两级，绝不一上来就拆修改器：
        built == 0 —— 两个 WM3 接口逐个抛异常，确实一个通道都没建，清掉修改器；
        临时网格只 append 到 targets 才存在，这里 targets 必为空，不会误删。
@@ -4921,6 +5039,9 @@ fn mmd2maxMain =
     /* 摘要必须在 InitLog 之后：InitLog 用 createFile 重建日志文件，
        之前写的每一行都会被截掉（第十九轮的日志里看不见「配置来自」就是这件事）。 */
     mmd2maxLog MMD2MAX_CFGSUMMARY
+    /* 判据报告紧随其后重建：往后每一步只往里追加读数。放在 InitLog 之后是因为
+       它也用 createFile —— 早于日志建立没坏处，但摘要先行能让日志里先有路径证据。 */
+    mmd2maxReportInit()
     mmd2maxPrepareScene()
     mmd2maxImportObj()
     local boneNodes = mmd2maxCreateBones()

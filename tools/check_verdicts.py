@@ -1,0 +1,242 @@
+"""判据校验器（M2c）：把规格表与 Max 报回来的读数拼起来，算出每一行的状态。
+
+这一层是「判」的唯一持有者
+--------------------------
+v3 的验收写在 MAXScript 里，`成功=39 失败=0` 由脚本自己数、自己判、自己打日志，
+于是出现过两类真实事故（都记在 README_HANDOVER 第 4 节）：
+
+- `WM3_NumberOfChannels` 报 100 就以为建了 100 条通道，实测前 8 条全是 `- empty -`（#24）。
+- 「撞 3 遍上限退出」和「判据真达标」在日志上长得一模一样，全绿交付。
+
+所以 M2b 把「尺」搬到 Python（`MMD2MAX.VERDICTS`），Max 只许往 `MMD2MAX.REPORT`
+追加 `phase/check/subject/actual` 四个字段。这个文件负责**判**：两张表来自不同进程，
+任何一侧被改坏都会被另一侧抓到。
+
+退出码只有三种，而且刻意保守
+-----------------------------
+- `0` 每一行都过（`lock` 行也算过 —— 见下面的「锁不是目标」）。
+- `1` 至少一条 FAIL：超差、缺必须的读数、报告里有规格表不认识的行、格式读不出。
+- `2` 这两张表本身没法用（文件缺失、列名不对、表是空的）。
+
+绝不返回「警告算通过」。本项目反复踩的坑就是「绿日志 + 没有证据」：只要判据没被真读，
+这一轮就不许报成成功。
+
+锁（lock）不是目标
+------------------
+`kind=lock` 的行钉的是**已定价的缺陷**（Pelvis 落位 5.6995 之类），PASS 的意思是
+「没变得更差」，不是「达标」。所以汇总里把 lock 单独一行列出，并且写明它不改进度：
+把它读成「6 项全过」就是把债当资产。
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from collections import Counter
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "tools"))
+
+from mmd2max.verdicts import (  # noqa: E402
+    REPORT_HEADER,
+    REPORT_NAME,
+    SPEC_HEADER,
+    SPEC_NAME,
+    parse_table,
+)
+
+CHECK_NAME = "MMD2MAX.CHECK"
+
+PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
+
+# 状态行的顺序也是报告的阅读顺序：先看挂掉的，再看没量到的，最后才看通过的。
+ORDER = {FAIL: 0, SKIP: 1, PASS: 2}
+
+
+def is_bool_text(text: str) -> bool:
+    return text.strip().lower() in ("true", "false")
+
+
+def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
+    """一行判据 + Max 的读数 → (状态, 说明)。
+
+    数值比对用 `abs(actual - expected) <= tol`；容许的「读数不是数字」只有一种：
+    布尔行（`端面覆盖=true`）。除此之外读不成数字就是 FAIL —— 让空串或 `-`
+    通过等于把那一行变成装饰。
+    """
+    kind = row["kind"]
+    if kind == "report":
+        if not actual.strip():
+            # 行报了但值是空的：Max 那侧的读数没算出来。让它通过等于这条判据是装饰。
+            return FAIL, "只要求出现的行，值是空的"
+        return PASS, f"只要求出现，读数={actual}"
+    if is_bool_text(row["expected"]):
+        if actual.strip().lower() == row["expected"].strip().lower():
+            return PASS, f"= {row['expected']}"
+        return FAIL, f"期望 {row['expected']}，实报 {actual}"
+    try:
+        want = float(row["expected"])
+        limit = float(row["tol"])
+        got = float(actual)
+    except ValueError:
+        return FAIL, f"期望 {row['expected']}（容差 {row['tol']}），" \
+                     f"但读数不是数字：{actual!r}"
+    drift = abs(got - want)
+    if drift <= limit + 1e-12:
+        return PASS, f"|{got} - {want}| = {drift} ≤ {limit}"
+    return FAIL, f"|{got} - {want}| = {drift} > {limit}"
+
+
+def read_pair(spec_path: Path, report_path: Path) -> tuple[
+        list[dict[str, str]], dict[tuple[str, str, str], tuple[str, int]], list[str]]:
+    """读两张表，返回 (规格行, 报告索引, 问题列表)。问题非空 ⇒ 调用方判 2 号退出码。
+
+    报告索引按 (phase, check, subject) 收敛：Max 的复摆/接趾段可能对同一个主体报两次
+    （#38 就是「转角后复测」+「接趾后复测」），**后写的赢** —— 那才是这一段的最终读数。
+    """
+    problems: list[str] = []
+    for path, header, label in ((spec_path, SPEC_HEADER, "规格表"),
+                                (report_path, REPORT_HEADER, "报告表")):
+        if not path.is_file():
+            problems.append(f"{label}不存在：{path}")
+    if problems:
+        return [], {}, problems
+
+    spec_head, spec_rows = parse_table(spec_path.read_text(encoding="utf-8"))
+    if spec_head != SPEC_HEADER:
+        problems.append(f"规格表列名不是 {SPEC_HEADER}，而是 {spec_head}")
+    report_head, report_rows = parse_table(report_path.read_text(encoding="utf-8"))
+    if report_head != REPORT_HEADER:
+        problems.append(f"报告表列名不是 {REPORT_HEADER}，而是 {report_head}")
+    if problems:
+        return [], {}, problems
+
+    for row in spec_rows:
+        if row["kind"] not in ("gate", "lock", "report"):
+            problems.append(f"规格表有未知 kind：{row['kind']}（{row['phase']}/{row['check']}）")
+        if row["when"] not in ("always", "if_present"):
+            problems.append(f"规格表有未知 when：{row['when']}（{row['phase']}/{row['check']}）")
+
+    # 陈旧检查：报告必须比规格表**新**。obj_run 每轮开头删报告，所以正常跑不会命中；
+    # 命中的是「上一轮的报告留着，这一轮 Max 死在 ReportInit 之前」那一种 —— 不挡住
+    # 就是拿上一轮的绿给这一轮盖章（#21 那一类，只是这次骗的是验收本身）。
+    if report_path.stat().st_mtime < spec_path.stat().st_mtime:
+        problems.append(f"报告比规格表旧：报告 {report_path.stat().st_mtime:.0f} < "
+                        f"规格 {spec_path.stat().st_mtime:.0f}，这是上一轮留下的读数")
+
+    look: dict[tuple[str, str, str], tuple[str, int]] = {}
+    for row in report_rows:
+        key = (row["phase"], row["check"], row["subject"])
+        # 计数：同一个键被报了几次，用来回答「Max 是不是把同一根骨测了两遍」
+        look[key] = (row["actual"], look.get(key, ("", 0))[1] + 1)
+    return spec_rows, look, problems
+
+
+def check(base: Path, *, spec_path: Path | None = None,
+          report_path: Path | None = None) -> tuple[int, list[str]]:
+    """跑完一轮后的判据汇总。返回 (退出码, 要打的日志行)。
+
+    退出码：0 全过 / 1 有 FAIL / 2 两张表没法用（缺文件、列名分叉、陈旧）。
+    """
+    spec_path = spec_path or base / SPEC_NAME
+    report_path = report_path or base / REPORT_NAME
+    spec_rows, look, problems = read_pair(spec_path, report_path)
+    if problems:
+        return 2, [f"判据校验中止：{p}" for p in problems]
+
+    keys = {(r["phase"], r["check"], r["subject"]) for r in spec_rows}
+    lines: list[str] = []
+    results: list[tuple[str, ...]] = []
+    counts: Counter[str] = Counter()
+    by_kind: Counter[tuple[str, str]] = Counter()
+
+    for row in spec_rows:
+        key = (row["phase"], row["check"], row["subject"])
+        hit = look.get(key)
+        if hit is None:
+            if row["when"] == "always":
+                status, note = FAIL, f"必须出现的读数没有报（expected {row['expected'] or '—'}）"
+            else:
+                status, note = SKIP, "本轮没有这一步（when=if_present）"
+        else:
+            actual, times = hit
+            status, note = grade(row, actual)
+            if times > 1:
+                note += f"（同键报了 {times} 次，取最后一次）"
+        counts[status] += 1
+        by_kind[(row["kind"], status)] += 1
+        results.append((status, row["phase"], row["check"], row["subject"],
+                        row["expected"], row["tol"], row["kind"],
+                        (hit[0] if hit else ""), note))
+
+    # 报告里有、规格表没有的行：这些读数**永远不会被判**。宁可判红也不要静默忽略——
+    # 静默会让「Max 新加了一段报数但没人给它定尺」看起来和通过一样。
+    extras = sorted(set(look) - keys)
+    if extras:
+        counts[FAIL] += len(extras)
+        for key in extras:
+            results.append((FAIL, key[0], key[1], key[2], "", "", "orphan",
+                            look[key][0], "规格表里没有这一行 = 这个读数没人判"))
+
+    results.sort(key=lambda r: (ORDER[r[0]], r[1], r[2], r[3]))
+    for status, phase, check_name, subject, expected, tol, kind, actual, note in results:
+        if status == PASS:
+            continue  # 通过的行不刷屏；全量落在 CHECK 文件里
+        lines.append(f"  [{status}] {phase}/{check_name} {subject} "
+                     f"({kind}) 期望={expected or '—'} 实报={actual or '—'} —— {note}")
+
+    gate_lock = (by_kind.get(("gate", FAIL), 0) + by_kind.get(("lock", FAIL), 0)
+                 + by_kind.get(("orphan", FAIL), 0))
+    lines.append(
+        f"判据汇总：通过 {counts[PASS]}，失败 {counts[FAIL]}，未跑 {counts[SKIP]} "
+        f"（gate/lock 失败 {gate_lock}）；报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
+    # 锁单独说一句：它 PASS 只保证没退步。汇总里不写这句就会被读成「6 条全达标」。
+    locks = by_kind.get(("lock", PASS), 0)
+    if locks:
+        lines.append(f"  其中 {locks} 条是 lock（已定价的缺陷，PASS = 没变得更差，不等于达标）")
+    if extras:
+        lines.append(f"  报告里有 {len(extras)} 行规格表不认识：{', '.join(f'{a}/{b}' for a, b, _ in extras[:5])}")
+    if counts[FAIL]:
+        lines.append("⇒ 本轮验收不通过")
+
+    write_check_file(base / CHECK_NAME, results)
+    code = 1 if counts[FAIL] else 0
+    return code, lines
+
+
+def write_check_file(path: Path, results: list[tuple[str, ...]]) -> None:
+    """把每一行的状态落盘（线格式 v2）。
+
+    日志里只留挂掉的行，是为了让人看得下去；表全量落盘，是为了「这轮到底量到了什么」
+    事后还能查 —— 只留绿日志的话，下一轮出问题就没人能回答「上一轮那条读数是多少」。
+    """
+    header = ("status",) + tuple(SPEC_HEADER) + ("actual", "note")
+    lines = ["\t".join(header)]
+    # actual 是从 Max 那侧读来的自由文本，note 里也带它：一个制表符就能把这张表
+    # 的列错位（下一轮读它的人看到的是「少一列」，不是「有人报了个带制表符的值」）。
+    def safe(field: str) -> str:
+        return field.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    lines.extend("\t".join(safe(field) for field in row) for row in results)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="把 MMD2MAX.VERDICTS 与 MMD2MAX.REPORT 拼起来判（M2c）")
+    ap.add_argument("base", help="导出目录（两张表都在里面）")
+    ap.add_argument("--spec", default=None, help="规格表路径，默认 <目录>/MMD2MAX.VERDICTS")
+    ap.add_argument("--report", default=None, help="报告路径，默认 <目录>/MMD2MAX.REPORT")
+    args = ap.parse_args()
+
+    base = Path(args.base).resolve()
+    code, lines = check(base,
+                        spec_path=Path(args.spec) if args.spec else None,
+                        report_path=Path(args.report) if args.report else None)
+    for line in lines:
+        print(line)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

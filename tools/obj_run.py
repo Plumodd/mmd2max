@@ -30,6 +30,13 @@ from desktop import (  # noqa: E402
     press_keys,
 )
 from mmd2max.targets import TARGETS, cfg_values as target_cfg_values  # noqa: E402
+from mmd2max.verdicts import (  # noqa: E402
+    REPORT_NAME,
+    SPEC_NAME,
+    build_spec,
+    parse_table,
+    spec_text,
+)
 from uia_dialog import invoke_safe_button  # noqa: E402
 
 # 五个装配目标值在 CFG 里的键名（顺序 = mmd2max.targets.TARGETS 的声明顺序）。
@@ -116,6 +123,10 @@ CFG_ERROR_NAME = "mmd2max_cfg.error.txt"
 CFG_KEYS = (
     "MMD2MAX_OBJ", "MMD2MAX_BONES", "MMD2MAX_WEIGHTS", "MMD2MAX_VERTS",
     "MMD2MAX_OUTPUT", "MMD2MAX_MAP", "MMD2MAX_MARKER", "MMD2MAX_LOG",
+    # 判据通道（M2b）：VERDICTS 是 Python 写的「该量什么、允许差多少」，Max 只往里读
+    # 路径、往 REPORT 追加读数。两个都不在 CFG_EMPTY_OK 里 —— 没有报告文件这一轮
+    # 就永远没法验收，那是「绿日志 + 没证据」，正是本项目反复踩的那类事故。
+    "MMD2MAX_VERDICTS", "MMD2MAX_REPORT",
     "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
     "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
     "MMD2MAX_FOOTBOXFLAT",
@@ -189,6 +200,8 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_MAP": str(inputs["biped_map"]),
         "MMD2MAX_MARKER": str(base / f"{out_name}.success.json"),
         "MMD2MAX_LOG": str(base / f"{out_name}_objrun.log"),
+        "MMD2MAX_VERDICTS": str(base / SPEC_NAME),
+        "MMD2MAX_REPORT": str(base / REPORT_NAME),
         "MMD2MAX_MORPHS": str(inputs["morphs"]),
         "MMD2MAX_PHYSICS": str(inputs["physics"]),
         "MMD2MAX_LIMBS": str(inputs["limbs"]),
@@ -233,6 +246,39 @@ def cfg_text(cfg: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# 规格表需要的、只能从 meta 拿的两个计数。缺键一律中止，不给默认值：
+# 「没有 kept_bones 就退化成不检查 Skin 骨数」等于把这条判据删掉，而删掉的判据
+# 不会报错，只会让下一轮全绿。
+META_FOR_SPEC = ("kept_bones", "morph_count")
+
+
+def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
+    """按 CFG 装配判据规格表（MMD2MAX.VERDICTS 正文）。
+
+    取数只走两条路：CFG（路径、开关、目标值）与导出文件（limbs.tsv 的行、meta 的计数）。
+    没有第三条 —— 尤其是**不许**从上一轮的日志或报告里取，那正是「拿 Max 自己报的数
+    要求 Max 报这个数」的恒等式。`model=stem` 决定哪些行带「已定价读数」：
+    只有被定价过的那具模型拿数字当锁，换模型时那些行退化成 report（必须出现、不卡数）。
+    """
+    meta = read_meta(base, stem)          # 纯读文件，与 build_cfg 里那次读的是同一份
+    missing = [k for k in META_FOR_SPEC if not meta.get(k)]
+    if missing:
+        raise SystemExit(
+            f"{base / f'{stem}_meta.tsv'} 缺少键 {'、'.join(missing)}：装配的期望值必须有来源，"
+            "重跑 tools/run_model.py 生成新的 meta")
+    _, limbs = parse_table(Path(cfg["MMD2MAX_LIMBS"]).read_text(encoding="utf-8"))
+    rows = build_spec(
+        model=stem,
+        vertex_count=int(cfg["MMD2MAX_VERTS"]),
+        limbs=limbs,
+        kept_bones=int(meta["kept_bones"]),
+        morph_count=int(meta["morph_count"]),
+        skin=cfg["MMD2MAX_SKIN"] == "true",
+        foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
+    )
+    return spec_text(rows)
+
+
 def build_script(base: Path, stem: str, vertex_count: int,
                  skin: bool = True, suffix: str | None = None,
                  shot: bool = False, physics: bool = True) -> str:
@@ -241,6 +287,10 @@ def build_script(base: Path, stem: str, vertex_count: int,
     cfg, cfg_path = build_cfg(base, stem, vertex_count, skin=skin, suffix=suffix,
                               shot=shot, physics=physics)
     cfg_path.write_text(cfg_text(cfg), encoding="utf-8")
+    # 规格表紧跟 CFG 落盘，路径取自 CFG 自己：两边指向不同文件的话，Max 读的那张表
+    # 就不是 Python 用来判的那张，拼表时全靠运气。
+    spec_path = Path(cfg["MMD2MAX_VERDICTS"])
+    spec_path.write_text(verdicts_text(base, stem, cfg), encoding="utf-8")
     header = (
         "/* mmd2max OBJ 装配脚本（自动生成）——配置单源（M1b）。\n"
         "   这份文件只注入 CFG 路径；全部输入/开关都在 MMD2MAX.CFG 里，\n"
@@ -465,6 +515,23 @@ def result_code(base: Path, name_part: str, dialog_seen: bool = False,
     return 5
 
 
+def verdict_gate(base: Path) -> int:
+    """把本轮的规格表与报告表拼起来判一次，返回退出码。
+
+    `0` 判据全过 / `7` 有 FAIL / `8` 两张表不可用（缺文件、列名分叉、报告比规格旧）。
+    刻意不复用 result_code 的 3~6：那几个说的是「产物在不在」，这两个说的是
+    「产物在，但没人判过」和「判了、没过」。混成同一个数，事后就分不出
+    是 Max 没跑成还是跑成了但几何不对 —— 而这两种的下一步完全不同。
+    """
+    from check_verdicts import CHECK_NAME, check as join_verdicts
+    code, lines = join_verdicts(base)
+    for line in lines:
+        log(line)
+    if code == 0:
+        log(f"判据通过，逐行状态见 {base / CHECK_NAME}")
+    return code if code == 0 else (7 if code == 1 else 8)
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if len(args) < 2:
@@ -527,6 +594,10 @@ def main() -> int:
     # 自动加载时把文件头 BOM 字节当成语法错误，报 "line 1" 解析失败。
     out_script.write_text(script_text, encoding="utf-8")
     log(f"已生成脚本 {out_script}")
+    # 规格表行数打在操作日志里：跑完之后「这轮是按一张 121 行的表验收的」本身要留痕，
+    # 不然只剩一句「完成」，事后没人知道判据有没有少装。
+    spec_rows = (base / SPEC_NAME).read_text(encoding="utf-8").splitlines()[1:]
+    log(f"判据规格 {base / SPEC_NAME}：{len(spec_rows)} 行")
 
     if gen_only:
         # 只交付脚本，完全不碰 Max 进程（用户自行在 Max 里 Run Script）。
@@ -554,8 +625,12 @@ def main() -> int:
     logfile = base / f"{name_part}_objrun.log"
     # CFG_ERROR_NAME 是所有轮次共用的定名文件（那会儿 MARKER 还没读到），不清陈旧
     # 就会让下一轮把上一轮的配置错误当成自己的失败。
+    # 判据报告同理，而且更危险：Max 只在 mmd2maxReportInit 那一步重建它，那一步之前
+    # 抛错（CFG 读不成、网格导入失败）时上一轮的 121 行读数还好好躺在盘上 ——
+    # 校验器会把**上一轮**的绿读成这一轮的绿。这就是第二十一轮那个
+    # 「doesFileExist 被上一轮同名旧图蒙过」（#21）的同一类，只是这次骗的是验收本身。
     cfg_error = base / CFG_ERROR_NAME
-    for stale in (marker, error_file, cfg_error, logfile):
+    for stale in (marker, error_file, cfg_error, logfile, base / REPORT_NAME):
         stale.unlink(missing_ok=True)
 
     # 清理可能残留的旧启动脚本，避免下次 Max 启动误执行
@@ -650,7 +725,13 @@ def main() -> int:
 
     # 退出码必须反映真实产物。实跑踩到：MAXScript 报错、既没有 .max 也没有成功
     # 标记，但本函数仍 return 0，GUI 于是把这一轮写成「完成」，用户以为装配成功。
-    return result_code(base, name_part, dialog_seen, dialog_path)
+    code = result_code(base, name_part, dialog_seen, dialog_path)
+    if code:
+        return code
+    # 产物齐不等于这轮成了。v3 交付过「.max 在、日志全绿、判据没人读过」的轮次
+    # （#24 的 100 通道假成功）；现在把 M2b 的规格表和 M2c 的报告表拼起来判一次，
+    # 任何 FAIL 或缺覆盖都换成非 0 退出码，GUI 就报不出「完成」。
+    return verdict_gate(base)
 
 
 if __name__ == "__main__":

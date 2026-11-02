@@ -500,9 +500,14 @@ class App(tk.Tk):
         self._log("\n".join("  " + line for line in report))
         if shots:
             self._log("  逐张：" + "、".join(p.name for p in shots))
-        if code or not max_out.is_file():
-            return f"{max_out.name} 没生成，看「输出」页末尾的报错"
-        return f"完成：{max_out}　截图 {len(shots)} 张"
+        if code == 0 and max_out.is_file():
+            return f"完成：{max_out}　截图 {len(shots)} 张"
+        if max_out.is_file():
+            # 产物在但退出码非 0：7/8 = 判据没过或两张判据表不可用，4 = 后置步骤抛错。
+            # 这时候说「没生成」是假话，说「完成」更糟 —— 报清楚「文件能用但这轮没通过」。
+            return (f"{max_out.name} 已生成，但这一轮没通过（退出码 {code}），"
+                    "看「输出」页末尾的判据汇总")
+        return f"{max_out.name} 没生成，看「输出」页末尾的报错"
 
     def _max_suffix(self) -> str:
         """跟着 obj_run 的命名规则走：--no-skin / --physics 会加后缀。"""
