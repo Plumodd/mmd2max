@@ -445,7 +445,10 @@ def check_optional_params(src: str) -> list[str]:
     depth = 0
     for index, code in enumerate(_blank_strings(_strip_lines(src)), start=1):
         if depth == 0 and (code.startswith("fn ") or code.startswith("function ")):
-            m = re.search(r"\[[^\]]*\]", code)
+            # 只看参数表：`=` 之后的 `[...]` 是数组下标，不是可选参数。
+            # （`fn mmd2maxRows tbl = tbl[3]` 曾被这条误判成 Syntax error。）
+            head = code.split("=", 1)[0]
+            m = re.search(r"\[[^\]]*\]", head)
             if m:
                 problems.append(
                     f"行 {index}: 函数参数表里写了可选参数 `{m.group(0)}` —— "
@@ -455,27 +458,157 @@ def check_optional_params(src: str) -> list[str]:
     return problems
 
 
-def check_source(src: str) -> list[str]:
-    """全部规则跑一遍，返回问题列表（obj_run 生成脚本后直接调它）。"""
-    return (check_reserved(src) + check_balance(src) + check_strings(src)
-            + check_if_do_else(src) + check_local_time(src)
-            + check_continuation(src) + check_fn_depth(src)
-            + check_empty_fn_params(src) + check_chained_call_property(src)
-            + check_bare_min_max(src) + check_comma_call(src)
-            + check_optional_params(src) + check_forward_reference(src))
+EMPTY_CATCH_RE = re.compile(r"\bcatch\s*\(\s*\)")
+CATCH_EXEMPT_MARK = "允许失败"
 
 
-def check_file(path: Path) -> list[str]:
+def check_empty_catch(src: str) -> list[str]:
+    """规则 V：不许有 `catch ()` —— 空 catch 的语义是「失败了我不想知道」。
+
+    为什么值得变成静态规则（第十七轮之后的探针实测）：
+    v3 的 `max_import_obj.ms:3982` 写着 `try ( skinOps.forceUpdate skinMod ) catch ()`，
+    而探针 probes/skin_readback.txt 把 Max 2022 的 skinOps 成员表整个吐出来过
+    （报错文字 `Unknown property ... in #Struct:skinOps(...)` 会带出 143 个成员）——
+    **forceUpdate 不在里面**。那句从来就没生效过，我们却一直以为「force 更新之后再读
+    GetNumberBones」是可信的。空 catch 把一个死调用藏了十几轮。
+    同一文件里这样的 catch 有 64 个。
+
+    确实允许失败的地方（可选 API、探测某个属性存不存在）必须显式写
+    `-- 允许失败：<理由>` 在同一行，让"这里会静默"变成一条能 grep 的声明。
+    """
+    problems = []
+    raw_lines = src.splitlines()
+    for index, code in enumerate(_blank_strings(_strip_lines(src)), start=1):
+        if EMPTY_CATCH_RE.search(code):
+            raw = raw_lines[index - 1] if index - 1 < len(raw_lines) else ""
+            if CATCH_EXEMPT_MARK in raw:
+                continue
+            problems.append(
+                f"行 {index}: `catch ()` 是空 catch —— 失败会被完全吞掉"
+                f"（v3 的死调用 skinOps.forceUpdate 就是这么藏了十几轮的）。"
+                f"要么记下失败（写 verdict / 打印 getCurrentException()），"
+                f"要么在同一行显式声明 `-- {CATCH_EXEMPT_MARK}：<理由>`。")
+    return problems
+
+
+CHECKER_NAME_RE = re.compile(r"(?i)^(mmd2max)?(Check|Verify|Audit|Score|Valid|LogStruct|Dump)")
+ORACLE_NAME_RE = re.compile(r"(?i)(Want|Target|Desired|Expect|SegLen|BoxDir)")
+
+# 已定价的例外：(判据函数, 它允许调用的求值器)。加进来必须带理由，空着最理想。
+ORACLE_EXEMPT: set[tuple[str, str]] = set()
+
+
+def _fn_spans(code_lines: list[str]) -> list[tuple[str, int, int]]:
+    """按括号深度切出顶层 `fn 名字` 的行范围（1-based，含定义行）。
+
+    只认顶格写的 fn —— check_fn_depth 已经保证顶格 fn 一定在深度 0，
+    嵌套进去的是局部函数，不归这条规则管。
+    """
+    spans: list[tuple[str, int, int]] = []
+    depth = 0
+    open_name = None
+    open_line = 0
+    body_depth = 0
+    for index, code in enumerate(code_lines, start=1):
+        stripped = code.strip()
+        if depth == 0 and open_name is None:
+            m = re.match(r"(?:fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                open_name = m.group(1)
+                open_line = index
+                body_depth = depth
+        if open_name is not None:
+            new_depth = depth + _paren_delta(code)
+            if new_depth <= 0:
+                spans.append((open_name, open_line, index))
+                open_name = None
+            depth = new_depth
+            if depth < 0:
+                depth = 0
+        else:
+            depth += _paren_delta(code)
+            if depth < 0:
+                depth = 0
+    if open_name is not None:
+        spans.append((open_name, open_line, len(code_lines)))
+    return spans
+
+
+def check_oracle_independence(src: str) -> list[str]:
+    """规则 I：判据函数不许调用写路径的求值器（判据独立于写入）。
+
+    这条规则是 v4 存在的全部理由。#26（偏航）/#40（链向）/#41（脚盒）三次缺陷
+    是同一个 bug：`mmd2maxBoxWantDir` 既用来决定骨盒朝哪，又用来核对骨盒朝哪 ——
+    恒等式，永远绿；`段校验` 拿两个刚被钉到同一对 PMX 点上的 pivot 互相量 —— 也永远绿。
+    日志里几百个"成功"计数，没有一行有能力说"不"。
+
+    静态近似（不是完备证明，但能拦住复发）：名字像判据的函数（Check/Verify/Audit/
+    Score/Valid/LogStruct/Dump 开头）体内不许出现名字像求值器的调用
+    （Want/Target/Desired/Expect/SegLen/BoxDir）。命中了就两选一：把期望值改成从
+    spec 文件读（规则 IV 的数值单源），或者从判据里把这个调用拿掉。
+    """
+    problems = []
+    code_lines = _blank_strings(_strip_lines(src))
+    spans = _fn_spans(code_lines)
+    oracles = {name for name, _s, _e in spans if ORACLE_NAME_RE.search(name)}
+    by_line: dict[int, str] = {}
+    for name, start, end in spans:
+        for line in range(start, end + 1):
+            by_line.setdefault(line, name)
+    for name, start, end in spans:
+        if not CHECKER_NAME_RE.search(name):
+            continue
+        for line in range(start, end + 1):
+            for callee in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", code_lines[line - 1]):
+                if callee == name or callee not in oracles:
+                    continue
+                if (name, callee) in ORACLE_EXEMPT:
+                    continue
+                problems.append(
+                    f"行 {line}: 判据 `{name}` 调用了求值器 `{callee}` —— 期望值和写入值"
+                    f"同源，这条判据不可能变红（#26/#40/#41 的成因）。"
+                    f"改成从 spec 读期望值，或把调用移出判据。")
+    return problems
+
+
+def check_v4_debt(src: str) -> list[str]:
+    """规则 V + 规则 I 的违规清单（v3 继承债，M1b~M4 期间会一路变少）。"""
+    return check_empty_catch(src) + check_oracle_independence(src)
+
+
+def check_source(src: str, strict: bool = False) -> list[str]:
+    """全部规则跑一遍，返回问题列表（obj_run 生成脚本后直接调它）。
+
+    strict=False（默认）只跑 13 条「编译期会炸」的老规则；规则 V/I 是 v4 新加的
+    结构性约束，v3 继承下来的违规还有 60+ 条，一次性拦会把每一轮实跑都卡住。
+    所以先记账不拦路，main() 会把债的条数打出来；清完那天把 strict 打开（M4 的验收
+    项之一）。**注意**：不拦路不等于不重要 —— 空 catch 把 skinOps.forceUpdate 这个
+    死调用藏了十几轮，就是"先记账、以后再说"的下场。
+    """
+    problems = (check_reserved(src) + check_balance(src) + check_strings(src)
+                + check_if_do_else(src) + check_local_time(src)
+                + check_continuation(src) + check_fn_depth(src)
+                + check_empty_fn_params(src) + check_chained_call_property(src)
+                + check_bare_min_max(src) + check_comma_call(src)
+                + check_optional_params(src) + check_forward_reference(src))
+    if strict:
+        problems = problems + check_v4_debt(src)
+    return problems
+
+
+def check_file(path: Path, strict: bool = False) -> list[str]:
     if not path.is_file():
         return [f"文件不存在：{path}"]
-    return check_source(path.read_text(encoding="utf-8"))
+    return check_source(path.read_text(encoding="utf-8"), strict=strict)
 
 
 def main(argv: list[str]) -> int:
-    targets = [Path(a) for a in argv[1:]] or sorted((ROOT / "scripts").glob("*.ms"))
+    strict = "--strict" in argv[1:]
+    targets = [Path(a) for a in argv[1:] if not a.startswith("--")] or sorted(
+        (ROOT / "scripts").glob("*.ms"))
     total = 0
     for path in targets:
-        problems = check_file(path)
+        problems = check_file(path, strict=strict)
         label = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
         if problems:
             total += len(problems)
@@ -484,6 +617,14 @@ def main(argv: list[str]) -> int:
                 print("   ", item)
         else:
             print(f"[OK]   {label}")
+        if not strict:
+            # 结构性债（规则 V/I）默认只记账不拦路 —— 拦路会让每一轮实跑都卡在这
+            # 60+ 条继承债上。清到 0 就把 --strict 打开，让 check_ms 真正咬人。
+            debt = len(check_v4_debt(path.read_text(encoding="utf-8")
+                                     if path.is_file() else ""))
+            if debt:
+                print(f"       （另有 {debt} 条 v4 结构性债：空 catch / 判据同源；"
+                       f"--strict 才拦路）")
     return 1 if total else 0
 
 

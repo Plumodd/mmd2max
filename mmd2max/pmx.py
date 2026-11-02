@@ -76,6 +76,30 @@ class Bone:
     ik_target_index: int = -1
     ik_iterations: int = 0
     ik_angle_limit: float = 0.0
+    # 轴固定化(0x0400) / ローカル軸(0x0800)。旧版读到了字节但直接丢掉，
+    # 于是「骨该绕哪个轴转」这件事只剩下我们从 position/tail 反推的一条路 ——
+    # 而反推出来的朝向正是 #26/#40 判据自己给自己发绿灯的那个来源。
+    # PMX 规范里这三条是**作者手填的真值**，与几何无关，天然独立，所以拿它当
+    # roll 的第二只眼睛（v4 规则 I 的伪-真值表）。None = 该骨没声明。
+    fixed_axis: tuple[float, float, float] | None = None
+    local_x: tuple[float, float, float] | None = None
+    local_z: tuple[float, float, float] | None = None
+
+    @property
+    def has_local_axis(self) -> bool:
+        return self.local_x is not None and self.local_z is not None
+
+    def local_y(self) -> tuple[float, float, float] | None:
+        """PMX 只存 X、Z，Y = Z × X（右手系，与 mmx/pmm 的约定一致）。"""
+        if not self.has_local_axis:
+            return None
+        return _cross(self.local_z, self.local_x)
+
+
+def _cross(a: tuple[float, float, float], b: tuple[float, float, float]):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
 
 
 @dataclass
@@ -379,11 +403,14 @@ def load_pmx(path: str | Path) -> PMXModel:
             if flags & 0x0300:
                 inherit_parent_index = r.index(header.bone_index_size, True)
                 inherit_weight = r.f32()
+            fixed_axis = None
+            local_x = None
+            local_z = None
             if flags & 0x0400:
-                r.vec3()  # Fixed axis.
+                fixed_axis = r.vec3()  # Fixed axis.
             if flags & 0x0800:
-                r.vec3()  # Local X axis.
-                r.vec3()  # Local Z axis.
+                local_x = r.vec3()  # Local X axis.
+                local_z = r.vec3()  # Local Z axis.
             if flags & 0x2000:
                 r.i32()  # External parent key.
             ik_target_index = -1
@@ -401,10 +428,15 @@ def load_pmx(path: str | Path) -> PMXModel:
                         r.vec3()
             if not _finite(position):
                 raise PMXError(f"骨骼「{bone_name}」坐标含非法值（NaN/Inf）")
+            for label, axis in (("轴固定", fixed_axis),
+                                ("局部 X", local_x), ("局部 Z", local_z)):
+                if axis is not None and not _finite(axis):
+                    raise PMXError(f"骨骼「{bone_name}」的{label}轴含非法值（NaN/Inf）")
             bones.append(Bone(
                 bone_name, bone_name_en, position, parent_index, layer, flags,
                 tail_index, tail_offset, inherit_parent_index, inherit_weight,
                 ik_target_index, ik_iterations, ik_angle_limit,
+                fixed_axis, local_x, local_z,
             ))
 
         bone_count = len(bones)

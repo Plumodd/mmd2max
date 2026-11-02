@@ -555,18 +555,85 @@ fn mmd2maxSplit text sep =
     parts
 )
 
-fn mmd2maxReadLines path =
+/* ================= 带表头的 TSV 读取（M1：跨语言线格式自描述）=================
+   约定由 mmd2max/export_obj.py 的 _header_line / _kind_header 写出：
+     第 1 行            = tab 分隔的列名；取数按列名，不再靠 p[12] 这种魔数下标。
+     以 # 开头的行       = 给人看的注释，跳过。
+     @<记录名>\t列名…    = 同一文件里**另一种记录**的列名（physics 的 JOINT、morphs 的 V）。
+         这两种记录的同一列号含义不同（physics 第 4 列在 RIGID 是 rigid_name_en、在 JOINT
+         是 joint_type），一行表头装不下；这些名字并进同一张列名表，各带 rigid_/joint_
+         前缀，不会和主记录撞名。
+   返回 #(列名, 列号, 数据行)：「数据行」每行是 mmd2maxSplit 出来的字段数组。
+   为什么这里用 mmd2maxSplit 而不是 filterString：filterString 会**丢掉空字段**，
+   一旦某列留空（骨名为空串就会发生），后面所有列号整体左移一位，读回来的数看着正常、
+   其实是隔壁列的值。mmd2maxSplit 保留空字段，列号永远对得上表头。 */
+fn mmd2maxReadTable path =
 (
-    local lines = #()
+    local names = #()
+    local colPos = #()
+    local rows = #()
+    if path == undefined or path == "" do return #(names, colPos, rows)
     local f = openFile path encoding:#utf8
     if f == undefined do throw ("无法打开数据文件：" + (path as string))
+    local lineNo = 0
     while not (eof f) do
     (
         local line = readLine f
-        if line != undefined and line != "" do append lines line
+        lineNo += 1
+        if line != undefined and line.count > 0 do
+        (
+            local fields = mmd2maxSplit line "\t"
+            local head = fields[1]
+            local first = if head.count > 0 then head[1] else ""
+            local isSchema = lineNo == 1 or first == "@"
+            if isSchema do
+            (
+                /* 主表头从第 1 个字段起对齐；`@KIND` 行的第 1 个字段是记录名本身，
+                   所以它的列名从第 2 个字段起对齐 */
+                local startAt = 1
+                if lineNo > 1 do startAt = 2
+                for i = startAt to fields.count do
+                (
+                    append names fields[i]
+                    append colPos i
+                )
+            )
+            if (not isSchema) and (first != "#") do append rows fields
+        )
     )
     close f
-    lines
+    #(names, colPos, rows)
+)
+
+fn mmd2maxRows tbl = tbl[3]
+
+fn mmd2maxColPos tbl colName =
+(
+    /* 列名 -> 行内字段号（1-based）。**缺列就抛**，不许静默返回 undefined：
+       undefined 转成 float 是 0，日志里照样「成功」，这正是本项目反复踩的失败类别
+       （骨盆改写静默失效、Toe0 静默 0 个顶点，都是这一类）。 */
+    local found = findItem tbl[1] colName
+    if found == 0 do
+    (
+        local msg = "数据文件缺列 " + (colName as string) + "，实际表头=" + (tbl[1] as string)
+        mmd2maxLog msg
+        throw msg
+    )
+    tbl[2][found]
+)
+
+fn mmd2maxCol tbl rowIndex colName =
+(
+    /* 第 rowIndex 行的 colName 列（字符串）。
+       行号越界 = 表和行号对不上，抛错；
+       行比该列短 = 变长尾列（limbs 只有 mode=foot 的行才有第 10~18 列），返回 ""，
+       调用方必须先看过行宽再取 —— 这条不会静默，因为短行本来就只有尾列会缺。 */
+    local rows = tbl[3]
+    if rowIndex < 1 or rowIndex > rows.count do
+        throw ("数据行号越界：" + (rowIndex as string))
+    local pos = mmd2maxColPos tbl colName
+    local fields = rows[rowIndex]
+    if pos > fields.count then "" else fields[pos]
 )
 
 fn mmd2maxImportObj =
@@ -700,27 +767,27 @@ fn mmd2maxMeshes =
 
 /* 读 biped_map.tsv，返回 #(行号数组(1-based), Biped节点名数组)。
    注意：映射表以「骨序号」为键而非骨名 —— PMX 骨名是日文，
-   按本地代码页解析会乱码，导致 getNodeByName 找不到节点。 */
+   按本地代码页解析会乱码，导致 getNodeByName 找不到节点。
+   列按表头名取（bone_index / biped_node），不再写死「第 1、2 列」。 */
 fn mmd2maxReadBipedMap path =
 (
     local rowIds = #()
     local targetNames = #()
-    local f = openFile path encoding:#utf8
-    if f == undefined do return #(rowIds, targetNames)
-    while not eof f do
+    if path == undefined or path == "" do return #(rowIds, targetNames)
+    if not (doesFileExist path) do return #(rowIds, targetNames)
+    local tbl = mmd2maxReadTable path
+    local cIdx = mmd2maxColPos tbl "bone_index"
+    local cNode = mmd2maxColPos tbl "biped_node"
+    for row in mmd2maxRows tbl do
     (
-        local line = readLine f
-        if line.count > 0 and line[1] != "#" do
+        /* 两层 if：MAXScript 的 and 不短路，行宽不够时先取 row[cNode] 会读到 undefined */
+        if row.count >= cNode do
+        if row[cNode].count > 0 do
         (
-            local parts = filterString line "\t"
-            if parts.count >= 2 and parts[2].count > 0 do
-            (
-                append rowIds ((parts[1] as integer) + 1)
-                append targetNames parts[2]
-            )
+            append rowIds ((row[cIdx] as integer) + 1)
+            append targetNames row[cNode]
         )
     )
-    close f
     #(rowIds, targetNames)
 )
 
@@ -799,98 +866,105 @@ fn mmd2maxReadLimbs path =
 (
     /* 读 limbs.tsv：
        parent_target  child_target  desired_len  mmd_parent  mmd_child  child_x child_y child_z  mode
-       第 6~8 列是子关节（head）在 Max 世界坐标里的位置，**每一行都有**：
+       下列 child_x~child_z 是子关节（head）在 Max 世界坐标里的位置，**每一行都有**：
        骨盆改写要拿左右腿根这两列算 COM 锚点（见 mmd2maxHipAnchor）。
-       mode=link 是普通段；mode=foot 再多 9 列（10 踝→鞋尖、11 趾长、12~14 鞋尖、
-       15 脚尖处宽、16 脚尖处高、17 足背处宽、18 足背处高）；mode=leg（#36）不带附加列，
-       它标记的是「大腿→小腿」这一行：child 位置就是 PMX 的膝，mmd2maxLegRoll 拿它
-       和实测膝比方位。列数不足的行按老格式（只有前 3 列）读，childPos 为 undefined。 */
+       mode=link 是普通段；mode=foot 再多 9 列（foot_len 踝→鞋尖、toe_len 脚掌→鞋尖(沿趾)、
+       tip_x/tip_y/tip_z 鞋尖坐标、toe_w/toe_h 脚尖处宽高、foot_w/foot_h 踝处足背宽高）；
+       mode=leg（#36）不带附加列，它标记的是「大腿→小腿」这一行：child 位置就是 PMX 的膝，
+       mmd2maxLegRoll 拿它和实测膝比方位。列数不足的行按老格式（只有前 3 列）读，childPos 为 undefined。
+       列号一律从表头名解析（mmd2maxReadTable + mmd2maxColPos），缺列就抛 ——
+       原先写死的 parts[6]/parts[15] 这类下标，Python 侧列序一变就会静默读到隔壁列。 */
     local result = #()
     if path == undefined or path == "" do return result
     if not (doesFileExist path) do return result
-    local f = openFile path encoding:#utf8
-    if f == undefined do return result
-    while not eof f do
+    local tbl = mmd2maxReadTable path
+    /* 列号在本函数开头一次取好：循环体每格都查表头的话，一轮下来白白做几万次 findItem。 */
+    local cParent = mmd2maxColPos tbl "parent_target"
+    local cChild = mmd2maxColPos tbl "child_target"
+    local cDesired = mmd2maxColPos tbl "desired_len"
+    local cChildX = mmd2maxColPos tbl "child_x"
+    local cChildY = mmd2maxColPos tbl "child_y"
+    local cChildZ = mmd2maxColPos tbl "child_z"
+    local cMode = mmd2maxColPos tbl "mode"
+    local cFootLen = mmd2maxColPos tbl "foot_len"
+    local cToeLen = mmd2maxColPos tbl "toe_len"
+    local cTipX = mmd2maxColPos tbl "tip_x"
+    local cTipY = mmd2maxColPos tbl "tip_y"
+    local cTipZ = mmd2maxColPos tbl "tip_z"
+    local cToeW = mmd2maxColPos tbl "toe_w"
+    local cToeH = mmd2maxColPos tbl "toe_h"
+    local cFootW = mmd2maxColPos tbl "foot_w"
+    local cFootH = mmd2maxColPos tbl "foot_h"
+    for row in mmd2maxRows tbl do
     (
-        local line = readLine f
-        if line.count > 0 and line[1] != "#" do
+        if row.count >= cDesired do
         (
-            local parts = filterString line "\t"
-            if parts.count >= 3 do
+            local desired = 0.0
+            try ( desired = row[cDesired] as float ) catch ( desired = 0.0 )
+            if desired > 0.0001 do
             (
-                local desired = 0.0
-                try ( desired = parts[3] as float ) catch ( desired = 0.0 )
-                if desired > 0.0001 do
+                local childPos = undefined
+                local mode = ""
+                local footLen = 0.0
+                local toeLen = 0.0
+                local tipPos = undefined
+                if row.count >= cMode do
                 (
-                    local childPos = undefined
-                    local mode = ""
-                    local footLen = 0.0
-                    local toeLen = 0.0
-                    local tipPos = undefined
-                    if parts.count >= 9 do
-                    (
-                        try ( childPos = [(parts[6] as float), (parts[7] as float), (parts[8] as float)] ) \
-                        catch ( childPos = undefined )
-                        mode = parts[9]
-                    )
-                    /* 脚段额外 9 列：10=踝→鞋尖 11=脚掌→鞋尖(沿趾) 12~14=鞋尖坐标
-                       15=脚尖处宽 16=脚尖处高 17=足背处宽 18=足背处高
-                       （17/18 是 #37：Foot 这根骨自己的截面，判据和 15/16 同一条，
-                       只是量的对象从「脚尖那一小段」换成「踝→脚掌整根轴」。） */
-                    local toeW = 0.0
-                    local toeH = 0.0
-                    local footW = 0.0
-                    local footH = 0.0
-                    if parts.count >= 14 do
-                    (
-                        try ( footLen = parts[10] as float ) catch ( footLen = 0.0 )
-                        try ( toeLen = parts[11] as float ) catch ( toeLen = 0.0 )
-                        try ( tipPos = [(parts[12] as float), (parts[13] as float), (parts[14] as float)] ) \
-                        catch ( tipPos = undefined )
-                    )
-                    if parts.count >= 16 do
-                    (
-                        try ( toeW = parts[15] as float ) catch ( toeW = 0.0 )
-                        try ( toeH = parts[16] as float ) catch ( toeH = 0.0 )
-                    )
-                    if parts.count >= 18 do
-                    (
-                        try ( footW = parts[17] as float ) catch ( footW = 0.0 )
-                        try ( footH = parts[18] as float ) catch ( footH = 0.0 )
-                    )
-                    append result #(parts[1], parts[2], desired, childPos, mode, \
-                        footLen, toeLen, tipPos, toeW, toeH, footW, footH)
+                    try ( childPos = [(row[cChildX] as float), (row[cChildY] as float), (row[cChildZ] as float)] ) \
+                    catch ( childPos = undefined )
+                    mode = row[cMode]
                 )
+                /* 脚段额外 9 列：foot_len 踝→鞋尖、toe_len 脚掌→鞋尖(沿趾)、
+                   tip_x~tip_z 鞋尖坐标、toe_w/toe_h 脚尖处宽高、foot_w/foot_h 踝处足背宽高
+                   （foot_w/foot_h 是 #37：Foot 这根骨自己的截面，判据和 toe_w/toe_h 同一条，
+                   只是量的对象从「脚尖那一小段」换成「踝→脚掌整根轴」。） */
+                local toeW = 0.0
+                local toeH = 0.0
+                local footW = 0.0
+                local footH = 0.0
+                if row.count >= cTipZ do
+                (
+                    try ( footLen = row[cFootLen] as float ) catch ( footLen = 0.0 )
+                    try ( toeLen = row[cToeLen] as float ) catch ( toeLen = 0.0 )
+                    try ( tipPos = [(row[cTipX] as float), (row[cTipY] as float), (row[cTipZ] as float)] ) \
+                    catch ( tipPos = undefined )
+                )
+                if row.count >= cToeH do
+                (
+                    try ( toeW = row[cToeW] as float ) catch ( toeW = 0.0 )
+                    try ( toeH = row[cToeH] as float ) catch ( toeH = 0.0 )
+                )
+                if row.count >= cFootH do
+                (
+                    try ( footW = row[cFootW] as float ) catch ( footW = 0.0 )
+                    try ( footH = row[cFootH] as float ) catch ( footH = 0.0 )
+                )
+                append result #(row[cParent], row[cChild], desired, childPos, mode, \
+                    footLen, toeLen, tipPos, toeW, toeH, footW, footH)
             )
         )
     )
-    close f
     result
 )
 
 fn mmd2maxReadWidths path =
 (
-    /* 读 widths.tsv：# biped_target <tab> width（目标世界宽度） */
+    /* 读 widths.tsv：biped_target <tab> width（目标世界宽度），列按表头名取 */
     local result = #()
     if path == undefined or path == "" do return result
     if not (doesFileExist path) do return result
-    local f = openFile path encoding:#utf8
-    if f == undefined do return result
-    while not eof f do
+    local tbl = mmd2maxReadTable path
+    local cTarget = mmd2maxColPos tbl "biped_target"
+    local cWidth = mmd2maxColPos tbl "width"
+    for row in mmd2maxRows tbl do
     (
-        local line = readLine f
-        if line.count > 0 and line[1] != "#" do
+        if row.count >= cWidth do
         (
-            local parts = filterString line "\t"
-            if parts.count >= 2 do
-            (
-                local w = 0.0
-                try ( w = parts[2] as float ) catch ( w = 0.0 )
-                if w > 0.001 do append result #(parts[1], w)
-            )
+            local w = 0.0
+            try ( w = row[cWidth] as float ) catch ( w = 0.0 )
+            if w > 0.001 do append result #(row[cTarget], w)
         )
     )
-    close f
     result
 )
 
@@ -1884,6 +1958,13 @@ fn mmd2maxFitScore root lines rowIds targetNames limbs =
        不能拿去和复核表对数。判据与转角 pass 同源（mmd2maxBoxWantDir），
        短于 1cm 的显示 stub 不计方向，读不到轴（-1.0）也不计。
        返回 #(方向超标数, 落位偏差和cm, 落位最大偏差cm) */
+    local rows = mmd2maxRows lines
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
+    local cTailY = mmd2maxColPos lines "tail_y"
+    local cTailZ = mmd2maxColPos lines "tail_z"
     local badDir = 0
     local sumPos = 0.0
     local maxPos = 0.0
@@ -1893,13 +1974,13 @@ fn mmd2maxFitScore root lines rowIds targetNames limbs =
         if t != "Bip001" do
         (
             local row = rowIds[k]
-            if row <= lines.count do
+            if row <= rows.count do
             (
-                local p = mmd2maxSplit lines[row] "\t"
-                if p.count >= 11 do
+                local p = rows[row]
+                if p.count >= cTailZ do
                 (
-                    local sHead = [(p[6] as float), (p[7] as float), (p[8] as float)]
-                    local sTail = [(p[9] as float), (p[10] as float), (p[11] as float)]
+                    local sHead = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
+                    local sTail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
                     local sNode = getNodeByName (root.name + (substring t 7 -1)) exact:true
                     if sNode != undefined do
                     (
@@ -1933,6 +2014,13 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
        **必须跑在 `mmd2maxFigureMode ... false` 之前**：Figure 模式里 setTransform 改的是
        结构性姿态，退出之后再转就是在做动作、会插 key。
        返回 #(尝试, 改善, 未改善, 抛错) */
+    local rows = mmd2maxRows lines
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
+    local cTailY = mmd2maxColPos lines "tail_y"
+    local cTailZ = mmd2maxColPos lines "tail_z"
     local total = 0
     local better = 0
     local worse = 0
@@ -1949,13 +2037,13 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
         if t != "Bip001" do
         (
             local row = rowIds[k]
-            if row <= lines.count do
+            if row <= rows.count do
             (
-                local p = mmd2maxSplit lines[row] "\t"
-                if p.count >= 11 do
+                local p = rows[row]
+                if p.count >= cTailZ do
                 (
-                    local rHead = [(p[6] as float), (p[7] as float), (p[8] as float)]
-                    local rTail = [(p[9] as float), (p[10] as float), (p[11] as float)]
+                    local rHead = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
+                    local rTail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
                     /* 脚链单独规定取哪两个点，其余骨仍是 PMX tail - head（见 mmd2maxBoxWantDir） */
                     local want = mmd2maxBoxWantDir t rHead rTail (mmd2maxShoeTip limbs t)
                     local prio = mmd2maxChainPriority t
@@ -2536,6 +2624,11 @@ fn mmd2maxPlaceBipedNodes root lines rowIds targetNames passList skipDir =
     /* skipDir:true = 这是「转角之后的重摆」：方向优先（#dir）的骨整根跳过。
        12:04 实测重摆对指链是净亏（落位只换回 1.4cm，转角却被吃掉 2 度以上），
        而脚链的方向就是用户判据。判据只有一处：mmd2maxChainPriority。 */
+    local rows = mmd2maxRows lines
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
     local placed = 0
     local poseFailed = 0
     local poseMissing = 0
@@ -2549,14 +2642,14 @@ fn mmd2maxPlaceBipedNodes root lines rowIds targetNames passList skipDir =
             if srcIdx > 0 do
             (
                 local row = rowIds[srcIdx]
-                if row <= lines.count do
+                if row <= rows.count do
                 (
-                    local p = mmd2maxSplit lines[row] "\t"
-                    if p.count >= 9 do
+                    local p = rows[row]
+                    if p.count >= cTailX do
                     (
-                        /* bones.tsv 列序：1=idx 2=name 3=parent 4=role 5=biped_target
-                           6=hx 7=hy 8=hz 9=tx 10=ty 11=tz 12=skin_flag */
-                        local pos = [(p[6] as float), (p[7] as float), (p[8] as float)]
+                        /* bones.tsv 的 pivot 三列按表头名取（head_x/head_y/head_z），
+                           尾端列只是「这行是完整骨行」的宽度判据 */
+                        local pos = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
                         local actual = root.name + (substring targetName 7 -1)
                         local node = getNodeByName actual exact:true
                         if node != undefined then
@@ -2686,6 +2779,16 @@ fn mmd2maxFitPelvis root lines rowIds targetNames passList pelvisPos hipTarget =
    bipedNodes 为输出数组（长度 = 骨骼行数），命中的位置写入对应 Biped 节点。 */
 fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
 (
+    /* lines 现在是 mmd2maxReadTable 的表对象（bones.tsv 的列名 + 数据行）：
+       列号在本函数开头按名字取一次，下面 5 处读数都按名对位，不再写死 p[6]/p[9]。
+       行数要用 mmd2maxRows 的行数 —— 表对象自己的 .count 是 3（列名/列号/数据行）。 */
+    local rows = mmd2maxRows lines
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
+    local cTailY = mmd2maxColPos lines "tail_y"
+    local cTailZ = mmd2maxColPos lines "tail_z"
     local headPos = undefined
     local footZ = undefined
     local centerPos = undefined
@@ -2695,14 +2798,13 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     for k = 1 to rowIds.count do
     (
         local row = rowIds[k]
-        if row <= lines.count do
+        if row <= rows.count do
         (
-            local p = mmd2maxSplit lines[row] "\t"
-            if p.count >= 9 do
+            local p = rows[row]
+            if p.count >= cTailX do
             (
-                /* bones.tsv 列序：1=idx 2=name 3=parent 4=role 5=biped_target
-                   6=hx 7=hy 8=hz 9=tx 10=ty 11=tz 12=skin_flag */
-                local pos = [(p[6] as float), (p[7] as float), (p[8] as float)]
+                /* pivot 三列：head_x / head_y / head_z（尾端列 tail_x 只是行宽判据） */
+                local pos = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
                 local t = targetNames[k]
                 if t == "Bip001 Head" do headPos = pos
                 if t == "Bip001" do centerPos = pos
@@ -2759,12 +2861,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     for k = 1 to rowIds.count do
     (
         local row = rowIds[k]
-        if row <= lines.count do
+        if row <= rows.count do
         (
-            local pp = mmd2maxSplit lines[row] "\t"
-            if pp.count >= 11 do
+            local pp = rows[row]
+            if pp.count >= cTailZ do
             (
-                local pos = [(pp[6] as float), (pp[7] as float), (pp[8] as float)]
+                local pos = [(pp[cHeadX] as float), (pp[cHeadY] as float), (pp[cHeadZ] as float)]
                 if targetNames[k] == "Bip001 L Foot" do footP = pos
                 if targetNames[k] == "Bip001 L Toe0" do toeP = pos
                 if targetNames[k] == "Bip001 R Foot" do footP2 = pos
@@ -3199,12 +3301,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if srcIdx > 0 do
         (
             local row = rowIds[srcIdx]
-            if row <= lines.count do
+            if row <= rows.count do
             (
-                local pp = mmd2maxSplit lines[row] "\t"
-                if pp.count >= 9 do
+                local pp = rows[row]
+                if pp.count >= cTailX do
                 (
-                    local want = [(pp[6] as float), (pp[7] as float), (pp[8] as float)]
+                    local want = [(pp[cHeadX] as float), (pp[cHeadY] as float), (pp[cHeadZ] as float)]
                     local actualName = root.name + (substring footName 7 -1)
                     local fnode = getNodeByName actualName exact:true
                     if fnode != undefined do
@@ -3656,12 +3758,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if srcIdx > 0 do
         (
             local row = rowIds[srcIdx]
-            if row <= lines.count do
+            if row <= rows.count do
             (
-                local p = mmd2maxSplit lines[row] "\t"
-                if p.count >= 9 do
+                local p = rows[row]
+                if p.count >= cTailX do
                 (
-                    local want = [(p[6] as float), (p[7] as float), (p[8] as float)]
+                    local want = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
                     local actual = root.name + (substring targetName 7 -1)
                     local node = getNodeByName actual exact:true
                     if node != undefined do
@@ -3709,13 +3811,13 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if t != "Bip001" do
         (
             local row = rowIds[k]
-            if row <= lines.count do
+            if row <= rows.count do
             (
-                local p = mmd2maxSplit lines[row] "\t"
-                if p.count >= 11 do
+                local p = rows[row]
+                if p.count >= cTailZ do
                 (
-                    local headPos = [(p[6] as float), (p[7] as float), (p[8] as float)]
-                    local tailPos = [(p[9] as float), (p[10] as float), (p[11] as float)]
+                    local headPos = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
+                    local tailPos = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
                     /* 判据必须和转角 pass 用同一个方向：脚链的盒本来就规定不平齐
                        PMX tail - head（见 mmd2maxBoxWantDir），拿三维 tail 复核会把
                        修好的脚又报成超标 */
@@ -3778,12 +3880,24 @@ fn mmd2maxLogAccessoryStats nodes =
 
 fn mmd2maxCreateBones =
 (
-    local lines = mmd2maxReadLines MMD2MAX_BONES
-    mmd2maxLog ("读取骨骼数：" + (lines.count as string))
+    /* lines = bones.tsv 的表对象 #(列名, 列号, 数据行)，rows = 其中的数据行。
+       行数一律用 rows.count：表对象自己的 .count 是 3，拿它当骨骼数会把 555 根读成 3 根。 */
+    local lines = mmd2maxReadTable MMD2MAX_BONES
+    local rows = mmd2maxRows lines
+    local cName = mmd2maxColPos lines "bone_name"
+    local cParent = mmd2maxColPos lines "parent"
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
+    local cTailY = mmd2maxColPos lines "tail_y"
+    local cTailZ = mmd2maxColPos lines "tail_z"
+    local cMaxParent = mmd2maxColPos lines "max_parent"
+    mmd2maxLog ("读取骨骼数：" + (rows.count as string))
     /* 先创建 Biped，人形骨的位置预留给 Biped 节点 */
     local bipedNodes = #()
     local bipedRoot = undefined
-    for i = 1 to lines.count do append bipedNodes undefined
+    for i = 1 to rows.count do append bipedNodes undefined
     local mapData = mmd2maxReadBipedMap MMD2MAX_MAP
     local rowIds = mapData[1]
     local targetNames = mapData[2]
@@ -3793,10 +3907,9 @@ fn mmd2maxCreateBones =
 
     local nodes = #()
     disableSceneRedraw()
-    for line in lines do
+    for p in rows do
     (
-        local p = mmd2maxSplit line "\t"
-        if p.count >= 9 do
+        if p.count >= cTailX do
         (
             local existing = bipedNodes[nodes.count + 1]
             if existing != undefined then
@@ -3806,8 +3919,8 @@ fn mmd2maxCreateBones =
             )
             else
             (
-                local head = [(p[6] as float), (p[7] as float), (p[8] as float)]
-                local tail = [(p[9] as float), (p[10] as float), (p[11] as float)]
+                local head = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
+                local tail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
                 local dir = tail - head
                 local len = length dir
                 if len < 0.0001 do
@@ -3844,20 +3957,20 @@ fn mmd2maxCreateBones =
        因此只对 BoneGeometry 执行；人形骨保持 Biped 原始名称与层级。 */
     for i = 1 to nodes.count do
     (
-        local p = mmd2maxSplit lines[i] "\t"
-        if p.count >= 9 do
+        local p = rows[i]
+        if p.count >= cTailX do
         (
             if (classOf nodes[i]) != BoneGeometry do continue
-            local boneName = p[2]
+            local boneName = p[cName]
             try ( nodes[i].name = boneName ) catch ( nodes[i].name = ("mmdbone" + (i as string)) )
-            local parentIndex = p[3] as integer
-            /* 第 13 列 max_parent：附属骨链根在 Max 里的改挂目标（-1 = 用第 3 列）。
+            local parentIndex = p[cParent] as integer
+            /* max_parent 列：附属骨链根在 Max 里的改挂目标（-1 = 用 parent 列）。
                裙摆/头发在 MMD 里挂「下半身」，映射后是 Bip001 Spine；若用户希望改成
                几何最近的 Biped 节点，由 Python 侧算好写在这一列，脚本照做即可。 */
-            if p.count >= 13 do
+            if p.count >= cMaxParent do
             (
                 local override = -1
-                try ( override = p[13] as integer ) catch ( override = -1 )
+                try ( override = p[cMaxParent] as integer ) catch ( override = -1 )
                 if override >= 0 and override < nodes.count do
                 (
                     if override != parentIndex do
@@ -3925,26 +4038,28 @@ fn mmd2maxApplySkin meshes boneNodes =
     local skinMod = Skin()
     addModifier meshObj skinMod
 
-    /* 只把「参与蒙皮」的骨骼加进 Skin。第 10 列是标记位（1=参与）。
+    /* 只把「参与蒙皮」（skin_flag=1）的骨骼加进 Skin。
        把全部 555 根都加进去会让 Max 的 Skin 修改器卡死。 */
-    local lines = mmd2maxReadLines MMD2MAX_BONES
+    local lines = mmd2maxReadTable MMD2MAX_BONES
+    local rows = mmd2maxRows lines
+    local cSkinFlag = mmd2maxColPos lines "skin_flag"
     local skinFlags = #()
     local target = 0
-    for i = 1 to lines.count do
+    for i = 1 to rows.count do
     (
-        local p = mmd2maxSplit lines[i] "\t"
+        local p = rows[i]
         local flag = 1
-        /* bones.tsv 第 12 列是 skin_flag（前 11 列为 idx/name/parent/role/biped_target/
-           hx/hy/hz/tx/ty/tz），此处索引需与 Python 端导出保持一致。 */
-        if p.count >= 12 do
+        /* skin_flag 是标记位（1=参与）；原先注释写成「第 10 列」，实际在表头里是第 12 列 ——
+           这正是魔数下标会写错的地方，现在列号由表头名解析出来。 */
+        if p.count >= cSkinFlag do
         (
-            local raw = p[12]
+            local raw = p[cSkinFlag]
             if raw == "0" do flag = 0
         )
         append skinFlags flag
         if flag == 1 do target += 1
     )
-    mmd2maxLog ("加入 Skin 的骨骼数：" + (target as string) + " / 总数 " + (lines.count as string))
+    mmd2maxLog ("加入 Skin 的骨骼数：" + (target as string) + " / 总数 " + (rows.count as string))
 
     /* 预建 全局骨骼序号 -> Skin 局部序号 的映射（审查项 P0#3 / P1#23）。
        AddBone 按 skinFlags 顺序加入，因此 skinId 即累加计数。
@@ -3993,8 +4108,13 @@ fn mmd2maxApplySkin meshes boneNodes =
     select meshObj
     modPanel.setCurrentObject skinMod
 
-    /* 读权重并写入 */
-    local wlines = mmd2maxReadLines MMD2MAX_WEIGHTS
+    /* 读权重并写入。weights.tsv 只有前两列有名字：vertex_index + bone_weight_pairs，
+       而 bone_weight_pairs 往右是**变长的** `骨序号:权重` 对（每行顶点绑的骨数不同），
+       所以循环从该列的列号一路取到行尾，对内的 `:` 分隔与列无关，仍用 mmd2maxSplit。 */
+    local wtbl = mmd2maxReadTable MMD2MAX_WEIGHTS
+    local wlines = mmd2maxRows wtbl
+    local cVert = mmd2maxColPos wtbl "vertex_index"
+    local cPairs = mmd2maxColPos wtbl "bone_weight_pairs"
     mmd2maxLog ("读取权重行数：" + (wlines.count as string))
     -- 顶点数取自网格对象本身（见上方 meshVertexCount），不用 skinOps.GetNumberVertices
     local vertexCount = meshVertexCount
@@ -4017,16 +4137,16 @@ fn mmd2maxApplySkin meshes boneNodes =
     for k = 1 to skinNodeNames.count do append boneVertHits 0
     for i = 1 to wlines.count do
     (
-        local p = mmd2maxSplit wlines[i] "\t"
-        if p.count >= 2 do
+        local p = wlines[i]
+        if p.count >= cPairs do
         (
-            local vi = (p[1] as integer) + 1
+            local vi = (p[cVert] as integer) + 1
             if vi >= 1 and vi <= vertexCount do
             (
                 local ids = #()
                 local weights = #()
                 local hadPairs = false
-                for j = 2 to p.count do
+                for j = cPairs to p.count do
                 (
                     local pair = mmd2maxSplit p[j] ":"
                     if pair.count >= 2 do
@@ -4137,38 +4257,49 @@ fn mmd2maxBuildMorpher meshObj morphFile =
         mmd2maxLog "未提供 morphs 文件，跳过 Morpher 构建。"
         return false
     )
-    local lines = mmd2maxReadLines morphFile
-    if lines.count == 0 do return false
+    local lines = mmd2maxReadTable morphFile
+    local rows = mmd2maxRows lines
+    if rows.count == 0 do return false
+    /* 列名见文件表头：主记录（MORPH）用 row_kind/morph_name/item_count_or_flag，
+       第二记录（@V）用 vertex_index/offset_x~offset_z。
+       表头缺任何一个名字，下面的 mmd2maxColPos 会直接抛 —— 老的无表头文件第 1 行
+       会被当成语法行、于是这里必然报缺列，不会静默少一个表情。 */
+    local cKind = mmd2maxColPos lines "row_kind"
+    local cMorphName = mmd2maxColPos lines "morph_name"
+    local cFlag = mmd2maxColPos lines "item_count_or_flag"
+    local cVert = mmd2maxColPos lines "vertex_index"
+    local cOffX = mmd2maxColPos lines "offset_x"
+    local cOffY = mmd2maxColPos lines "offset_y"
+    local cOffZ = mmd2maxColPos lines "offset_z"
 
     /* 把 MORPH / V 行聚合成块：每块 = #(名称, #( (顶点序号1based, 偏移vec3), ... )) */
     local blocks = #()
     local cur = undefined
-    for line in lines do
+    for p in rows do
     (
-        local p = mmd2maxSplit line "\t"
-        if p.count >= 1 then
+        if p.count >= cKind then
         (
-            if p[1] == "MORPH" then
+            if p[cKind] == "MORPH" then
             (
                 if cur != undefined do append blocks cur
-                /* 第 7 列是「本 morph 的顶点偏移条数」；Python 侧对不可导出的
+                /* item_count_or_flag 列是「本 morph 的顶点偏移条数」；Python 侧对不可导出的
                    morph 写两个哨兵：SKIP（非顶点变形）和 CHANNEL_FULL
                    （顶点变形已超过 Morpher 的 100 通道上限，被截断）。
                    两种都不能建通道 —— CHANNEL_FULL 后面没有 V 行，建了会得到
                    一个和基准网格完全重合的假通道，还白占一个名额。 */
-                if p.count >= 7 and p[7] != "SKIP" and p[7] != "CHANNEL_FULL" then
-                    cur = #(p[3], #())
+                if p.count >= cFlag and p[cFlag] != "SKIP" and p[cFlag] != "CHANNEL_FULL" then
+                    cur = #(p[cMorphName], #())
                 else
                 (
                     cur = undefined
-                    if p.count >= 7 and p[7] == "CHANNEL_FULL" do
-                        mmd2maxLog ("  Morpher 通道已满，跳过表情：" + (p[3] as string))
+                    if p.count >= cFlag and p[cFlag] == "CHANNEL_FULL" do
+                        mmd2maxLog ("  Morpher 通道已满，跳过表情：" + (p[cMorphName] as string))
                 )
             )
-            else if p[1] == "V" and cur != undefined and p.count >= 5 then
+            else if p[cKind] == "V" and cur != undefined and p.count >= cOffZ then
             (
-                local vi = (p[2] as integer) + 1
-                local offv = [(p[3] as float), (p[4] as float), (p[5] as float)]
+                local vi = (p[cVert] as integer) + 1
+                local offv = [(p[cOffX] as float), (p[cOffY] as float), (p[cOffZ] as float)]
                 append cur[2] #(vi, offv)
             )
         )
@@ -4364,8 +4495,38 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
         mmd2maxLog "未提供 physics 文件，跳过物理刚体构建。"
         return false
     )
-    local lines = mmd2maxReadLines physicsFile
-    if lines.count == 0 do return false
+    local lines = mmd2maxReadTable physicsFile
+    local rows = mmd2maxRows lines
+    if rows.count == 0 do return false
+    /* 两种记录共用一张列名表：主记录（RIGID）的名字在第 1 行，@JOINT 行的名字
+       由 mmd2maxReadTable 从第 2 个字段起并进来，两边都带 rigid_/joint_ 前缀，不会撞名。
+       缺列（含「文件根本没有表头」这种老格式）= mmd2maxColPos 抛，绝不静默读错位。 */
+    local cKind = mmd2maxColPos lines "row_kind"
+    local cRIdx = mmd2maxColPos lines "rigid_index"
+    local cRName = mmd2maxColPos lines "rigid_name"
+    local cRBone = mmd2maxColPos lines "rigid_bone"
+    local cRShape = mmd2maxColPos lines "rigid_shape"
+    local cRSX = mmd2maxColPos lines "rigid_size_x"
+    local cRSY = mmd2maxColPos lines "rigid_size_y"
+    local cRSZ = mmd2maxColPos lines "rigid_size_z"
+    local cRPX = mmd2maxColPos lines "rigid_pos_x"
+    local cRPY = mmd2maxColPos lines "rigid_pos_y"
+    local cRPZ = mmd2maxColPos lines "rigid_pos_z"
+    local cRRX = mmd2maxColPos lines "rigid_rot_x"
+    local cRRY = mmd2maxColPos lines "rigid_rot_y"
+    local cRRZ = mmd2maxColPos lines "rigid_rot_z"
+    local cRMode = mmd2maxColPos lines "rigid_physics_mode"
+    local cJName = mmd2maxColPos lines "joint_name"
+    local cJJA = mmd2maxColPos lines "joint_rigid_a"
+    local cJJB = mmd2maxColPos lines "joint_rigid_b"
+    local cJPX = mmd2maxColPos lines "joint_pos_x"
+    local cJPMin = mmd2maxColPos lines "joint_pos_min_x"
+    local cJPMax = mmd2maxColPos lines "joint_pos_max_x"
+    local cJRMin = mmd2maxColPos lines "joint_rot_min_x"
+    local cJRMax = mmd2maxColPos lines "joint_rot_max_x"
+    local cJPSpring = mmd2maxColPos lines "joint_pos_spring_x"
+    local cJRSpring = mmd2maxColPos lines "joint_rot_spring_x"
+    local cJLast = mmd2maxColPos lines "joint_rot_spring_z"
     local rigids = #()
     for i = 1 to 4096 do append rigids undefined
     /* 物理对象单独分层：363 个刚体 + 700 个关节标记，混在主层里既没法看也没法选。
@@ -4379,32 +4540,31 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local rotFail = 0
     local minP = undefined
     local maxP = undefined
-    for line in lines do
+    for p in rows do
     (
-        local p = mmd2maxSplit line "\t"
-        if p.count >= 23 and p[1] == "RIGID" then
+        if p.count >= cRMode and p[cKind] == "RIGID" then
         (
             try
             (
-                /* Python 写出的列序（1-based）：
-                   1=RIGID 2=idx 3=name 4=name_en 5=boneNew 6=group 7=mask 8=shape
-                   9..11=size  12..14=pos  15..17=rot  18=mass ...
-                   早期版本从 p[4] 取 bone、p[7] 取 shape，整体错位一位：
-                   把 name_en 当成了骨骼、把 mask 当成了形状，且 pos/rot 也全错。
-                   这里按真实列序取，并兼容只有 22 列（无 physics_mode）的旧文件。 */
-                local idx = p[2] as integer
-                local name = p[3]
-                local boneNew = p[5] as integer
-                local shape = p[8] as integer
-                local sx = p[9] as float
-                local sy = p[10] as float
-                local sz = p[11] as float
-                local px = p[12] as float
-                local py = p[13] as float
-                local pz = p[14] as float
-                local rx = p[15] as float
-                local ry = p[16] as float
-                local rz = p[17] as float
+                /* Python 写出的列名（见 physics.tsv 表头行）：
+                   row_kind/rigid_index/rigid_name/rigid_name_en/rigid_bone/rigid_group/
+                   rigid_nocollide_mask/rigid_shape/rigid_size_x~z/rigid_pos_x~z/rigid_rot_x~z/...
+                   早期版本从 rigid_name_en 那格取骨骼、从 rigid_nocollide_mask 取形状，整体
+                   错位一位：把 name_en 当成了骨骼、把 mask 当成了形状，且 pos/rot 也全错。
+                   现在列号全部由表头名解析，Python 侧增删列也不会读错，缺列直接抛。 */
+                local idx = p[cRIdx] as integer
+                local name = p[cRName]
+                local boneNew = p[cRBone] as integer
+                local shape = p[cRShape] as integer
+                local sx = p[cRSX] as float
+                local sy = p[cRSY] as float
+                local sz = p[cRSZ] as float
+                local px = p[cRPX] as float
+                local py = p[cRPY] as float
+                local pz = p[cRPZ] as float
+                local rx = p[cRRX] as float
+                local ry = p[cRRY] as float
+                local rz = p[cRRZ] as float
                 local proxy = undefined
                 /* 尺寸要和位置用同一套轴变换：MMD(x,y,z) -> Max(x,-z,y)。
                    所以三个半边长也要同样置换：Max.x=sx, Max.y=sz, Max.z=sy。
@@ -4491,37 +4651,37 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
        刚体已各自挂到对应骨架骨（跟随动画），故这里不再改控制器，避免「父级 + 约束」
        冲突。真实动力学需在 MassFX 中按这些参数连接两刚体。
 
-       JOINT 列序（1-based，共 30 列）：
-       1=JOINT 2=idx 3=name 4=jointType 5=rigidA 6=rigidB
-       7..9=pos 10..12=rot 13..15=posMin 16..18=posMax
-       19..21=rotMin 22..24=rotMax 25..27=posSpring 28..30=rotSpring
+       JOINT 列名见 @JOINT 那行（joint_index / joint_name / joint_type / joint_rigid_a /
+       joint_rigid_b / joint_pos_x~z / joint_rot_x~z / joint_pos_min_x~z / joint_pos_max_x~z /
+       joint_rot_min_x~z / joint_rot_max_x~z / joint_pos_spring_x~z / joint_rot_spring_x~z，
+       末列 joint_rot_spring_z 就是行宽判据）。
        早期版本整体少取 1 位（rigidA 取到 jointType、pos 取到 rigidB…），全部错位。 */
     local jointCount = 0
     local jointFail = 0
-    for line in lines do
+    for p in rows do
     (
-        local p = mmd2maxSplit line "\t"
-        if p.count >= 30 and p[1] == "JOINT" then
+        if p.count >= cJLast and p[cKind] == "JOINT" then
         (
             try
             (
-                local name = p[3]
-                local a = p[5] as integer
-                local b = p[6] as integer
-                local jx = p[7] as float
-                local jy = p[8] as float
-                local jz = p[9] as float
+                local name = p[cJName]
+                local a = p[cJJA] as integer
+                local b = p[cJJB] as integer
+                local jx = p[cJPX] as float
+                local jy = p[cJPX + 1] as float
+                local jz = p[cJPX + 2] as float
                 local jm = Dummy name:("JT_" + name)
                 jm.pos = [jx, jy, jz]
                 jm.wirecolor = color 0 180 255
-                /* 把限位/弹簧记到 Dummy 的注释里，供后续接 MassFX 时读取 */
+                /* 把限位/弹簧记到 Dummy 的注释里，供后续接 MassFX 时读取。
+                   每组限位是连续的三列（x/y/z），所以取首列的列号再加 1、2。 */
                 local note = "joint " + name + " rigidA=" + (a as string) + " rigidB=" + (b as string)
-                note = note + " pmin=(" + p[13] + "," + p[14] + "," + p[15] + ")"
-                note = note + " pmax=(" + p[16] + "," + p[17] + "," + p[18] + ")"
-                note = note + " rmin=(" + p[19] + "," + p[20] + "," + p[21] + ")"
-                note = note + " rmax=(" + p[22] + "," + p[23] + "," + p[24] + ")"
-                note = note + " pspring=(" + p[25] + "," + p[26] + "," + p[27] + ")"
-                note = note + " rspring=(" + p[28] + "," + p[29] + "," + p[30] + ")"
+                note = note + " pmin=(" + p[cJPMin] + "," + p[cJPMin + 1] + "," + p[cJPMin + 2] + ")"
+                note = note + " pmax=(" + p[cJPMax] + "," + p[cJPMax + 1] + "," + p[cJPMax + 2] + ")"
+                note = note + " rmin=(" + p[cJRMin] + "," + p[cJRMin + 1] + "," + p[cJRMin + 2] + ")"
+                note = note + " rmax=(" + p[cJRMax] + "," + p[cJRMax + 1] + "," + p[cJRMax + 2] + ")"
+                note = note + " pspring=(" + p[cJPSpring] + "," + p[cJPSpring + 1] + "," + p[cJPSpring + 2] + ")"
+                note = note + " rspring=(" + p[cJRSpring] + "," + p[cJRSpring + 1] + "," + p[cJRSpring + 2] + ")"
                 setUserProp jm "mmd2max_joint" note
                 try ( if layerJT != undefined do layerJT.addNode jm ) catch ()
                 jointCount += 1

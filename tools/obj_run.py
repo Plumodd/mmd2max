@@ -395,7 +395,11 @@ def main() -> int:
     log(f"skin={skin} physics={physics} shot={shot} manual={manual} gen_only={gen_only}")
 
     weights = base / f"{stem}_weights.tsv"
-    vertex_count = sum(1 for _ in weights.open(encoding="utf-8"))
+    # 文件第 1 行是表头（vertex_index / bone_weight_pairs），不是顶点，注释行也不算：
+    # MMD2MAX_VERTS 必须等于权重**数据**行数，Max 端拿它核对网格顶点数（差 1 就整轮中止）。
+    with weights.open(encoding="utf-8") as stream:
+        vertex_count = sum(1 for line in stream
+                           if line.strip() and not line.startswith("#")) - 1
     log(f"权重文件 {weights} 顶点数 {vertex_count}")
 
     script_text = build_script(base, stem, vertex_count,

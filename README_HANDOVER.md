@@ -112,21 +112,29 @@ mmd2max_v3_src_2026-11-01/
 
 ## 4. 数据契约（Python 写 → Max 读）
 
-全部落在 `test_runs/<模型名>/`。`limbs/widths/biped_map` 三个文件带 `#` 表头行，由**它们各自的读取函数**（`mmd2maxReadLimbs` / `mmd2maxReadWidths` / `mmd2maxReadBipedMap`）跳过注释；通用 `mmd2maxReadLines` **只跳空行、不跳 `#`** —— 新加 TSV 时别指望它帮你过滤表头。
+全部落在 `test_runs/<模型名>/`。**线格式 v2（M1）**：每份 TSV 的第 1 行是 tab 分隔的 ASCII 列名，
+Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl "列名"`（缺列**直接抛**，
+不会再静默读到隔壁列）；`#` 开头的行是给人看的注释，读取时跳过。
+同一文件里若有**另一种记录**（morphs 的顶点偏移、physics 的关节），它的列名单独写在
+`@<记录名>\t列名…` 这一行里，名字带 `rigid_` / `joint_` 前缀 —— 因为同一个列号在两种记录里
+含义不同（physics 第 4 列 RIGID 是 `rigid_name_en`、JOINT 是 `joint_type`），一行表头装不下。
 `obj_run.py` 会把它们复制成 ASCII 定名（`model.obj`/`bones.tsv`/…）再喂给 Max —— 中文路径/文件在 Max 侧按 GBK 解析会失败。
 拆列只用 `mmd2maxSplit`（按 `\t` 切、**保留空字段**）；`filterString` 会丢掉空字段导致整行列号左移 —— 物理表有刻意的空列（`name_en` 可能为空），用错就全歪。
+回归判据：`python tools/check_baseline.py` 会按基线里的 scale 重新导出一次，要求 6 份基线 TSV 的数据行**逐字节不变**（只允许多出一行表头）。
 
-| 文件 | 关键列 |
+| 文件 | 列名（= 文件第 1 行） |
 | --- | --- |
 | `<名>.obj` / `.mtl` / `textures/` | 数值为 **`(x, y, −z)` Y-up**；面绕序已翻一次；`vt u (1−v)` |
-| `<名>_bones.tsv` | `idx name parent role biped_target head(x,y,z) tail(x,y,z) skin_flag max_parent`（Z-up，13 列；`role` ∈ skeleton/control/morph；`max_parent` −1 表示按第 3 列挂） |
-| `<名>_biped_map.tsv` | `新骨序号 Biped节点名 PMX骨名` —— **biped 唯一路径，缺条目 = Max 侧直接抛错** |
-| `<名>_weights.tsv` | 每行一个顶点的骨序号+权重（序号是**全局骨序号**，Max 侧必须经 `globalToSkin` 映射） |
-| `<名>_limbs.tsv` | `parent_target child_target desired_len mmd_parent mmd_child [child_x child_y child_z mode]`（脚段多给的列，是 Max 端闭环缩放的唯一事实来源） |
+| `<名>_bones.tsv` | `idx bone_name parent role biped_target head_x head_y head_z tail_x tail_y tail_z skin_flag max_parent`（Z-up，13 列；`role` ∈ skeleton/control/morph；`max_parent` −1 表示按 `parent` 挂） |
+| `<名>_biped_map.tsv` | `bone_index biped_node pmx_bone_name` —— **biped 唯一路径，缺条目 = Max 侧直接抛错** |
+| `<名>_weights.tsv` | `vertex_index bone_weight_pairs`，第 2 列是变长的 `骨序号:权重` 对（序号是**全局骨序号**，Max 侧必须经 `globalToSkin` 映射） |
+| `<名>_limbs.tsv` | `parent_target child_target desired_len mmd_parent mmd_child child_x child_y child_z mode` + 仅 `mode=foot` 行才有的 9 列 `foot_len toe_len tip_x tip_y tip_z toe_w toe_h foot_w foot_h`（脚段多给的列，是 Max 端闭环缩放的唯一事实来源） |
 | `<名>_widths.tsv` | `biped_target width` —— Biped 默认手指比网格粗得多，按此收缩横截面 |
-| `<名>_morphs.tsv` | `MORPH idx 名 译名 panel type 条数|SKIP|CHANNEL_FULL`，其后跟 `V 顶点序号 dx dy dz` |
-| `<名>_physics.tsv` | `RIGID …` / `JOINT …`，尺寸与位置同 `scale`；骨序号已映射到保留骨 |
-| `<名>_meta.tsv` | `scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count` —— `obj_run.py` 据此注入 `MMD2MAX_SPINE_LINKS/FINGERS/DQ` |
+| `<名>_morphs.tsv` | `row_kind morph_index morph_name morph_name_en morph_panel morph_type item_count_or_flag`，`@V vertex_index offset_x offset_y offset_z` 为其顶点明细 |
+| `<名>_physics.tsv` | `row_kind rigid_index rigid_name rigid_name_en rigid_bone rigid_group rigid_nocollide_mask rigid_shape rigid_size_* rigid_pos_* rigid_rot_* rigid_mass rigid_move_damping rigid_rotation_damping rigid_repulsion rigid_friction rigid_physics_mode`，`@JOINT joint_*` 为关节明细；尺寸与位置同 `scale`；骨序号已映射到保留骨 |
+| `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_pitch` —— `obj_run.py` 据此注入 `MMD2MAX_SPINE_LINKS/FINGERS/DQ` |
+| `<名>_materials.tsv` | `index name texture alpha spec_* sphere_* draw_flags` —— **Max 侧目前没有任何读取点**（#56 待删） |
+
 
 ---
 

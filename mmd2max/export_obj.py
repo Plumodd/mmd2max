@@ -506,9 +506,15 @@ def _morph_rows(model, scale: float, vert_remap=None):
     其余标 CHANNEL_FULL，让 Max 端与用户都知道被截断了。
     vert_remap：_drop_unreferenced 的旧->新序号（-1=该顶点不进网格，偏移一并丢弃，
     反正它不被任何面引用，画不出来）。
-    返回 (正文行, 实际通道数)；写文件由 export() 负责。
+    返回 (含表头的正文行, 实际通道数)；写文件由 export() 负责。
+
+    一个文件两种记录：MORPH 行是本行的列名（表头行），V 行的列名写在紧随其后的
+    `@V` 行里（见 _kind_header 的说明）—— 两者列号含义不同，合成一行会互相骗。
     """
-    lines: list = []
+    cols = ("row_kind", "morph_index", "morph_name", "morph_name_en",
+            "morph_panel", "morph_type", "item_count_or_flag")
+    v_cols = ("vertex_index", "offset_x", "offset_y", "offset_z")
+    lines: list = [_header_line(cols), _kind_header("V", v_cols)]
     count = 0
     for mi, m in enumerate(model.morphs):
         if m.morph_type != 1:
@@ -710,7 +716,7 @@ def _width_rows(scale: float, old_to_new: dict, heads: list, tails: list,
     列：biped_target \t width
     返回 (含表头的正文行, 数据行数)。
     """
-    lines = ["# biped_target\twidth"]
+    lines = [_header_line(("biped_target", "width"))]
     if not biped_mapping or not positions:
         return lines, 0
 
@@ -1099,10 +1105,13 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
     # 一根长骨、Toe0 变成鞋尖外面一丁点的小骨（用户截图：脚掌中间没有关节）。
     # 现在按普通段处理：Foot 长度 = 踝→つま先，Toe0 精确落在脚掌关节上，
     # 之后由 Biped 自己的趾骨从该点向前延伸 —— 这才是正常的脚掌两段结构。
-    lines = ["# parent_target\tchild_target\tdesired_len\tmmd_parent\tmmd_child"
-             "\tchild_x\tchild_y\tchild_z\tmode"
-             "\t# mode=foot 再补 9 列：踝→鞋尖\t脚掌→鞋尖(沿趾)\t鞋尖x\t鞋尖y\t鞋尖z"
-             "\t脚尖处宽\t脚尖处高\t踝处足背宽\t踝处足背高"]
+    cols = ("parent_target", "child_target", "desired_len",
+            "mmd_parent", "mmd_child", "child_x", "child_y", "child_z", "mode",
+            "foot_len", "toe_len", "tip_x", "tip_y", "tip_z",
+            "toe_w", "toe_h", "foot_w", "foot_h")
+    lines = [_header_line(cols),
+             "# 第 10~18 列只有 mode=foot 的行才有：踝→鞋尖 / 脚掌→鞋尖(沿趾) / "
+             "鞋尖x / 鞋尖y / 鞋尖z / 脚尖处宽 / 脚尖处高 / 踝处足背宽 / 踝处足背高"]
     if not biped_mapping:
         return lines, 0
 
@@ -1274,8 +1283,29 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
         1 = 方块（size = 三个方向的**半边长**）
         2 = 胶囊（size = 半径、高度）
     返回正文行。
+
+    一个文件两种记录：RIGID 行的列名是表头行，JOINT 行的列名写在紧随其后的 `@JOINT`
+    行里（见 _kind_header）—— 同一列号在两种记录里含义不同（第 4 列 RIGID 是 name_en、
+    JOINT 是 joint_type），硬合成一行就会有一边读错列。
     """
-    lines: list = []
+    cols = ("row_kind", "rigid_index", "rigid_name", "rigid_name_en",
+            "rigid_bone", "rigid_group", "rigid_nocollide_mask", "rigid_shape",
+            "rigid_size_x", "rigid_size_y", "rigid_size_z",
+            "rigid_pos_x", "rigid_pos_y", "rigid_pos_z",
+            "rigid_rot_x", "rigid_rot_y", "rigid_rot_z",
+            "rigid_mass", "rigid_move_damping", "rigid_rotation_damping",
+            "rigid_repulsion", "rigid_friction", "rigid_physics_mode")
+    joint_cols = ("joint_index", "joint_name", "joint_type",
+                  "joint_rigid_a", "joint_rigid_b",
+                  "joint_pos_x", "joint_pos_y", "joint_pos_z",
+                  "joint_rot_x", "joint_rot_y", "joint_rot_z",
+                  "joint_pos_min_x", "joint_pos_min_y", "joint_pos_min_z",
+                  "joint_pos_max_x", "joint_pos_max_y", "joint_pos_max_z",
+                  "joint_rot_min_x", "joint_rot_min_y", "joint_rot_min_z",
+                  "joint_rot_max_x", "joint_rot_max_y", "joint_rot_max_z",
+                  "joint_pos_spring_x", "joint_pos_spring_y", "joint_pos_spring_z",
+                  "joint_rot_spring_x", "joint_rot_spring_y", "joint_rot_spring_z")
+    lines: list = [_header_line(cols), _kind_header("JOINT", joint_cols)]
     for ri, rb in enumerate(model.rigid_bodies):
         bone_new = _to_new_skeleton(model, old_to_new, kept_set, rb.bone_index)
         px, py, pz = convert_vec(rb.position, scale)
@@ -1355,15 +1385,41 @@ def _write_lines(path: Path, lines: list) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _header_line(cols) -> str:
+    """表头行 = tab 分隔的列名，必须是文件的第 1 行、且不以 # 开头（Max 端按它取列）。
+
+    为什么表头写在正文旁边而不是 export() 里另写一份：列名一旦和取值分处两地，
+    加列/换序就是两边各改各的 —— 旧协议里 Max 端只能写 `p[12]`、`item[4]` 这种魔数
+    下标，顺序一变就**静默读错列**（physics 早期版本整体错一位，把 name_en 当骨骼、
+    把 mask 当形状，就是这么来的）。表头落地后 Max 端按列名取数、缺列直接抛错。
+    """
+    return "\t".join(cols)
+
+
+def _kind_header(kind: str, cols) -> str:
+    """另一种记录的列名：`@<记录类型>\t列名...`，紧跟在表头行后面。
+
+    为什么需要第二种表头：physics.tsv（RIGID/JOINT）和 morphs.tsv（MORPH/V）一个文件
+    里装了两种记录，同一列号在两种记录里含义不同（physics 第 4 列在 RIGID 是 name_en、
+    在 JOINT 是 joint_type），一行表头装不下；而把行改成对齐的宽表会动到数值本身。
+    `@` 行给出该记录自己的列名，Max 端 mmd2maxReadTable 把它们并进同一张列名表
+    （名字各带 rigid_/joint_ 前缀，不会撞车），并且不当成数据行。
+    """
+    return "@" + kind + "\t" + "\t".join(cols)
+
+
 def _bone_rows(bone_names, kept, parents, heads, tails, skin_flag, roles,
                biped_mapping, max_parent_col):
-    """生成 bones.tsv 正文。
+    """生成 bones.tsv（表头 + 正文）。
 
     列：idx 名称 父idx role biped_target hx hy hz tx ty tz skin_flag max_parent
     role / biped_target / max_parent 均为追加列，不破坏旧版 MaxScript 的前 12 列解析。
     max_parent：附属骨链根在 Max 里改挂到哪个 Biped 节点（-1 = 沿用第 3 列的父级）。
     """
-    lines = []
+    cols = ("idx", "bone_name", "parent", "role", "biped_target",
+            "head_x", "head_y", "head_z", "tail_x", "tail_y", "tail_z",
+            "skin_flag", "max_parent")
+    lines = [_header_line(cols)]
     for index, bone_name in enumerate(bone_names):
         old_index = kept[index]
         hx, hy, hz = heads[index]
@@ -1382,7 +1438,8 @@ def _bone_rows(bone_names, kept, parents, heads, tails, skin_flag, roles,
 def _biped_map_rows(kept, bone_names, biped_mapping):
     # 以「骨序号」为键而不是骨名：PMX 骨名是日文，MaxScript 侧若按本地代码页
     # (GBK) 解析会乱码，导致 getNodeByName 找不到节点；用序号可完全规避。
-    lines = ["# 新骨序号\tBiped节点名\tPMX骨名"]
+    cols = ("bone_index", "biped_node", "pmx_bone_name")
+    lines = [_header_line(cols)]
     for new_index, old_index in enumerate(kept):
         target = biped_mapping.get(old_index)
         if target:
@@ -1620,6 +1677,7 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     spine_links = semantic.spine_link_count(biped_mapping)
     fingers, finger_links = semantic.finger_layout(biped_mapping)
     meta_lines = [
+        _header_line(("key", "value")),
         f"scale\t{scale!r}",
         f"has_sdef\t{1 if 'SDEF' in model.deform_types else 0}",
         f"has_qdef\t{1 if 'QDEF' in model.deform_types else 0}",
@@ -1819,6 +1877,9 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
     # ---- 权重 ----
     weights_path = outdir / f"{source.stem}_weights.tsv"
     with weights_path.open("w", encoding="utf-8") as stream:
+        # 表头贴着正文写：第 2 列往后的每一列是一个 `骨序号:权重` 对，列数随顶点变化，
+        # 所以只有前两列有名字（Max 端从第 2 列开始成对取，见 mmd2maxApplySkin）。
+        stream.write(_header_line(("vertex_index", "bone_weight_pairs")) + "\n")
         empty = 0
         for index, line in enumerate(w_lines):
             if not line:

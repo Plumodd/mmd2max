@@ -1,0 +1,32 @@
+===== 3dsmaxbatch probe record (2026-11-03, task #58) =====
+
+结论：本环境里 3dsmaxbatch.exe 不可用 —— 连一句 createFile 的平凡脚本都不执行。
+所以 v4 的驱动层继续用 3dsmax.exe -U MAXScript + UIA 点启动弹窗（obj_run.py 现方案），
+「无头模式能去掉弹窗白名单」这条路暂时不成立。
+
+跑法与实测：
+
+  1) 3dsmaxbatch.exe batch_probe.ms   (timeout 300)  -> 无 batch_probe.txt，stdout 只有 4 行
+  2) 3dsmaxbatch.exe batch_probe.ms   (timeout 240)  -> EXIT=124（超时被杀），同样只有 4 行
+  3) 3dsmaxbatch.exe trivial.ms       (timeout 150)  -> EXIT=124，trivial.txt 不存在
+
+trivial.ms 全文只有三行：createFile / format / close。它都没跑，说明卡在脚本之前。
+
+stdout（UTF-16LE，注意 3dsmaxbatch 的日志是 UTF-16，用 `type` 或 GBK 解会看到乱码）：
+
+  2026/11/3 0:49:55;  3ds Max Install Location: C:\Program Files\Autodesk\3ds Max 2022\
+  2026/11/3 0:49:55;  3ds Max Executable: 3dsmax.exe
+  2026/11/3 0:49:55;  Secure Mode: 'OFF'
+  2026/11/3 0:49:55;  Script command: " -mxs "(filein @\"...batch_probe.ms\")""
+
+对照：同一台机器、同一份 Max，`3dsmax.exe -U MAXScript "<ascii path>"` 是能跑完的
+（skin_readback.txt 就是它写的，跑完自己 quitMax）。差别在 batch 走的是 `-mxs`，
+且它 spawn 的子进程在超时窗口内既没有窗口、也没有写出任何文件 —— tasklist 里
+3dsmax.exe / 3dsmaxbatch.exe 都查不到。
+
+下次要再试的话，按这个顺序排查（这次没做的）：
+  - 3dsmaxbatch 是否需要 `-uox`（不加载插件）/ `-i`（不弹初始化框）才不卡在启动；
+  - 是否有许可 / 「Startup Failure Detection」这类框在无 UI 的会话里把它挡住了
+    （同一台机器上 `-U MAXScript` 首启时也出现过 Security Messages 与
+     MAXScript Auto-load Script Error Exception 两个框，说明启动框确实会冒出来）；
+  - 它的子进程是不是需要 `--nologo` / 环境变量 HOME 才能落地。

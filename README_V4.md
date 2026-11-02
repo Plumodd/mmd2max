@@ -26,7 +26,7 @@ v3 的完整缺陷史在 `README_HANDOVER.md`（23 条编号记录，一条都�
 
 所以 v4 不是"再修一根骨头"，是把**判据的独立性**变成结构约束。
 
-## 2. 四条规则（每条都要有工具能自动判，写在注释里不算）
+## 2. 规则 I~IV（每条都要有工具能自动判，写在注释里不算；规则 V 在 §6）
 
 **规则 I — 判据独立。** 任何检查只能拿「从 Max 回读的值」去比「从 spec 文件读进来的
 值」（spec 由 Python 从 PMX 生成）。检查函数**不许**调用写路径用过的那个求值函数。
@@ -100,11 +100,25 @@ M5 之前不动它（它还能挡住手滑改日志格式），M5 一次性换�
   SDef C·R·W」两组数据，是源文件给的官方骨向。v3 的 `meta.tsv` 里 `has_sdef`/`has_qdef`
   恒为 0（要么没解析要么写死），等于把现成的**独立真值**丢了，只能靠网格射线反推方向 ——
   而反推的函数又被验收层复用，这就是 #26/#40 反复的根。见任务 #57。
-- **`3dsmaxbatch.exe` 是官方无头模式**（`-mxsString/-mxsValue` 传参，MAXScript 里
-  `maxOps.mxsCmdLineArgs` 读；有明确退出码和 `-log`）。若它能建 Biped 并进 Figure 模式，
-  驱动层就不必再靠 UIA 猜窗口标题点启动弹窗（#14/#22 两类缺陷的来源）。见任务 #58，
-  跑不通就保留现方案并记死因。
+- **`3dsmaxbatch.exe` 官方无头模式：本环境实测不可用**（见 `probes/batch_probe_record.txt`）。
+  连三行的 `createFile` 平凡脚本都不执行，三次跑分别卡到 300/240/150 秒超时，子进程连窗口
+  都不出现；而同一台机器 `3dsmax.exe -U MAXScript` 是能跑完的。⇒ 驱动层继续用
+  `obj_run.py` + UIA 点启动弹窗，「无头模式能去掉弹窗白名单」这条路暂时不成立（任务 #58
+  记死因与下次排查顺序）。
 
-另外记一条别人的坑：社区报「Max 里 Bone 的缩放会静默失效，删 `%APPDATA%\Autodesk\3dsMax`
+另外记两条别人的坑：社区报「Max 里 Bone 的缩放会静默失效，删 `%APPDATA%\Autodesk\3dsMax`
 配置后正常」—— 这是我们骨盒尺寸偶发不一致的一个候选解释，**先不删用户配置**，
 只在做实跑对照实验时验证。
+
+## 6. 规则 V（探针期间新加）：不许有空 catch
+
+`grep -c "catch ()" scripts/max_import_obj.ms` = **64**。空 catch 的语义是「这件事失败了
+我也不想知道」，而 v3 恰恰有一条这样的死调用藏在里面：
+`max_import_obj.ms:3982` 的 `try ( skinOps.forceUpdate skinMod ) catch ()` —— 探针实测
+Max 2022 的 skinOps **143 个成员里没有 forceUpdate**，这句从来没生效过，我们却一直在
+「force 更新之后再读 GetNumberBones」。
+
+v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 一行带 `getCurrentException()`
+的日志）。`tools/check_ms.py` 加一条规则：`catch ()` 与 `catch ( )` 直接报错。
+这条和规则 I~IV 一样，是工具能自动判的，不靠注释。
+
