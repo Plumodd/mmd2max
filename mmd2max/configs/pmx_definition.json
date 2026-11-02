@@ -1,0 +1,873 @@
+{
+  "metadata": {
+    "name": "MMD_PMX_Definition",
+    "version": "1.0",
+    "note": "PMX 标准 / 次标准 / 扩展骨骼定义。cat: required|optional|extended"
+  },
+  "categories": {
+    "required": "缺失时必须提示",
+    "optional": "缺失时允许继续",
+    "extended": "存在但不参与标准映射（扭转骨等）"
+  },
+  "bones": {
+    "ROOT": {
+      "ja": "全ての親",
+      "zh": "全体父骨",
+      "cls": "root",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "全ての親"
+      ],
+      "biped": "Bip001",
+      "role": "skeleton"
+    },
+    "CENTER": {
+      "ja": "センター",
+      "zh": "中心骨",
+      "cls": "core_control",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "センター"
+      ],
+      "biped": "Bip001",
+      "role": "skeleton"
+    },
+    "GROOVE": {
+      "ja": "グルーブ",
+      "zh": "位移辅助骨",
+      "cls": "core_control",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "グルーブ"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "WAIST": {
+      "ja": "腰",
+      "zh": "腰部辅助骨",
+      "cls": "core_control",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "腰"
+      ],
+      "biped": "Bip001 Pelvis",
+      "role": "skeleton"
+    },
+    "LOWER_BODY": {
+      "ja": "下半身",
+      "zh": "下半身",
+      "cls": "body",
+      "cat": "required",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "下半身"
+      ],
+      "biped": "Bip001 Spine",
+      "role": "skeleton"
+    },
+    "SPINE_1": {
+      "ja": "上半身",
+      "zh": "上半身",
+      "cls": "spine",
+      "cat": "required",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "上半身"
+      ],
+      "biped": "Bip001 Spine1",
+      "role": "skeleton"
+    },
+    "SPINE_2": {
+      "ja": "上半身2",
+      "zh": "上半身2",
+      "cls": "spine",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "上半身2"
+      ],
+      "biped": "Bip001 Spine2",
+      "role": "skeleton"
+    },
+    "SPINE_3": {
+      "ja": "上半身3",
+      "zh": "上半身3",
+      "cls": "spine",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "上半身3"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "NECK": {
+      "ja": "首",
+      "zh": "颈部",
+      "cls": "head",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "首"
+      ],
+      "biped": "Bip001 Neck",
+      "role": "skeleton"
+    },
+    "HEAD": {
+      "ja": "頭",
+      "zh": "头部",
+      "cls": "head",
+      "cat": "required",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "頭"
+      ],
+      "biped": "Bip001 Head",
+      "role": "skeleton"
+    },
+    "EYES": {
+      "ja": "両目",
+      "zh": "双眼",
+      "cls": "head",
+      "cat": "optional",
+      "sided": false,
+      "side": null,
+      "aliases": [
+        "両目"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "SHOULDER_L": {
+      "ja": "左肩",
+      "zh": "肩",
+      "cls": "arm",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左肩"
+      ],
+      "biped": "Bip001 L Clavicle",
+      "role": "skeleton"
+    },
+    "ARM_UPPER_L": {
+      "ja": "左腕",
+      "zh": "上臂",
+      "cls": "arm",
+      "cat": "required",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左腕"
+      ],
+      "biped": "Bip001 L UpperArm",
+      "role": "skeleton"
+    },
+    "ARM_TWIST_L": {
+      "ja": "左腕捩",
+      "zh": "上臂扭转",
+      "cls": "twist",
+      "cat": "extended",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左腕捩"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "ARM_LOWER_L": {
+      "ja": "左ひじ",
+      "zh": "前臂",
+      "cls": "arm",
+      "cat": "required",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左ひじ"
+      ],
+      "biped": "Bip001 L Forearm",
+      "role": "skeleton"
+    },
+    "HAND_TWIST_L": {
+      "ja": "左手捩",
+      "zh": "前臂扭转",
+      "cls": "twist",
+      "cat": "extended",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左手捩"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "HAND_L": {
+      "ja": "左手首",
+      "zh": "手腕",
+      "cls": "arm",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左手首"
+      ],
+      "biped": "Bip001 L Hand",
+      "role": "skeleton"
+    },
+    "LEG_UPPER_L": {
+      "ja": "左足",
+      "zh": "大腿",
+      "cls": "leg",
+      "cat": "required",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左足"
+      ],
+      "biped": "Bip001 L Thigh",
+      "role": "skeleton"
+    },
+    "LEG_LOWER_L": {
+      "ja": "左ひざ",
+      "zh": "小腿",
+      "cls": "leg",
+      "cat": "required",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左ひざ"
+      ],
+      "biped": "Bip001 L Calf",
+      "role": "skeleton"
+    },
+    "FOOT_L": {
+      "ja": "左足首",
+      "zh": "脚踝",
+      "cls": "leg",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左足首"
+      ],
+      "biped": "Bip001 L Foot",
+      "role": "skeleton"
+    },
+    "TOE_L": {
+      "ja": "左つま先",
+      "zh": "脚尖",
+      "cls": "leg",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "aliases": [
+        "左つま先"
+      ],
+      "biped": "Bip001 L Toe0",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_0_L": {
+      "ja": "左親指０",
+      "zh": "左拇指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "THUMB",
+      "segment": 0,
+      "aliases": [
+        "左親指０"
+      ],
+      "biped": "Bip001 L Finger0",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_1_L": {
+      "ja": "左親指１",
+      "zh": "左拇指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "THUMB",
+      "segment": 1,
+      "aliases": [
+        "左親指１"
+      ],
+      "biped": "Bip001 L Finger01",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_2_L": {
+      "ja": "左親指２",
+      "zh": "左拇指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "THUMB",
+      "segment": 2,
+      "aliases": [
+        "左親指２"
+      ],
+      "biped": "Bip001 L Finger02",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_0_L": {
+      "ja": "左人指１",
+      "zh": "左食指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "INDEX",
+      "segment": 0,
+      "aliases": [
+        "左人指１",
+        "左人差指１"
+      ],
+      "biped": "Bip001 L Finger1",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_1_L": {
+      "ja": "左人指２",
+      "zh": "左食指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "INDEX",
+      "segment": 1,
+      "aliases": [
+        "左人指２",
+        "左人差指２"
+      ],
+      "biped": "Bip001 L Finger11",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_2_L": {
+      "ja": "左人指３",
+      "zh": "左食指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "INDEX",
+      "segment": 2,
+      "aliases": [
+        "左人指３",
+        "左人差指３"
+      ],
+      "biped": "Bip001 L Finger12",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_0_L": {
+      "ja": "左中指１",
+      "zh": "左中指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "MIDDLE",
+      "segment": 0,
+      "aliases": [
+        "左中指１"
+      ],
+      "biped": "Bip001 L Finger2",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_1_L": {
+      "ja": "左中指２",
+      "zh": "左中指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "MIDDLE",
+      "segment": 1,
+      "aliases": [
+        "左中指２"
+      ],
+      "biped": "Bip001 L Finger21",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_2_L": {
+      "ja": "左中指３",
+      "zh": "左中指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "MIDDLE",
+      "segment": 2,
+      "aliases": [
+        "左中指３"
+      ],
+      "biped": "Bip001 L Finger22",
+      "role": "skeleton"
+    },
+    "FINGER_RING_0_L": {
+      "ja": "左薬指１",
+      "zh": "左无名指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "RING",
+      "segment": 0,
+      "aliases": [
+        "左薬指１"
+      ],
+      "biped": "Bip001 L Finger3",
+      "role": "skeleton"
+    },
+    "FINGER_RING_1_L": {
+      "ja": "左薬指２",
+      "zh": "左无名指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "RING",
+      "segment": 1,
+      "aliases": [
+        "左薬指２"
+      ],
+      "biped": "Bip001 L Finger31",
+      "role": "skeleton"
+    },
+    "FINGER_RING_2_L": {
+      "ja": "左薬指３",
+      "zh": "左无名指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "RING",
+      "segment": 2,
+      "aliases": [
+        "左薬指３"
+      ],
+      "biped": "Bip001 L Finger32",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_0_L": {
+      "ja": "左小指１",
+      "zh": "左小指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "PINKY",
+      "segment": 0,
+      "aliases": [
+        "左小指１"
+      ],
+      "biped": "Bip001 L Finger4",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_1_L": {
+      "ja": "左小指２",
+      "zh": "左小指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "PINKY",
+      "segment": 1,
+      "aliases": [
+        "左小指２"
+      ],
+      "biped": "Bip001 L Finger41",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_2_L": {
+      "ja": "左小指３",
+      "zh": "左小指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "L",
+      "finger": "PINKY",
+      "segment": 2,
+      "aliases": [
+        "左小指３"
+      ],
+      "biped": "Bip001 L Finger42",
+      "role": "skeleton"
+    },
+    "SHOULDER_R": {
+      "ja": "右肩",
+      "zh": "肩",
+      "cls": "arm",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右肩"
+      ],
+      "biped": "Bip001 R Clavicle",
+      "role": "skeleton"
+    },
+    "ARM_UPPER_R": {
+      "ja": "右腕",
+      "zh": "上臂",
+      "cls": "arm",
+      "cat": "required",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右腕"
+      ],
+      "biped": "Bip001 R UpperArm",
+      "role": "skeleton"
+    },
+    "ARM_TWIST_R": {
+      "ja": "右腕捩",
+      "zh": "上臂扭转",
+      "cls": "twist",
+      "cat": "extended",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右腕捩"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "ARM_LOWER_R": {
+      "ja": "右ひじ",
+      "zh": "前臂",
+      "cls": "arm",
+      "cat": "required",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右ひじ"
+      ],
+      "biped": "Bip001 R Forearm",
+      "role": "skeleton"
+    },
+    "HAND_TWIST_R": {
+      "ja": "右手捩",
+      "zh": "前臂扭转",
+      "cls": "twist",
+      "cat": "extended",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右手捩"
+      ],
+      "biped": "",
+      "role": "skeleton"
+    },
+    "HAND_R": {
+      "ja": "右手首",
+      "zh": "手腕",
+      "cls": "arm",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右手首"
+      ],
+      "biped": "Bip001 R Hand",
+      "role": "skeleton"
+    },
+    "LEG_UPPER_R": {
+      "ja": "右足",
+      "zh": "大腿",
+      "cls": "leg",
+      "cat": "required",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右足"
+      ],
+      "biped": "Bip001 R Thigh",
+      "role": "skeleton"
+    },
+    "LEG_LOWER_R": {
+      "ja": "右ひざ",
+      "zh": "小腿",
+      "cls": "leg",
+      "cat": "required",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右ひざ"
+      ],
+      "biped": "Bip001 R Calf",
+      "role": "skeleton"
+    },
+    "FOOT_R": {
+      "ja": "右足首",
+      "zh": "脚踝",
+      "cls": "leg",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右足首"
+      ],
+      "biped": "Bip001 R Foot",
+      "role": "skeleton"
+    },
+    "TOE_R": {
+      "ja": "右つま先",
+      "zh": "脚尖",
+      "cls": "leg",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "aliases": [
+        "右つま先"
+      ],
+      "biped": "Bip001 R Toe0",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_0_R": {
+      "ja": "右親指０",
+      "zh": "右拇指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "THUMB",
+      "segment": 0,
+      "aliases": [
+        "右親指０"
+      ],
+      "biped": "Bip001 R Finger0",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_1_R": {
+      "ja": "右親指１",
+      "zh": "右拇指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "THUMB",
+      "segment": 1,
+      "aliases": [
+        "右親指１"
+      ],
+      "biped": "Bip001 R Finger01",
+      "role": "skeleton"
+    },
+    "FINGER_THUMB_2_R": {
+      "ja": "右親指２",
+      "zh": "右拇指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "THUMB",
+      "segment": 2,
+      "aliases": [
+        "右親指２"
+      ],
+      "biped": "Bip001 R Finger02",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_0_R": {
+      "ja": "右人指１",
+      "zh": "右食指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "INDEX",
+      "segment": 0,
+      "aliases": [
+        "右人指１",
+        "右人差指１"
+      ],
+      "biped": "Bip001 R Finger1",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_1_R": {
+      "ja": "右人指２",
+      "zh": "右食指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "INDEX",
+      "segment": 1,
+      "aliases": [
+        "右人指２",
+        "右人差指２"
+      ],
+      "biped": "Bip001 R Finger11",
+      "role": "skeleton"
+    },
+    "FINGER_INDEX_2_R": {
+      "ja": "右人指３",
+      "zh": "右食指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "INDEX",
+      "segment": 2,
+      "aliases": [
+        "右人指３",
+        "右人差指３"
+      ],
+      "biped": "Bip001 R Finger12",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_0_R": {
+      "ja": "右中指１",
+      "zh": "右中指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "MIDDLE",
+      "segment": 0,
+      "aliases": [
+        "右中指１"
+      ],
+      "biped": "Bip001 R Finger2",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_1_R": {
+      "ja": "右中指２",
+      "zh": "右中指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "MIDDLE",
+      "segment": 1,
+      "aliases": [
+        "右中指２"
+      ],
+      "biped": "Bip001 R Finger21",
+      "role": "skeleton"
+    },
+    "FINGER_MIDDLE_2_R": {
+      "ja": "右中指３",
+      "zh": "右中指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "MIDDLE",
+      "segment": 2,
+      "aliases": [
+        "右中指３"
+      ],
+      "biped": "Bip001 R Finger22",
+      "role": "skeleton"
+    },
+    "FINGER_RING_0_R": {
+      "ja": "右薬指１",
+      "zh": "右无名指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "RING",
+      "segment": 0,
+      "aliases": [
+        "右薬指１"
+      ],
+      "biped": "Bip001 R Finger3",
+      "role": "skeleton"
+    },
+    "FINGER_RING_1_R": {
+      "ja": "右薬指２",
+      "zh": "右无名指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "RING",
+      "segment": 1,
+      "aliases": [
+        "右薬指２"
+      ],
+      "biped": "Bip001 R Finger31",
+      "role": "skeleton"
+    },
+    "FINGER_RING_2_R": {
+      "ja": "右薬指３",
+      "zh": "右无名指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "RING",
+      "segment": 2,
+      "aliases": [
+        "右薬指３"
+      ],
+      "biped": "Bip001 R Finger32",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_0_R": {
+      "ja": "右小指１",
+      "zh": "右小指第1节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "PINKY",
+      "segment": 0,
+      "aliases": [
+        "右小指１"
+      ],
+      "biped": "Bip001 R Finger4",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_1_R": {
+      "ja": "右小指２",
+      "zh": "右小指第2节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "PINKY",
+      "segment": 1,
+      "aliases": [
+        "右小指２"
+      ],
+      "biped": "Bip001 R Finger41",
+      "role": "skeleton"
+    },
+    "FINGER_PINKY_2_R": {
+      "ja": "右小指３",
+      "zh": "右小指第3节",
+      "cls": "finger",
+      "cat": "optional",
+      "sided": true,
+      "side": "R",
+      "finger": "PINKY",
+      "segment": 2,
+      "aliases": [
+        "右小指３"
+      ],
+      "biped": "Bip001 R Finger42",
+      "role": "skeleton"
+    }
+  }
+}
