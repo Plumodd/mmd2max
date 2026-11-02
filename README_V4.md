@@ -88,7 +88,7 @@ spec 具名列；MAXScript 只写、只回读。v3 里 `widths.tsv`（手掌/手
 | M2a | 五个容差/开关（`DIRTOL 3.0 / ROLLTOL 1.0 / TOETOL 0.5 / GAPTOL 0.5 / FOOTREACH true`）从 `.ms` 硬赋值搬进 `mmd2max/targets.py`，经 `MMD2MAX.CFG` 下发；新增 `mmd2maxCfgNum`（`"abc" as float` 在 Max 给 0 不报错）；配置汇总在 `InitLog` 之后落日志 | `.ms` 里每个名字只许一行赋值、右边必须是 CFG 读取；实跑 diff_round exit 0 |
 | M2b | 判据拆成两张表：Python 写 `MMD2MAX.VERDICTS`（规格 = phase/check/subject/expected/tol/kind/when），Max 只往 `MMD2MAX.REPORT` **追加读数**（phase/check/subject/actual），Max 侧不出现 PASS/FAIL/verdict 任何字样；三种 kind 分工 —— `gate` 是真要求、`lock` 是已定价的缺陷（PASS 只等于没退步）、`report` 只要求这一行出现；锁只认被定价的那具模型，换模型退化成 `report` | 规格 121 行与 .ms 的 45 个通道**逐一对撞**（少一行=判据是装饰，多一行=读数没人判）；`--gen-only` 就能证明写侧接上；实跑报告 121 行全部拼上 |
 | M2c | `tools/check_verdicts.py`：把两张表拼起来判，只打挂掉的行 + 一句汇总（含 lock 警示），全量状态落 `MMD2MAX.CHECK`；`obj_run` 在产物齐之后**再过这道闸**，退出码新增 7（有 FAIL）/ 8（两张表没法用），GUI 从此报不出「产物在但没判过」的完成 | 坏读数必须换成非 0 退出码：缺 always 行、值不是数字、报告比规格旧、报告里有规格不认识的行 ⇒ 全部非 0；19 条契约用例 |
-| M3 | pass 注册表：`requires/writes/invalidates/gate_check/max_iters` 数据化，runner 拓扑排序 + 陈旧断言；收敛循环的退出条件从"撞 3 遍上限"改成"判据真达标" | 第十七轮实测：三遍的落位最大值 5.6995 一动不动、方向超标 4→5→5，是靠上限退出的，"尝试=0 ⇒ 方向达标"从来不成立 |
+| M3 | pass 注册表 `mmd2max/passes.py`：23 段，每段声明 `requires`（结构前提）/ `writes`（产出哪些 phase）/ `reads`（同一个 phase 有多个作者时，认领具体哪条 check）/ `invalidates`（跑完作废谁的读数；`moves=True` = 场景读数全作废）/ `optional` / `max_iters` / `gate`。Max 侧每段收工补一行 `pass/ran/<id>`（**ran 是收工不是开工**），报告的行序于是就是免费的时间轴；`passes.audit` 拿它判五件事：覆盖 / 恰好一次 / requires 拓扑 / STALE / 归因 + 闸门自相一致，问题以 `timeline` kind 落进 `MMD2MAX.CHECK` 并计入非 0 退出码。收敛循环的退出条件从 `rp[1] == 0`（写入侧自述「这一遍没有骨需要转」）改成 `mmd2maxConvergeGate dirOver == 0`（场景读数），并把出口理由 / 遍数 / 达标位三条读数互相对账；遍数上限从 `.ms` 的字面量 `3` 搬进注册表，经 `MMD2MAX.CFG` 下发（Max 只读不写） | 第十七轮实测：三遍的落位最大值 5.6995 一动不动、方向超标 4→5→5，是靠上限退出的，「尝试=0 ⇒ 方向达标」从来不成立 —— 现在这种出口必须报成 `exit_reason=ceiling` 且 `gate_satisfied=false`；坏时间轴（少一段 / 重复一段 / 读数落在别人的段里 / 作废者之后没人再量 / 报 ceiling 却没跑满遍数）每一条都有注入变异用例判红 |
 | M4 | 真回读验收：蒙皮用 `skinOps.GetVertexBoneIDsAndWeights`，骨盒用节点世界包围盒，落位/转角用 `biped.getTransform`，Morpher 用通道名；`biped.saveFigFile` 快照 + 超差 `loadFigFile` 回滚 + 记 FAIL | 判据全部来自回读，写入侧计数不再参与验收 |
 | M5 | 测试重写：契约测试只钉表头/配置键；加金标准（脚盒 3.714×8.656×9.736 等）、判据回放、**变异测试**（改坏一个 pivot 必须至少一条判据变红）、**蜕变测试**（160cm vs 80cm 输出必须精确 0.5 倍；左右镜像必须镜像） | 变异注入全绿 = 验收层是装饰，直接判失败 |
 
@@ -117,8 +117,32 @@ M2b/M2c 的实跑（第二十一、二十二轮）第一次把两张表真的拼
    **注意方向**：这条不是「改判据去迁就 Max」—— Max 报的是场景里量到的长度，改的只是
    期望值该按哪个锚点算；几何一个字节没动（diff_round 见下）。
 
-`test_maxscript_contract.py` 现在 1885 行 / 118 个方法 / 153 处源码切片 / 499 个
-assertIn —— 它从不执行 MAXScript，只把中文日志措辞钉死。这不是测试，是**给重构上锁**。
+M3 ✅（第二十三轮 `baselines/round23_objrun.log`，判据 `diff_round.py --allow "^配置" --allow "^收敛闸门"
+baselines/round22_objrun.log baselines/round23_objrun.log` ⇒ **exit 0**，415→416 行）。
+把遮罩去掉只有 **3 行**实质差异：CFG 汇总从「28 项」变「29 项」（多 `收敛上限=3`），以及新增的一行
+`收敛闸门: 出口=ceiling 遍数=3/3 方向超标=5 判据达标=false`。⇒ 几何一个字节没动，动的是**它怎么说话**：
+第十七轮那个「尝试=0 ⇒ 方向达标」的假绿灯从此自己报「没达标」，因为出口判据改成读场景
+（`mmd2maxConvergeGate dirOver == (dirOver == 0)`），不再读写入侧的计数。
+行数账：规格 121→**147** 行（+23 行 `pass/ran`、+3 行 converge 闸门），报告 146 行读数，
+`CHECK` 146 PASS / 0 FAIL / 1 SKIP —— 那条 SKIP 是 `pass/ran physics_build`（本轮没给 physics 文件，
+`when=if_present` 退成未跑，不是判据缺失）。
+
+写 M3 时抓到两条，一条在产品、一条在判据层：
+
+1. **`ran physics_build` 原来是无条件报的**：没给 physics 文件时那段整段不发生，却照样宣称跑过。
+   「没跑却报 ran」比「没跑没报」难查得多 —— 它会给陈旧判定一个根本不存在的段。已挪进 `if` 块里。
+2. **时间轴审计只按本轮的规格参与**：注册表是**今天**的代码，规格表是**那一轮**的 Python 写的。
+   拿今天 23 条 pass 行去判第二十二轮 = 拿新合同判旧产物，会把每一轮冻结基线都判红。
+   所以规格里没有 `pass/ran` 行时打一行 SKIP「时间轴审计未参与」；这条逃生通道由
+   `FrozenRoundReplayTests`（唯一允许多出的就是这行 SKIP）和 `test_pre_m3_spec_is_not_judged_by_todays_registry`
+   （本轮规格有 pass 行 ⇒ 审计必须参与、坏时间轴必须 exit 1）两头夹住。
+
+`tests/test_passes.py`（新，38 条）里最值钱的是一批**注入变异**：重复 ran、注册表不认识的 pass id、
+`requires` 顺序倒置、把 `segment/len_cm` 挪到作废它的 pass 之后（同时触发 STALE + 归因错）、
+把 `mesh/vertex_count` 挪进别人的段、闸门三数互相打脸（`ceiling` 却遍数不满上限、`gate` 却
+`gate_satisfied=false`）。每条都断言**具体那一句**报错文本，不满足于「非空」。全套 438 条 OK。
+
+`test_maxscript_contract.py` 现在 2011 行 / 123 个方法 / 435 个 assertIn + 67 个 assertNotIn —— 它从不执行 MAXScript，只把中文日志措辞钉死。这不是测试，是**给重构上锁**。
 M5 之前不动它（它还能挡住手滑改日志格式），M5 一次性换掉。
 
 ## 5. 顺手从网上捡到的两条（v3 完全没用上）

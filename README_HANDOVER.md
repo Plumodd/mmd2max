@@ -90,6 +90,7 @@ mmd2max_v4_src_2026-11-03/
 │   ├── semantic.py       # MMD 骨名 → 语义角色 → Biped 目标；手指/脊柱去重；左右自检
 │   ├── targets.py        # ★ M2a：五个容差/开关的唯一来源 → 进 MMD2MAX.CFG
 │   ├── verdicts.py       # ★ M2b：判据规格表（gate/lock/report）+ 报告通道 + 线格式 v2 读写
+│   ├── passes.py         # ★ M3：pass 注册表（requires/writes/reads/invalidates/gate）+ 时间轴审计
 │   ├── export_obj.py     # ★ OBJ/MTL/贴图 + 全部 TSV（多进程写权重）
 │   └── configs/          # biped_definition / pmx_definition / biped_to_pmx_mapping
 ├── scripts/
@@ -155,9 +156,9 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 报告带 UTF-8 BOM + CRLF：那是 `createFile … encoding:#utf8` 的指纹，用来证明这张表**真是 Max 写的**，
 不是 Python 事后补的（`FrozenRoundReplayTests` 钉住这一点）。
 
-## 4b. 配置单源：`MMD2MAX.CFG`（M1b + M2a + M2b）
+## 4b. 配置单源：`MMD2MAX.CFG`（M1b + M2a + M2b + M3）
 
-生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 28 个输入与开关
+生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 29 个输入与开关
 全部从 `test_runs/<模型名>/MMD2MAX.CFG` 读（同样是线格式 v2：第 1 行 `key<TAB>value`）。
 键名 = MAXScript 全局名，两边同一套词，没有任何映射表可写错：
 
@@ -165,6 +166,8 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTDIR / INTERACTIVE / QUIET`
 （以上 M1b）+ `DIRTOL / ROLLTOL / TOETOL / GAPTOL / FOOTREACH`（以上 M2a，见 `mmd2max/targets.py`）
 + `VERDICTS / REPORT`（以上 M2b：两张判据表的路径，见 `mmd2max/verdicts.py`）
++ `CONVERGE_MAX`（以上 M3：收敛循环上限，唯一来源是 `passes.max_iters("converge")`，`.ms` 里那圈 `for`
+  读它而不是写死 3 —— 循环次数与注册表分叉时 `audit_gate` 会直接报「超过注册表声明的上限」）
 
 规则（违反任何一条都在 **Python 侧**就中止，不留到 Max）：
 
@@ -200,8 +203,14 @@ VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTD
   报告**每轮开头重建**（`mmd2maxReportInit` 用 `createFile` 截断），规格表由 Python 先写；
   两个键都不在 `CFG_EMPTY_OK` 名单里，也不许「没路径就跳过」—— 通道坏了这一轮就没法验收，
   退化成绿日志 + 没证据正是 §1 那个病根。契约测试两头钉：`test_obj_run_guard` 从 CFG 反查
-  这两个键与文件名，`test_verdicts.MaxChannelContractTests` 拿规格表的 45 个通道与 `.ms` 里
+  这两个键与文件名，`test_verdicts.MaxChannelContractTests` 拿规格表的 49 个通道与 `.ms` 里
   `mmd2maxReport "…" "…"` 的字面量逐一对撞，并要求 `.ms` 全程不出现 PASS/FAIL/verdict 字样。
+- **报告的行序也是数据（M3）**：`phase=pass / check=ran / subject=<id>` 那 23 行不是装饰。Max 一路追加，
+  所以**行序就是执行顺序**，`passes.audit` 拿它做覆盖 / 恰好一次 / `requires` 拓扑 / STALE / 归因 +
+  闸门自洽五判定，`CHECK` 里独立成 kind=`timeline`（有问题 ⇒ `check_verdicts` 退 1 ⇒ `obj_run` 退 7）。
+  `ran` 行排在该 pass **收工**那一刻，所以它天然是分段边界：一条读数落在哪个段里，就等于谁量的它。
+  规格里没有 `pass/ran` 行的旧轮次（M3 之前冻结的基线）打一行 SKIP「时间轴审计未参与」——
+  静默通过会被读成「审计过了」，那句话必须说出来。
 - **退出码（`tools/obj_run.py`）**：0 = 产物齐**且判据全过**；2 = 用法/规格表来源缺失；
   3 = 报错弹窗；4 = error.txt；5 = 超时；6 = 有标记但 `.max` 缺失；
   **7 = 判据有 FAIL**；**8 = 两张表不可用**（缺文件、列名分叉、报告比规格旧）。
@@ -646,12 +655,64 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
     - 本轮之后仍然没做：M3 的 pass 注册表（谁写了什么、谁作废谁）、M4 的真回读 + 超差回滚
       （现在的 `actual` 里有几项仍是 pass 内部自量，不是独立回读）、`--strict` 那 64 条结构性债。
 
+27. **M3「pass 注册表 + 时间轴审计」落地（2026-11-03 04:29 第二十三轮，香菱，退出码 0，
+    `香菱.max` 落盘，Max 自行 `quitMax`，无弹窗）：循环第一次自己说出「我没收敛」**
+    - 新文件 `mmd2max/passes.py`：23 个 pass，每个声明 `requires`（结构前提）/ `writes`（这段量哪些
+      phase）/ `reads`（**检查级**归属，只给多作者 phase 用 —— `toe_snap` 的两道复摆）/
+      `invalidates`（物理上作废谁，`moves=True` 展开成 `POSE_FACTS` 并**排序**）/ `optional` /
+      `max_iters`（只有 `converge` = 3）/ `gate`（只有 `converge`：`("converge","exit_reason","gate")`）。
+      `validate_registry()` 在 **import 期**跑，注册表自相矛盾就直接抛 —— 一张自相矛盾的注册表
+      比没有更糟，它让 `audit` 的每条结论都失去意义。
+    - Max 侧只加一件事：每个 pass 干完活报一行 `mmd2maxReport "pass" "ran" <id> 1`。
+      **ran 排在收工那一刻**，所以报告表的**行序**天然就是时间轴，不需要时间戳（时间戳会被
+      `diff_round` 当噪音遮掉，也更难对撞）。`passes.audit()` 五条规则：覆盖 / 恰好一次 /
+      `requires` 拓扑 / STALE（某 phase 最后一条读数排在作废它的 pass 之前）/ 归因 + 闸门自洽。
+      归因把 `ran` 行当分段边界：每条读数必须落在声明它的那个 pass 的段里 —— 治的是
+      「数值照样对但量的不是最终场景」（#13 那类权重错位只有在这段里量才看得见）。
+    - **收敛循环的出口判据换源**：以前是 `if rp[1] == 0 do break`（写入侧自己数「这遍没骨要转」就宣布
+      收敛），现在是 `mmd2maxConvergeGate dirOver == (dirOver == 0)`（场景里量到的方向超标数）。
+      第二十三轮的日志因此出现 `收敛闸门: 出口=ceiling 遍数=3/3 方向超标=5 判据达标=false` ——
+      **这是预期读数**：第十七轮那次「三遍落位最大 5.6995 一动不动、方向超标 4→5→5」本来就是撞上限，
+      从前它报成「达标」。真缺陷（5 根超标 + 5.6995 落位）仍在 `lock` 账上，一行没松。
+    - `MMD2MAX_CONVERGE_MAX` 走 CFG 下行（注册表 → `MMD2MAX.CFG` → Max），循环次数不再由 `.ms`
+      写死；`audit_gate` 反过来核对 `iters ≤ max_iters`、`出口=ceiling ⇒ 遍数==上限`、
+      `出口=gate ⇒ gate_satisfied=true`，三数互不打脸。闸门三行的 kind 是 `report`（只要求出现），
+      **自洽性由时间轴判**，不在期望值里刻死 —— 否则又是恒等式。
+    - 判据层的接线：`CHECK` 新增 kind `timeline`，问题行按条计入 FAIL ⇒ `check_verdicts` 退 1 ⇒
+      `obj_run` 退 7。
+    - **两条只有写代码时才会撞上的坑**：
+      ① 产品侧：`ran physics_build` 原来写在 `if physFile != ""` **块外**，没给 physics 文件也照样
+      宣称跑过。「没跑却报 ran」比「没跑没报」难查 —— 它给 STALE 一个根本不存在的段。已挪进块里。
+      ② 判据侧：时间轴审计**只按本轮的规格参与**。注册表是今天的代码，规格表是那一轮的 Python
+      写的；拿 23 条 pass 行去判第二十二轮 = 拿新合同判旧产物，会把每轮冻结基线全判红。所以规格里
+      没有 `pass/ran` 行时打一行 SKIP「时间轴审计未参与」。这条通道两头夹住：
+      `FrozenRoundReplayTests` 断言冻结轮**唯一**允许多出的就是这行 SKIP，
+      `test_pre_m3_spec_is_not_judged_by_todays_registry` 钉住「本轮规格有 pass 行 ⇒ 审计必须参与、
+      坏时间轴必须退非 0」。
+    - 中性证明：`tools/diff_round.py --allow "^配置" --allow "^收敛闸门"
+      baselines/round22_objrun.log baselines/round23_objrun.log` ⇒ 归一后 415 vs 416 行、**exit 0**。
+      去掉遮罩只剩 3 行：CFG 汇总「28 项→29 项」（多 `收敛上限=3`）+ 上面那行新闸门读数。
+      行数账：规格 121→**147** 行（+23 `pass/ran`、+3 converge 闸门），CFG 28→**29** 键，
+      报告 146 行读数，`CHECK` 146 PASS / 0 FAIL / **1 SKIP**（那行 SKIP 是
+      `pass/ran physics_build`，`when=if_present` 退成未跑，不是判据缺失）。
+    - `tests/test_passes.py`（新，451 行 / 38 条）分三层：声明层（`validate_registry` 空、id 唯一且
+      ASCII、每个 phase 有作者、多作者 phase 必须用 `reads`、`invalidates` 只许是 `POSE_FACTS` 全集或空、
+      声明作废必须有人在其后重量、只有 `converge` 能 `max_iters>1`/带 `gate`）；脚本对撞层（`.ms` 里的
+      `ran` 行与声明**逐一对齐、各一次**、每条读数排在它自己作者的收工边界之前、`"MMD2MAX_CONVERGE_MAX"`
+      必须出现在代码而不是注释里）；变异层（见 README_V4 §4）。加上冻结轮对撞：`report_order(第二十三轮
+      报告)` 必须是**不动点**、`passes.audit(第二十三轮报告)` 必须为空 —— 这两条是「注册表声明的时间轴
+      与实跑分叉了」唯一的离线探针。全套 438 条 OK（2 条 skip 与 M3 无关：缺样例 PMX / 该模型无骨变形）。
+    - 本轮之后仍然没做：M4 的真回读 + `saveFigFile`/`loadFigFile` 超差回滚（`actual` 里仍有 pass
+      内部自量，时间轴只保证「量在哪一段」，不保证「量法独立」）、M5 的测试重写、`--strict` 那 64 条
+      结构性债。
+
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
 2. `足盒缩后 … 本地 min/max` 的竖直比例必须还是 15.2 : 84.8（`FootHeelBoxHandoffTests` 钉的四个数）；换了 Max 版本若这个比例变了，那四个常量（`FOOT_BOX_*`）要跟着重新回读，不能猜。
 3. **`盒隙 <Foot> -> <Toe0> … 端面覆盖=true` 且 `盒隙结论 没接上=0 根` 是这一版脚链的唯一真判据（#41）**。`链向 … 骨轴与子关节夹角` 现在**按构造读 29.9 度、`断开=2 根` 是预期**（压平水平轴的定义），别再拿它当成绩也别拿它当回归 —— 它只在 `FOOT_BOX_FLAT=false`（斜轴回滚位，M1b 前叫 `MMD2MAX_FOOT_FLATTEN`）时才该回到 ≤3 度。两行一起看才知道口径：`画线 … 目标` 的 z 分量 =0 ⇒ 平轴（#41 默认），≠0 ⇒ 斜轴。
 4. 老账不动：`脚骨偏航结论 骨=0.0 趾=0.0`、`段校验 Foot -> Toe0 ≤0.05`、`脚趾复摆 摆后 ≤0.01`（注意 `起始偏差` 在**接趾之后**会跳到 2.2cm 量级，那是盒被拉长的必然，复摆能收回去；收不回去才是回归）、`结构向 复核 夹角>3.0度=6`。
-5. 仍开着的：#12 视觉验收（脚链三件事各有中线，等用户判这一版）、#27（Spine2 后仰 / 颈前倾 / 手指贴合）、#29（锁骨 0.955 已定价）、#35（用户拖 `Bip001 L Toe0` 的实测）、`foot_top` 被裙摆挡住不可用、`meta.tsv` 的 `has_sdef/has_qdef` 恒 0。
+5. **M3 之后的两条新读数口径**：`收敛闸门: 出口=ceiling 遍数=3/3 方向超标=N 判据达标=false` 是**诚实的撞上限**，不是新故障 —— 别拿它当回归，也别拿它当达标；要判断有没有变好，看 `converge dir_over / place_max_cm` 那些锁的行。换模型（非香菱）跑时锁退成 `report`，规格里 `pass/ran` 行照旧在 ⇒ 时间轴审计**参与**；如果哪一轮日志里出现「时间轴审计未参与」，说明那张规格表是 M3 之前写的（旧产物），不是配置出错。
+6. 仍开着的：#12 视觉验收（脚链三件事各有中线，等用户判这一版）、#27（Spine2 后仰 / 颈前倾 / 手指贴合）、#29（锁骨 0.955 已定价）、#35（用户拖 `Bip001 L Toe0` 的实测）、`foot_top` 被裙摆挡住不可用、`meta.tsv` 的 `has_sdef/has_qdef` 恒 0。
 
 建议顺序：`--no-skin --shot` 冒烟 → 完整 `--shot` → 读 `test_runs/*/shots/*.png` 与 `<模型名>_objrun.log`。
 

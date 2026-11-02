@@ -29,6 +29,7 @@ from desktop import (  # noqa: E402
     paste_text,
     press_keys,
 )
+from mmd2max import passes  # noqa: E402
 from mmd2max.targets import TARGETS, cfg_values as target_cfg_values  # noqa: E402
 from mmd2max.verdicts import (  # noqa: E402
     REPORT_NAME,
@@ -130,6 +131,10 @@ CFG_KEYS = (
     "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
     "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
     "MMD2MAX_FOOTBOXFLAT",
+    # 收敛循环的遍数上限（M3）：数值住在 mmd2max/passes.py 的注册表，Max 侧只读。
+    # 以前它是 .ms 里的字面量 `for passNo = 1 to 3`，Python 只能靠契约测试去钉一个
+    # 自己看不见的数；现在 audit_gate 拿同一个数核对 Max 报回来的 iters。
+    "MMD2MAX_CONVERGE_MAX",
     # 五个装配目标值（容差/开关），全部来自 mmd2max.targets —— M2 把它们从 .ms 里的
     # `global MMD2MAX_DIRTOL = 3.0` 搬到这里：写的一方必须是有测试的一方。
     *TARGET_CFG_KEYS,
@@ -210,6 +215,7 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_FINGERS": meta["fingers"],
         "MMD2MAX_FINGER_LINKS": meta["finger_links"],
         "MMD2MAX_FOOTBOXFLAT": meta["foot_box_flat"],
+        "MMD2MAX_CONVERGE_MAX": str(passes.max_iters("converge")),
         "MMD2MAX_SKIN": "true" if skin else "false",
         "MMD2MAX_SHOT": "true" if shot else "false",
         "MMD2MAX_SHOTDIR": str(base / "shots"),

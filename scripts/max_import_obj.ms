@@ -53,6 +53,10 @@ global MMD2MAX_SPINE_LINKS
 global MMD2MAX_FINGERS
 global MMD2MAX_FINGER_LINKS
 global MMD2MAX_FOOTBOXFLAT
+/* 收敛循环的遍数上限。以前它是这一份脚本里的字面量 `for passNo = 1 to 3`，Python 侧
+   只能用契约测试去钉一个自己看不见的数字；现在数值住在 mmd2max/passes.py 的注册表里，
+   经 MMD2MAX.CFG 下发，校验器拿同一个数核对「报 ceiling 却只跑了两遍」这种自相矛盾。 */
+global MMD2MAX_CONVERGE_MAX
 global MMD2MAX_SKIN
 global MMD2MAX_SHOT
 global MMD2MAX_QUIET
@@ -877,6 +881,10 @@ fn mmd2maxLoadCfg =
     MMD2MAX_FINGERS = mmd2maxCfgInt "MMD2MAX_FINGERS" 1 5
     MMD2MAX_FINGER_LINKS = mmd2maxCfgInt "MMD2MAX_FINGER_LINKS" 1 3
     MMD2MAX_FOOTBOXFLAT = mmd2maxCfgBool "MMD2MAX_FOOTBOXFLAT"
+    /* 收敛遍数上限：值来自 mmd2max/passes.py 的注册表（MMD2MAX_CONVERGE_MAX）。
+       上限 9 是留给「真需要多跑两遍」的余量；下限 1：0 遍的循环根本不该存在，
+       而撞上限这件事本身要能被校验器复现，所以这里必须是个可核对的整数。 */
+    MMD2MAX_CONVERGE_MAX = mmd2maxCfgInt "MMD2MAX_CONVERGE_MAX" 1 9
     /* 五个装配目标值（M2）：范围与 mmd2max/targets.py 的 TARGETS 元组逐字对应，
        由 tests/test_targets.py 钉住。这里不给默认值 —— 容差没读到就中止，
        比「按 0 度容差把每根骨都判成超标」或者「按上一轮的 5 度悄悄放行」都可诊断得多。
@@ -904,6 +912,7 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 趾落位容差=" + (MMD2MAX_TOETOL as string)
     cfgMsg = cfgMsg + " 盒隙容差=" + (MMD2MAX_GAPTOL as string)
     cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
+    cfgMsg = cfgMsg + " 收敛上限=" + (MMD2MAX_CONVERGE_MAX as string)
     /* 判据通道两个路径进摘要：日志里要能看出「这轮按哪张规格表验收、读数落在哪个文件」，
        否则事后只剩一份日志、拼不出任何判定。 */
     cfgMsg = cfgMsg + " 规格=" + (MMD2MAX_VERDICTS as string)
@@ -2280,6 +2289,21 @@ fn mmd2maxFitScore root lines rowIds targetNames limbs =
     #(badDir, sumPos, maxPos)
 )
 
+fn mmd2maxConvergeGate dirOver =
+(
+    /* 收敛循环的闸门（M3）：只看**场景读数**，不看写入侧的自述。
+       以前退出条件是 `rp[1] == 0`（这一遍没有骨需要转）。那个数是转角 pass 自己的
+       门控计数——「夹角比容差小我就不动这根骨」——它说的是「我打算干什么」，
+       不是「场景现在是什么样」。第十七轮实测：方向超标 4→5→5、落位最大值三遍
+       一动不动，循环是靠 `for passNo = 1 to 3` 撞上限退出的，而日志里那句
+       `收敛 第3遍: …` 和真达标长得一模一样。
+       现在闸门 = mmd2maxFitScore 报的方向超标根数为 0。门槛仍是 MMD2MAX_DIRTOL
+       （打分与尝试门控同源那条契约测试没动），所以这**不会**让循环少跑一遍或多跑
+       一遍：香菱本轮方向超标 5 根，两种写法都跑到上限 ⇒ 几何不变（diff_round 对证）。
+       变的是「停下来之后怎么说自己为什么停」。 */
+    dirOver == 0
+)
+
 fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
 (
     /* 骨盒转角 pass（#27 的修法），现在是收敛循环里的一遍。
@@ -3466,6 +3490,11 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
 
     local figOk = mmd2maxFigureMode root.controller true
     mmd2maxLog ("进入 Figure 模式：" + (figOk as string))
+    /* pass 边界（M3）：注册表里每个 pass 收工时补一行 `pass/ran`，报告表的行序就是
+       时间轴，Python 侧拿它做三件事 —— 顺序对不对（requires）、读数有没有被后来的
+       pass 作废（invalidates ⇒ STALE）、每条读数是不是落在声明它的那一段里（归因）。
+       这一行必须排在它自己那些读数**之后**：ran 是「收工」，不是「开工」。 */
+    mmd2maxReport "pass" "ran" "biped_create" 1
 
     /* ===== 先修正肢段长度，再摆位 =====
        顺序至关重要：必须在「摆位之前」缩放。因为摆位会把子关节直接放到 PMX 目标上，
@@ -3521,6 +3550,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if scaleAxis > 0 do mmd2maxFitSegments root limbs scaleAxis scaleMethod
     )
     if scaleAxis == 0 do mmd2maxLog "未探到可用的长度轴，跳过肢段拟合（骨架比例将保持 Biped 默认）。"
+    mmd2maxReport "pass" "ran" "fit_segments" 1
 
     /* 手部粗细：Biped 默认手指远比网格粗，按网格实测半径收缩横截面。
        必须放在肢段拟合之后——拟合用的 setTransform #scale 会整组覆盖 scale。
@@ -3532,6 +3562,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         mmd2maxLog ("Biped 手部粗细：调整=" + (wid as string) + " / " + (widths.count as string))
     )
     if widths.count == 0 do mmd2maxLog "未读到手部粗细表，跳过（手掌/手指将保持 Biped 默认粗细）。"
+    mmd2maxReport "pass" "ran" "apply_widths" 1
 
     /* 先看核心链（父->子顺序），再摆手指等其余节点。
        "Bip001"（COM）不在名单里：它由 createNew + 骨盆闭环负责，摆位循环碰它
@@ -3584,6 +3615,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     mmd2maxReport "pose" "failed_nodes" "-" pose[2]
     mmd2maxReport "pose" "missing_nodes" "-" pose[3]
     mmd2maxReport "pose" "hip_residual_cm" "-" pelvisErr
+    mmd2maxReport "pass" "ran" "pose_initial" 1
 
     /* ===== 踝关节优先复核 =====
        Biped 的脚骨有最短长度限制（本模型 11.70，而 MMD 的 踝->趾 只有 9.90）。
@@ -3619,6 +3651,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         )
     )
 
+    mmd2maxReport "pass" "ran" "ankle_recheck" 1
     /* ===== 脚趾两段：Toe0 接在 Foot 末端、整块呆在鞋里 =====
        用户原话（看截图后，两轮）：
          第一轮：「Bip001 L/R Toe0 太大了。要求：Toe0 的 pivot 接在 Bip001 Foot 的
@@ -3735,17 +3768,22 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         )
     )
 
+    mmd2maxReport "pass" "ran" "toe_box" 1
     /* ===== 摆位 <-> 转角 收敛循环（机制层）=====
        09:37 的结论是「pivot 全对、盒子不动」，那么能改方向的只有转角；而转角写法
        由上面那具必删的临时骨架现场探出来（rotWay）。探针没跑通就整段跳过 —— 不拿
        未证实的接口去写真骨架，本轮就仍然只是一轮测量。
        原来这里是一次转角 + 一次重摆，两边各吃掉对方一半：躯干的落位修好了
        （Neck 4.90->7.6e-06），指链的方向却被重摆吃掉（L Finger32 3.5->5.63）。
-       现在改成反复做，直到没有骨再需要转：
+       现在改成反复做，直到**场景读数**达标（闸门见 mmd2maxConvergeGate，不是「这一遍没有
+       骨需要转」）：
          每一遍 = （第 2 遍起）先按优先级重摆落位（跳过 #dir）→ 再把还差超过 MMD2MAX_DIRTOL 的骨转过来。
-       停止条件用「这一遍没有任何骨还需要转」而不是固定次数 —— 转角 pass 的门控与
-       打分用的是同一个数，所以 尝试=0 等价于「方向全部达标」。上限 3 遍，防的是 A 的转角
-       甩开 B、B 的重摆又甩开 A 这种来回。
+       遍数上限来自 MMD2MAX.CFG（MMD2MAX_CONVERGE_MAX，数值住在 mmd2max/passes.py 的注册表），
+       防的是 A 的转角甩开 B、B 的重摆又甩开 A 这种来回。
+       **撞上限不等于收敛**：循环停下来之后，必须把「跑了几遍 / 为什么停 / 判据到底达没
+       达标」三件事报进判据通道，由 Python 侧 passes.audit_gate 互相对账。第十七轮实测
+       方向超标 4→5→5、落位最大值三遍一动不动，是靠 `for passNo = 1 to 3` 撞上限退出的，
+       而日志里那句 `收敛 第3遍: …` 与真达标完全同形 —— 这就是「循环结束了被当成收敛了」。
        收尾是**两道写**：先把所有骨（含 #dir）摆回 PMX，再只转 #dir 的骨把方向补回来
        （见下面那段注释）。于是 #dir 的骨最终状态=方向+落位、#both/#pos 的骨最终状态=落位
        —— 取舍表（mmd2maxChainPriority）说的还是同一件事，变的只是最后一道写是谁。
@@ -3757,7 +3795,10 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     local rotErr = 0
     local lastAttempt = 0
     local lastPass = 0
-    for passNo = 1 to 3 do
+    local convergeIters = 0
+    local convergeDirOver = 0
+    local convergeExit = "ceiling"
+    for passNo = 1 to MMD2MAX_CONVERGE_MAX do
     (
         if passNo > 1 do
         (
@@ -3784,14 +3825,31 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         mmd2maxReport "converge" "dir_over" pn sc[1]
         mmd2maxReport "converge" "place_sum_cm" pn sc[2]
         mmd2maxReport "converge" "place_max_cm" pn sc[3]
-        if rp[1] == 0 do break
+        convergeIters = passNo
+        convergeDirOver = sc[1]
+        /* 出口只由读数决定。`rp[1] == 0`（这一遍没人要转）以前是退出条件，现在它
+           只是日志里的一个数：方向超标为 0 才叫达标，尝试为 0 而读数没到 0 不算。 */
+        if (mmd2maxConvergeGate sc[1]) do
+        (
+            convergeExit = "gate"
+            break
+        )
     )
+    local gateHit = (convergeExit == "gate")
+    mmd2maxLog ("收敛闸门: 出口=" + (convergeExit as string) \
+        + " 遍数=" + (convergeIters as string) + "/" + (MMD2MAX_CONVERGE_MAX as string) \
+        + " 方向超标=" + (convergeDirOver as string) + " 判据达标=" + (gateHit as string))
+    mmd2maxReport "converge" "iters" "-" convergeIters
+    mmd2maxReport "converge" "exit_reason" "-" convergeExit
+    mmd2maxReport "converge" "gate_satisfied" "-" (if gateHit then "true" else "false")
+    mmd2maxReport "pass" "ran" "converge" 1
     /* ===== 大腿扭转闭环（#36，两膝被拽向中线 = 用户看到的「内八」）=====
        排在收尾**之前**，理由只有一条：转完大腿会把踝甩出去、并且把整条脚链的局轴
        带着转过同样的角度，而收尾那两道写（先按先父后子全摆位、再只转 #dir 的骨）
        干的恰好就是「把踝摆回来 + 把脚链方向补回来」。放在收尾之后就等于把这两件
        事留给一个不存在的第三次收尾。 */
     local legRolled = mmd2maxLegRoll root limbs rotWay
+    mmd2maxReport "pass" "ran" "thigh_roll" 1
     if (lastAttempt > 0 or legRolled > 0) do
     (
         /* 收尾（2026-11-02 用户定「顺序换过来」）：**先全摆，再只转方向优先的骨**。
@@ -3821,6 +3879,9 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         rotBetter += rd[2]
         rotWorse += rd[3]
         rotErr += rd[4]
+        /* 收尾是**两道写**算一个 pass；它整段可以合法不跑（门控在外面那个 if），
+           所以 ran 排在 if 内部：没跑就不该有这一行。 */
+        mmd2maxReport "pass" "ran" "finish_pose" 1
     )
     /* ===== 脚趾复摆（#38）=====
        排在收尾**之后**、退出 figure 模式之前：收尾那两道写是最后动过链的地方，
@@ -3833,6 +3894,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     (
         mmd2maxLog ("脚趾复摆：净改善 " + (toeSnapped as string) + " 根跟回 PMX 脚掌落位")
     )
+    mmd2maxReport "pass" "ran" "toe_snap_roll" 1
     /* ===== 足盒接趾（#41）：链已经摆完，最后把骨盒的**远端面**拉到 PMX 脚掌 =====
        用户两张对照图：左边 = 第十六轮（一根斜牙签从踝往下探，趾骨盒悬在它前方），
        右边 = 一块落地的厚盒子，趾方块贴它的正面。牙签的「细」由 足背截面 管（#37，
@@ -3889,10 +3951,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 )
             )
         )
+        mmd2maxReport "pass" "ran" "foot_reach" 1
         /* 上面每一刀 #scale 都把孩子沿轴推走一次，这里统一跟回 PMX 脚掌 */
         local toeSnapped2 = mmd2maxToeSnapBack root limbs "residual_after_reach_cm"
         if toeSnapped2 > 0 do
             mmd2maxLog ("足盒接趾复摆：净改善 " + (toeSnapped2 as string) + " 根跟回 PMX 脚掌落位")
+        mmd2maxReport "pass" "ran" "toe_snap_reach" 1
     )
     if rotTotal > 0 do
         mmd2maxLog ("转角 pass：接口=" + (rotWay as string) + " 累计尝试=" + (rotTotal as string) \
@@ -3900,6 +3964,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             + " 抛错=" + (rotErr as string))
 
     mmd2maxFigureMode root.controller false
+    mmd2maxReport "pass" "ran" "figure_exit" 1
 
     /* ===== 脚骨「画出来的朝向」复核（#26 第二轮）=====
        第一版在这里比的是 (Toe0head - Foothead) 与 PMX 的 (つま先 - 足首) —— 那仍然是
@@ -4036,6 +4101,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         + (MMD2MAX_GAPTOL as string) + " 厘米，且子关节须落在父盒端面矩形内）")
     mmd2maxReport "foot_chain" "broken_roots" "-" chainBad
     mmd2maxReport "foot_chain" "gap_unconnected" "-" gapBad
+    mmd2maxReport "pass" "ran" "foot_chain_check" 1
 
     /* 肢段长度复核：摆位之后重新量每节实际长度，与肢段表的目标值对比。
        这是判断「骨骼网格是否真的被拉到位」的唯一硬指标——位置对了不等于长度对了，
@@ -4060,6 +4126,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         )
     )
 
+    mmd2maxReport "pass" "ran" "segment_check" 1
     /* 「骨盒到底有多大、在不在鞋里」别想用回读解决：第十二轮实测 node.min / node.max
        在 Biped_Object 上退化成同一个点（四只脚骨全部 尺寸=0.0x0.0x0.0），量不到显示盒；
        nodeGetBoundingBox 的矩阵参数口径又没验过。这一项只能靠藏网格特写截图 + 下面的
@@ -4121,6 +4188,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     )
 
 
+    mmd2maxReport "pass" "ran" "placement_check" 1
     /* ===== 结构方向复核（#27）=====
        上面那份 校验 名单是写死的 19 个节点：Bip001 Spine1 和 30 根手指骨都不在里面，
        「没打印」被当成了「没问题」（用户 #27：Spine2 没后仰、颈没前倾、手指不贴合）。
@@ -4177,6 +4245,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     mmd2maxReport "struct_dir" "measurable" "-" structTotal
     mmd2maxReport "struct_dir" "over_tol" "-" structBad
     mmd2maxReport "struct_dir" "short_skipped" "-" structStub
+    mmd2maxReport "pass" "ran" "struct_dir_check" 1
 
     /* 把 Biped 节点写回 boneNodes 的对应位置 */
     for k = 1 to targetNames.count do
@@ -4345,6 +4414,7 @@ fn mmd2maxCreateBones =
     /* 诊断：统计附属骨的父级构成，确认「附属骨挂到最近人形骨」确实生效，
        而不是散落在场景根下。 */
     mmd2maxLogAccessoryStats nodes
+    mmd2maxReport "pass" "ran" "accessory_build" 1
     nodes
 )
 
@@ -4556,6 +4626,7 @@ fn mmd2maxApplySkin meshes boneNodes =
         if matchPattern nm pattern:"* Toe0" or matchPattern nm pattern:"* Foot" do
             mmd2maxLog ("  蒙皮覆盖 " + nm + " 顶点=" + (boneVertHits[k] as string))
     )
+    mmd2maxReport "pass" "ran" "skin_apply" 1
     if failedVerts > 0 do
         throw ("有 " + (failedVerts as string) + " 个顶点未能写入有效蒙皮权重，已中止（不写 success 标记）。")
 )
@@ -4761,6 +4832,9 @@ fn mmd2maxBuildMorpher meshObj morphFile =
     mmd2maxReport "morpher" "built" "-" built
     mmd2maxReport "morpher" "with_target" "-" chUsed
     mmd2maxReport "morpher" "with_name" "-" chNamed
+    /* ran 排在这四行读数之后、下面的 built==0 回滚之前：回滚那条路 return false
+       就走不到函数末尾，边界若排在末尾就会出现「有读数、没有段」的孤儿行。 */
+    mmd2maxReport "pass" "ran" "morpher_build" 1
     /* 自检分两级，绝不一上来就拆修改器：
        built == 0 —— 两个 WM3 接口逐个抛异常，确实一个通道都没建，清掉修改器；
        临时网格只 append 到 targets 才存在，这里 targets 必为空，不会误删。
@@ -5043,7 +5117,9 @@ fn mmd2maxMain =
        它也用 createFile —— 早于日志建立没坏处，但摘要先行能让日志里先有路径证据。 */
     mmd2maxReportInit()
     mmd2maxPrepareScene()
+    mmd2maxReport "pass" "ran" "scene_prepare" 1
     mmd2maxImportObj()
+    mmd2maxReport "pass" "ran" "mesh_import" 1
     local boneNodes = mmd2maxCreateBones()
     local meshes = mmd2maxMeshes()
     if mmd2maxSkinEnabled() then
@@ -5062,7 +5138,14 @@ fn mmd2maxMain =
     )
     local physFile = ""
     try ( physFile = (MMD2MAX_PHYSICS as string) ) catch ( physFile = "" )
-    if physFile != "" do mmd2maxBuildPhysics boneNodes physFile
+    if physFile != "" do
+    (
+        mmd2maxBuildPhysics boneNodes physFile
+        /* 这一行必须在 if 的块里（M3）：没给 physics 文件时这段整段不发生。
+           无条件报 ran 等于宣称跑过 —— 注册表里它是 optional，规格行退成 if_present，
+           于是「没跑却报 ran」比「没报」难查得多：它会给 STALE 一个根本不存在的段。 */
+        mmd2maxReport "pass" "ran" "physics_build" 1
+    )
 
     clearSelection()
     for obj in meshes do selectMore obj

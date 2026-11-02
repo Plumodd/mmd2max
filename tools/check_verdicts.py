@@ -38,7 +38,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
+from mmd2max import passes  # noqa: E402
+from mmd2max.passes import PASS_PHASE  # noqa: E402
 from mmd2max.verdicts import (  # noqa: E402
+    GLOBAL,
     REPORT_HEADER,
     REPORT_NAME,
     SPEC_HEADER,
@@ -89,11 +92,14 @@ def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
 
 
 def read_pair(spec_path: Path, report_path: Path) -> tuple[
-        list[dict[str, str]], dict[tuple[str, str, str], tuple[str, int]], list[str]]:
-    """读两张表，返回 (规格行, 报告索引, 问题列表)。问题非空 ⇒ 调用方判 2 号退出码。
+        list[dict[str, str]], dict[tuple[str, str, str], tuple[str, int]],
+        list[dict[str, str]], list[str]]:
+    """读两张表，返回 (规格行, 报告索引, 报告原序行, 问题列表)。问题非空 ⇒ 调用方判 2 号退出码。
 
     报告索引按 (phase, check, subject) 收敛：Max 的复摆/接趾段可能对同一个主体报两次
     （#38 就是「转角后复测」+「接趾后复测」），**后写的赢** —— 那才是这一段的最终读数。
+    原序行单独返回：M3 的 pass 时间轴审计要的正是「没被收敛掉的行序」，
+    拿 `look` 去审等于把时间轴压成一个字典。
     """
     problems: list[str] = []
     for path, header, label in ((spec_path, SPEC_HEADER, "规格表"),
@@ -101,7 +107,7 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
         if not path.is_file():
             problems.append(f"{label}不存在：{path}")
     if problems:
-        return [], {}, problems
+        return [], {}, [], problems
 
     spec_head, spec_rows = parse_table(spec_path.read_text(encoding="utf-8"))
     if spec_head != SPEC_HEADER:
@@ -110,7 +116,7 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
     if report_head != REPORT_HEADER:
         problems.append(f"报告表列名不是 {REPORT_HEADER}，而是 {report_head}")
     if problems:
-        return [], {}, problems
+        return [], {}, [], problems
 
     for row in spec_rows:
         if row["kind"] not in ("gate", "lock", "report"):
@@ -130,7 +136,7 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
         key = (row["phase"], row["check"], row["subject"])
         # 计数：同一个键被报了几次，用来回答「Max 是不是把同一根骨测了两遍」
         look[key] = (row["actual"], look.get(key, ("", 0))[1] + 1)
-    return spec_rows, look, problems
+    return spec_rows, look, report_rows, problems
 
 
 def check(base: Path, *, spec_path: Path | None = None,
@@ -138,10 +144,15 @@ def check(base: Path, *, spec_path: Path | None = None,
     """跑完一轮后的判据汇总。返回 (退出码, 要打的日志行)。
 
     退出码：0 全过 / 1 有 FAIL / 2 两张表没法用（缺文件、列名分叉、陈旧）。
+
+    除了逐行拼表，这里还跑一遍 M3 的**时间轴审计**（`mmd2max.passes.audit`）：
+    读数对不对是一回事，读数**是在什么时候量的**是另一回事。撞上限退出被当成收敛、
+    收尾之后又挪了骨却拿收尾前量的段长交付，这两种在逐行拼表里全是绿的 —— 一条
+    STALE 的时间轴能把它们判红，所以它算 FAIL（这一轮不成立），不算「表没法用」。
     """
     spec_path = spec_path or base / SPEC_NAME
     report_path = report_path or base / REPORT_NAME
-    spec_rows, look, problems = read_pair(spec_path, report_path)
+    spec_rows, look, report_rows, problems = read_pair(spec_path, report_path)
     if problems:
         return 2, [f"判据校验中止：{p}" for p in problems]
 
@@ -179,6 +190,26 @@ def check(base: Path, *, spec_path: Path | None = None,
             results.append((FAIL, key[0], key[1], key[2], "", "", "orphan",
                             look[key][0], "规格表里没有这一行 = 这个读数没人判"))
 
+    # 时间轴审计（M3）：覆盖 / 恰好一次 / requires 顺序 / STALE / 归因 / 闸门自相一致。
+    # 每条问题单独占一行落进 CHECK，和逐行判据混在一起排 —— 只 FAIL 不 SKIP，
+    # 因为「这一轮的时间轴不成立」没有部分通过可言。
+    #
+    # 但它只审**这份规格表声明过的合同**：注册表是现在的代码，规格表是那一轮 Python
+    # 写下来的。表里一条 `pass/ran` 都没有 = 那一轮还早于 M3，拿今天的 23 个 pass 去
+    # 数它「少了 23 行」不是发现缺陷，是拿新合同判旧产物（冻结的 round22 就会被这样
+    # 判红，于是这条审计再也没人当回事）。不参与也要落一行 SKIP 说明为什么没审。
+    if any(r["phase"] == PASS_PHASE for r in spec_rows):
+        for problem in passes.audit(report_rows):
+            counts[FAIL] += 1
+            by_kind[("timeline", FAIL)] += 1
+            results.append((FAIL, PASS_PHASE, "timeline", GLOBAL, "", "", "timeline",
+                            "", problem))
+    else:
+        counts[SKIP] += 1
+        by_kind[("timeline", SKIP)] += 1
+        results.append((SKIP, PASS_PHASE, "timeline", GLOBAL, "", "", "timeline", "",
+                        "规格表里没有 pass/ran 行：这一轮的合同早于 M3，时间轴审计不参与"))
+
     results.sort(key=lambda r: (ORDER[r[0]], r[1], r[2], r[3]))
     for status, phase, check_name, subject, expected, tol, kind, actual, note in results:
         if status == PASS:
@@ -187,10 +218,18 @@ def check(base: Path, *, spec_path: Path | None = None,
                      f"({kind}) 期望={expected or '—'} 实报={actual or '—'} —— {note}")
 
     gate_lock = (by_kind.get(("gate", FAIL), 0) + by_kind.get(("lock", FAIL), 0)
-                 + by_kind.get(("orphan", FAIL), 0))
+                 + by_kind.get(("orphan", FAIL), 0)
+                 + by_kind.get(("timeline", FAIL), 0))
     lines.append(
         f"判据汇总：通过 {counts[PASS]}，失败 {counts[FAIL]}，未跑 {counts[SKIP]} "
         f"（gate/lock 失败 {gate_lock}）；报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
+    # 时间轴问题单独说一句：它不是「某个数超差」，是「这一轮读数不描述最终场景」。
+    # 混在 gate 里说，读的人会用「改一下容差」去处理一个顺序 bug。
+    if by_kind.get(("timeline", FAIL), 0):
+        lines.append(f"  其中 {by_kind[('timeline', FAIL)]} 条是时间轴问题"
+                     "（pass 覆盖 / 顺序 / STALE / 归因 / 闸门自相一致）")
+    elif by_kind.get(("timeline", SKIP), 0):
+        lines.append("  时间轴审计未参与：本轮规格表里没有 pass/ran 行（那一轮早于 M3）")
     # 锁单独说一句：它 PASS 只保证没退步。汇总里不写这句就会被读成「6 条全达标」。
     locks = by_kind.get(("lock", PASS), 0)
     if locks:
@@ -211,7 +250,13 @@ def write_check_file(path: Path, results: list[tuple[str, ...]]) -> None:
     日志里只留挂掉的行，是为了让人看得下去；表全量落盘，是为了「这轮到底量到了什么」
     事后还能查 —— 只留绿日志的话，下一轮出问题就没人能回答「上一轮那条读数是多少」。
     """
-    header = ("status",) + tuple(SPEC_HEADER) + ("actual", "note")
+    # 列名从规格表头派生，但**去掉 `when`**：when 是判定的输入（这行没读数算不算失败），
+    # 不是判定结果。以前整份 SPEC_HEADER 直接拼进表头，行里少一列 ⇒ 从 actual 起整行
+    # 错位一列，读它的人拿到的是「when=18892」。这里按行的真实字段数列，两边不许分叉。
+    header = (("status",) + tuple(f for f in SPEC_HEADER if f != "when")
+              + ("actual", "note"))
+    if results and len(results[0]) != len(header):
+        raise ValueError(f"CHECK 行有 {len(results[0])} 个字段，表头却有 {len(header)} 列")
     lines = ["\t".join(header)]
     # actual 是从 Max 那侧读来的自由文本，note 里也带它：一个制表符就能把这张表
     # 的列错位（下一轮读它的人看到的是「少一列」，不是「有人报了个带制表符的值」）。

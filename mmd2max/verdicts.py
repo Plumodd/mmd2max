@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import math
 
+from mmd2max import passes
 from mmd2max.targets import DIR_TOL_DEG, GAP_TOL_CM, TOE_TOL_CM
 
 # 两张表的名字（与 tools/obj_run.py 共用；改了这边不改那边 = 报告永远拼不上）
@@ -59,14 +60,18 @@ REPORT_HEADER = ("phase", "check", "subject", "actual")
 KINDS = ("gate", "lock", "report")
 WHENS = ("always", "if_present")
 
-# 全模型范围的行为 "-"，Max 那边也写 "-"（两边同一个词，拼表才不需要映射）
-GLOBAL = "-"
+# 全模型范围的行为 "-"，Max 那边也写 "-"（两边同一个词，拼表才不需要映射）。
+# 定义在 pass 注册表那边，因为归因/闸门规则也要用它去查报告行。
+GLOBAL = passes.GLOBAL_SUBJECT
 
 # 锁（lock）只对这一具模型生效；其余模型的相关行退化成 report。见模块文档。
 PRICED_MODEL = "香菱"
 
-# 收敛循环的遍数上限：`.ms` 里是字面量 `for passNo = 1 to 3`，契约测试把两边钉在一起。
-CONVERGE_MAX_PASSES = 3
+# 收敛循环的遍数上限住在 `mmd2max/passes.py`（M3）：那边是注册表，它同时决定
+# `MMD2MAX.CFG` 下发给 Max 的数字、以及校验器用来核对出口理由的上限。
+# 以前这里是「`for passNo = 1 to 3` 的字面量 + 一份抄来的 3」，两边靠契约测试钉；
+# 现在只有一份。
+CONVERGE_MAX_PASSES = passes.max_iters("converge")
 
 # ---------------------------------------------------------------------------
 # 已定价的读数（lock）—— 来源：baselines/round20_objrun.log（第二十轮，香菱）
@@ -283,6 +288,16 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
             rows.append(_lock("converge", check, str(pass_no), value,
                               CONVERGE_TOL[check], model, when=when))
 
+    # ── 收敛闸门本身（M3）─────────────────────────────────────────
+    # 这三行是「循环为什么停」的读数，全部由 Max 报，Python 只要求它们出现：
+    # 数值门槛不该由这里再刻一遍（`dir_over` 那几条 lock 管的是达没达标），
+    # 而三行之间的**自相一致**由 passes.audit_gate 判：报 ceiling 却只跑了 2 遍、
+    # 报 gate 而 gate_satisfied=false —— 两种都是「循环结束了被当成收敛了」的谎。
+    # 把它们定成 report 而不是 gate：换一具真收敛的模型时，出口=gate 不该被判红。
+    rows.append(row("converge", "iters", GLOBAL, None, None, "report"))
+    rows.append(row("converge", "exit_reason", GLOBAL, None, None, "report"))
+    rows.append(row("converge", "gate_satisfied", GLOBAL, None, None, "report"))
+
     # ── 收尾重摆 / 收尾转角 ───────────────────────────────────────
     # 整段由 `lastAttempt > 0 or legRolled > 0` 门控：没有任何骨被转走或被拽走时它
     # 本来就不该跑，所以这几行是 if_present（跑没跑在报告里仍然看得见）。
@@ -388,6 +403,18 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     for check in ("blocks", "built", "with_target", "with_name"):
         rows.append(row("morpher", check, GLOBAL, morph_count, 0, "gate",
                         when="if_present"))
+
+    # ── pass 时间轴（M3）──────────────────────────────────────────
+    # 每个 pass 一行 `pass/ran/<id>=1`：恰好一次。注册表还多干了三件事（顺序、作废、
+    # 归因），都靠这些行当时间轴骨架，见 mmd2max/passes.py。
+    # 开关明确打开的那些从 if_present 提回 always：`FOOTREACH=true` 时足盒接趾**必须**
+    # 跑到，没跑是故障，不该被当成合法跳过。
+    rows.extend(passes.spec_rows({
+        "skin_apply": "always" if skin else "if_present",
+        "foot_reach": "always" if foot_reach else "if_present",
+        "toe_snap_reach": "always" if foot_reach else "if_present",
+        "morpher_build": "always" if morph_count > 0 else "if_present",
+    }))
 
     return rows
 
