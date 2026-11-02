@@ -50,7 +50,11 @@ def log(message: str) -> None:
 
 def _ascii_inputs(base: Path, stem: str, physics: bool) -> dict:
     """把可能有中文名的导出文件复制成固定 ASCII 名，规避 MaxScript openFile 的
-    本地代码页(GBK)解析失败。返回 ascii 路径字典（物理/表情按开关置空）。"""
+    本地代码页(GBK)解析失败。返回 ascii 路径字典（物理/表情按开关置空）。
+
+    值这里是**原始 Path 或空串**，不做 MAXScript 转义：路径要落进 MMD2MAX.CFG
+    当数据，转义属于「怎么把数据写进脚本」那一层，由 _cfg_text 处理。
+    """
     mapping = {
         "obj": (base / (stem + ".obj"), base / "model.obj"),
         "bones": (base / (stem + "_bones.tsv"), base / "bones.tsv"),
@@ -85,82 +89,142 @@ def _ascii_inputs(base: Path, stem: str, physics: bool) -> dict:
                     (base / "model.mtl").write_bytes(mtl_src.read_bytes())
             else:
                 dst.write_bytes(src.read_bytes())
-            out[key] = _esc(dst)
+            out[key] = dst
         except OSError:
             # 复制失败则回退到原名（仍可能成功）
-            out[key] = _esc(src)
+            out[key] = src
     return out
+
+
+CFG_NAME = "MMD2MAX.CFG"
+
+# CFG 自己没读成时（缺文件/缺键/值非法），MaxScript 侧连 MMD2MAX_MARKER 都还没拿到，
+# 于是把错误写到 CFG 同目录的这个定名文件（见 max_import_obj.ms 的 mmd2maxErrorFilePath）。
+# 名字两边各写一份、靠这条注释互相指过去 —— 改了这边不改那边，配置类失败就又变成
+# 「只有监听器里有证据、上层报超时」。
+CFG_ERROR_NAME = "mmd2max_cfg.error.txt"
+
+# 装配侧要求的全部键，顺序即 CFG 落盘顺序。MAXScript 的 mmd2maxLoadCfg 逐键取数、
+# 缺键即抛；build_cfg 结尾拿这份名单自查，两边键集分叉时在 Python 侧就报出来。
+CFG_KEYS = (
+    "MMD2MAX_OBJ", "MMD2MAX_BONES", "MMD2MAX_WEIGHTS", "MMD2MAX_VERTS",
+    "MMD2MAX_OUTPUT", "MMD2MAX_MAP", "MMD2MAX_MARKER", "MMD2MAX_LOG",
+    "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
+    "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
+    "MMD2MAX_FOOTBOXFLAT", "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
+    "MMD2MAX_INTERACTIVE", "MMD2MAX_QUIET",
+)
+
+# 允许是空串（= 该阶段整段跳过）的键；其余键为空一律在本函数里就拦掉。
+# LIMBS 不在名单里：没有肢段表就没有闭环缩放，Biped 会退回默认人体比例。
+# 这份名单必须和 MAXScript 侧 mmd2maxLoadCfg 的空路径校验一致。
+CFG_EMPTY_OK = ("MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_WIDTHS")
+
+# meta 里装配侧必须拿到的键 -> CFG 里的键（键名 = MAXScript 全局名，两边同一套词）。
+# 缺任何一个键 = 中止。以前缺键退回这里硬编码的默认值，于是「一份没有 spine_links 的
+# 旧 meta」会静默按 3 节脊柱建 Biped：日志全绿、几何却是另一套，正是 v4 要根除的
+# 「配置有默认值」这一类。
+META_TO_CFG = {
+    "spine_links": "MMD2MAX_SPINE_LINKS",
+    "fingers": "MMD2MAX_FINGERS",
+    "finger_links": "MMD2MAX_FINGER_LINKS",
+    "foot_box_flat": "MMD2MAX_FOOTBOXFLAT",
+}
+
+
+def read_meta(base: Path, stem: str) -> dict:
+    """读 `<名>_meta.tsv`（线格式 v2：第 1 行 `key<TAB>value`，`#` 行是人读注释）。"""
+    path = base / f"{stem}_meta.tsv"
+    if not path.is_file():
+        raise SystemExit(f"缺少导出元信息文件：{path}\n"
+                         "装配的每一项配置都来自导出结果，请先跑 tools/run_model.py。")
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#") or "\t" not in line:
+            continue
+        key, _, value = line.partition("\t")
+        key, value = key.strip(), value.strip()
+        if key == "key" and value == "value":
+            continue                      # 表头行本身，不是数据
+        values[key] = value
+    missing = [k for k in META_TO_CFG if k not in values]
+    if missing:
+        raise SystemExit(f"{path} 缺少必需的键：{'、'.join(missing)}"
+                         "（装配侧不接受默认值，重跑导出即可）")
+    return values
+
+
+def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
+              suffix: str | None = None, shot: bool = False,
+              physics: bool = False) -> tuple[dict, Path]:
+    """装配用的**全部**输入与开关，集中成一个 key→value 表，落到 <目录>/MMD2MAX.CFG。
+
+    v3 的做法是在生成的 .ms 头部逐行注入 22 个 global。那带来一个查不出来的分裂：
+    自动跑读的是注入头，人手 `fileIn scripts/max_import_obj.ms` 时得自己记得这 22 个
+    值 —— 漏一个 flag（比如 MMD2MAX_FOOTPITCH）就摆出不同的几何，而两边日志都是绿的。
+    现在两条路径都只靠一个 MMD2MAX_CFG 起点，其余全从同一份文件读，不可能分叉。
+    值一律写**字面量**：bool 就写 true/false（不再 0/1 再取反），路径写原始反斜杠
+    （转义是 .ms 那侧的事，不污染数据文件）。
+    """
+    meta = read_meta(base, stem)
+    inputs = _ascii_inputs(base, stem, physics)
+    out_name = stem if suffix is None else f"{stem}_{suffix}"
+    cfg = {
+        "MMD2MAX_OBJ": str(inputs["obj"]),
+        "MMD2MAX_BONES": str(inputs["bones"]),
+        "MMD2MAX_WEIGHTS": str(inputs["weights"]),
+        "MMD2MAX_VERTS": str(int(vertex_count)),
+        "MMD2MAX_OUTPUT": str(base / f"{out_name}.max"),
+        "MMD2MAX_MAP": str(inputs["biped_map"]),
+        "MMD2MAX_MARKER": str(base / f"{out_name}.success.json"),
+        "MMD2MAX_LOG": str(base / f"{out_name}_objrun.log"),
+        "MMD2MAX_MORPHS": str(inputs["morphs"]),
+        "MMD2MAX_PHYSICS": str(inputs["physics"]),
+        "MMD2MAX_LIMBS": str(inputs["limbs"]),
+        "MMD2MAX_WIDTHS": str(inputs["widths"]),
+        "MMD2MAX_SPINE_LINKS": meta["spine_links"],
+        "MMD2MAX_FINGERS": meta["fingers"],
+        "MMD2MAX_FINGER_LINKS": meta["finger_links"],
+        "MMD2MAX_FOOTBOXFLAT": meta["foot_box_flat"],
+        "MMD2MAX_SKIN": "true" if skin else "false",
+        "MMD2MAX_SHOT": "true" if shot else "false",
+        "MMD2MAX_SHOTDIR": str(base / "shots"),
+        "MMD2MAX_INTERACTIVE": "false",
+        "MMD2MAX_QUIET": "true",
+    }
+    bad = [k for k, v in cfg.items()
+           if v in ("True", "False", "None", "") and k not in CFG_EMPTY_OK]
+    if bad:
+        # Path 忘了 str()、bool 写成 Python 的 True、必需路径为空 —— 都会在 Max 侧
+        # 变成「打不开文件」这种离根因很远的报错，在这里就拦掉。
+        raise SystemExit(f"CFG 的值不合法（必需项为空或是 Python 字面量）：{'、'.join(bad)}")
+    if set(cfg) != set(CFG_KEYS):
+        # MAXScript 侧 mmd2maxLoadCfg 逐键取数、缺键即抛。两边键集一旦分叉，
+        # 报错会落在「CFG 里没有键 X」这种离根因很远的地方，这里先自家对齐。
+        raise SystemExit(f"CFG 键集与 CFG_KEYS 不一致：多 {sorted(set(cfg) - set(CFG_KEYS))} / "
+                         f"缺 {sorted(set(CFG_KEYS) - set(cfg))}")
+    return cfg, base / CFG_NAME
+
+
+def cfg_text(cfg: dict) -> str:
+    """CFG 文件的正文：线格式 v2（第 1 行是列名 `key<TAB>value`），无 BOM。"""
+    lines = ["key\tvalue"] + [f"{key}\t{value}" for key, value in cfg.items()]
+    return "\n".join(lines) + "\n"
 
 
 def build_script(base: Path, stem: str, vertex_count: int,
                  skin: bool = True, suffix: str | None = None,
                  shot: bool = False, physics: bool = True) -> str:
+    """生成 `mmd2max_run.ms`：只注入 CFG 路径，模板原样跟在后面。"""
     template = TEMPLATE.read_text(encoding="utf-8")
-    out_name = stem if suffix is None else f"{stem}_{suffix}"
-
-    # 读取导出阶段写出的 _meta.tsv：若含 SDEF/QDEF，则让 Max 端开启双四元数混合
-    dq = "false"
-    spine_links = 3
-    fingers = 5
-    finger_links = 3
-    # 脚链骨盒的俯仰：默认 true = 踝→球的斜轴（骨盒指回自己的子关节，#40）。
-    # 导出侧若要压平量截面，会把口径写进 meta（foot_pitch=0），这里跟着压平 ——
-    # 两端必须同一个值，否则「按平轴量出来的高度」又被写进斜着的盒子里。
-    foot_pitch = "true"
-    meta_path = base / f"{stem}_meta.tsv"
-    if meta_path.is_file():
-        for line in meta_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if "\t" not in line:
-                continue
-            key, _, val = line.partition("\t")
-            if key == "has_sdef" and val.strip() == "1":
-                dq = "true"
-            elif key == "has_qdef" and val.strip() == "1":
-                dq = "true"
-            elif key == "foot_pitch":
-                foot_pitch = "true" if val.strip() == "1" else "false"
-            elif key == "fingers":
-                try:
-                    fingers = int(val.strip())
-                except ValueError:
-                    fingers = 5
-            elif key == "finger_links":
-                try:
-                    finger_links = int(val.strip())
-                except ValueError:
-                    finger_links = 3
-            elif key == "spine_links":
-                try:
-                    spine_links = int(val.strip())
-                except ValueError:
-                    spine_links = 3
-
-    # 中文名导出文件 -> ASCII 临时副本，避免 MaxScript 读取时按 GBK 解析失败
-    inputs = _ascii_inputs(base, stem, physics)
+    cfg, cfg_path = build_cfg(base, stem, vertex_count, skin=skin, suffix=suffix,
+                              shot=shot, physics=physics)
+    cfg_path.write_text(cfg_text(cfg), encoding="utf-8")
     header = (
-        "/* mmd2max OBJ 装配脚本（自动生成，自包含） */\n"
-        f'MMD2MAX_OBJ = "{inputs["obj"]}"\n'
-        f'MMD2MAX_BONES = "{inputs["bones"]}"\n'
-        f'MMD2MAX_WEIGHTS = "{inputs["weights"]}"\n'
-        f'MMD2MAX_VERTS = "{vertex_count}"\n'
-        f'MMD2MAX_OUTPUT = "{_esc(base / (out_name + ".max"))}"\n'
-        f'MMD2MAX_MAP = "{inputs["biped_map"]}"\n'
-        f'MMD2MAX_MARKER = "{_esc(base / (out_name + ".success.json"))}"\n'
-        f'MMD2MAX_LOG = "{_esc(base / (out_name + "_objrun.log"))}"\n'
-        f'MMD2MAX_DQ = {dq}\n'
-        f'MMD2MAX_SPINE_LINKS = {spine_links}\n'
-        f'MMD2MAX_FOOTPITCH = {foot_pitch}\n'
-        f'MMD2MAX_FINGERS = {fingers}\n'
-        f'MMD2MAX_FINGER_LINKS = {finger_links}\n'
-        f'MMD2MAX_MORPHS = "{inputs["morphs"]}"\n'
-        f'MMD2MAX_PHYSICS = "{inputs["physics"]}"\n'
-        f'MMD2MAX_LIMBS = "{inputs["limbs"]}"\n'
-        f'MMD2MAX_WIDTHS = "{inputs["widths"]}"\n'
-        f'MMD2MAX_SKIN = {"true" if skin else "false"}\n'
-        f'MMD2MAX_SHOT = {"true" if shot else "false"}\n'
-        f'MMD2MAX_SHOTDIR = "{_esc(base / "shots")}"\n'
-        "MMD2MAX_INTERACTIVE = false\n"
-        "MMD2MAX_QUIET = true\n\n"
+        "/* mmd2max OBJ 装配脚本（自动生成）——配置单源（M1b）。\n"
+        "   这份文件只注入 CFG 路径；全部输入/开关都在 MMD2MAX.CFG 里，\n"
+        "   所以手跑 scripts/max_import_obj.ms 与自动跑这一份读到同一份配置。 */\n"
+        f'global MMD2MAX_CFG = "{_esc(cfg_path)}"\n\n'
     )
     return header + template
 
@@ -334,6 +398,19 @@ def handle_dialogs() -> None:
     handle_maxscript_dialog()
 
 
+def failure_note(error_file: Path, cfg_error: Path) -> str | None:
+    """本轮已落盘的失败原因（error.txt 正文），没有则 None。
+
+    两个文件都要查：`<输出名>.success.json.error.txt` 跟着成功标记的名字走，
+    而 CFG 自己没读成时 MaxScript 连 MARKER 都还没拿到，只能落到 CFG 同目录的
+    定名文件 mmd2max_cfg.error.txt（见 max_import_obj.ms 的 mmd2maxErrorFilePath）。
+    """
+    for path in (error_file, cfg_error):
+        if path.is_file():
+            return f"{path}: {path.read_text(encoding='utf-8', errors='replace').strip()}"
+    return None
+
+
 def result_code(base: Path, name_part: str, dialog_seen: bool = False,
                 dialog_path: str | None = None) -> int:
     """把「跑完之后磁盘上有什么」翻译成退出码。只有 0 才允许 GUI 报「完成」。
@@ -345,6 +422,14 @@ def result_code(base: Path, name_part: str, dialog_seen: bool = False,
     error_file = Path(str(marker) + ".error.txt")
     max_file = base / f"{name_part}.max"
     logfile = base / f"{name_part}_objrun.log"
+    note = failure_note(error_file, base / CFG_ERROR_NAME)
+    if note:
+        # 先查 error：标记和场景都在也可能只是「后置步骤（截图/收尾）抛错」。
+        # 这种轮次 .max 可用，但退出码不许报 0，否则 GUI 把半轮说成全绿。
+        log(f"  脚本报错：{note}")
+        if marker.is_file() and max_file.is_file():
+            log(f"  注意：{max_file} 已落盘，但后置步骤抛错（可用但不算全绿）")
+        return 4
     if marker.is_file() and max_file.is_file():
         log(f"完成：{max_file}")
         return 0
@@ -352,9 +437,6 @@ def result_code(base: Path, name_part: str, dialog_seen: bool = False,
     if marker.is_file():
         log(f"  成功标记在，但场景文件缺失：{max_file}（saveMaxFile 没落盘）")
         return 6
-    if error_file.is_file():
-        log(f"  脚本报错：{error_file.read_text(encoding='utf-8', errors='replace').strip()}")
-        return 4
     if dialog_seen:
         log(f"  MAXScript 报错弹窗（截图：{dialog_path}），Max 现场已保留")
         return 3
@@ -449,7 +531,10 @@ def main() -> int:
     marker = base / f"{name_part}.success.json"
     error_file = Path(str(marker) + ".error.txt")
     logfile = base / f"{name_part}_objrun.log"
-    for stale in (marker, error_file, logfile):
+    # CFG_ERROR_NAME 是所有轮次共用的定名文件（那会儿 MARKER 还没读到），不清陈旧
+    # 就会让下一轮把上一轮的配置错误当成自己的失败。
+    cfg_error = base / CFG_ERROR_NAME
+    for stale in (marker, error_file, cfg_error, logfile):
         stale.unlink(missing_ok=True)
 
     # 清理可能残留的旧启动脚本，避免下次 Max 启动误执行
@@ -482,8 +567,9 @@ def main() -> int:
                 dialog_path = dlg
                 log("已捕获报错弹窗截图，停止轮询并保留 Max 现场（你可随时手动截图）。")
                 # 同时尝试读取模板写入的 error.txt（若有更详细的文本）
-                if error_file.is_file():
-                    log(f"error.txt: {error_file.read_text(encoding='utf-8', errors='replace').strip()}")
+                note = failure_note(error_file, cfg_error)
+                if note:
+                    log(f"error.txt: {note}")
                 break
             # UIA 每次要起一个 PowerShell（约 1~2s），所以 3 轮才查一次；
             # 脚本已经在跑（标记都出来了）就不可能再冒启动对话框，直接不查。
@@ -507,8 +593,14 @@ def main() -> int:
                     log(f"标记出现后 {GRACEFUL_EXIT_SECONDS}s 仍未退出，进入收尾")
                     break
             else:
-                if error_file.is_file():
-                    log(f"失败：{error_file.read_text(encoding='utf-8', errors='replace').strip()}")
+                note = failure_note(error_file, cfg_error)
+                if note:
+                    log(f"失败：{note}")
+                    break
+                # 进程已经退出却既没标记也没 error.txt —— 最常见就是 CFG 没读成、
+                # 脚本压根没跑起来。继续等只会白等满 3600 秒，还搭上兜底 taskkill。
+                if proc.poll() is not None:
+                    log("3ds Max 已退出，但本轮没有成功标记也没有 error.txt")
                     break
             time.sleep(5)
         if dialog_seen and not marker.is_file():

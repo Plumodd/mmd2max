@@ -11,17 +11,15 @@
    补偿旋转：OBJ 写 (x, y, -z)，Max 导入器转成 Z-up 后正好等于 (x, z, y)，
    即行列式 -1 的镜像映射 —— 保住「屏幕上的样子」，代价是三角面绕序翻一次。
 
-   必需全局变量（由 tools/obj_run.py 生成的脚本头部提供）：
-   MMD2MAX_OBJ / MMD2MAX_BONES / MMD2MAX_WEIGHTS / MMD2MAX_VERTS
-   MMD2MAX_OUTPUT / MMD2MAX_MAP / MMD2MAX_MARKER / MMD2MAX_LOG
-   MMD2MAX_MORPHS（可选，顶点 morph -> Morpher 通道）
-   MMD2MAX_PHYSICS（可选，刚体/关节 -> 代理与约束）
-   MMD2MAX_LIMBS（可选，Biped 肢段长度表 -> 闭环缩放；缺省则保持 Biped 默认比例）
-   MMD2MAX_WIDTHS（可选，手部粗细表 -> 收缩 Biped 默认过粗的手指）
-   MMD2MAX_SPINE_LINKS（可选，Biped 脊柱节数；缺省 3。MMD 若腰/下半身同点会算出 2）
-   MMD2MAX_FINGERS / MMD2MAX_FINGER_LINKS（可选，Biped 手指节数，按模型实际映射算）
-   MMD2MAX_DQ（可选，是否启用双四元数混合 skin）
-   MMD2MAX_SKIN / MMD2MAX_SHOT / MMD2MAX_SHOTDIR / MMD2MAX_QUIET / MMD2MAX_INTERACTIVE
+   配置（M1b 起单源）：这份脚本只认一个入口 —— 全局变量 MMD2MAX_CFG 指向
+   tools/obj_run.py 写出的 MMD2MAX.CFG。文件里每一项（OBJ/BONES/WEIGHTS/VERTS/
+   OUTPUT/MAP/MARKER/LOG/MORPHS/PHYSICS/LIMBS/WIDTHS/SPINE_LINKS/FINGERS/
+   FINGER_LINKS/FOOTBOXFLAT/SKIN/SHOT/SHOTDIR/QUIET/INTERACTIVE）都由 mmd2maxLoadCfg
+   读进来，缺文件、缺键、值不合法一律抛错中止，绝不退回默认值。
+   MORPHS/PHYSICS/WIDTHS/SHOTDIR 允许是空串 = 该阶段整段跳过；LIMBS 及其余路径
+   为空一律抛错（见 mmd2maxLoadCfg 的空路径校验，名单与 obj_run.py 的 CFG_EMPTY_OK 一致）。
+   手跑（File ▸ Run Script 这份模板）与自动跑（生成的 mmd2max_run.ms 只注入
+   MMD2MAX_CFG 一行）读到的是同一份配置，不可能分叉。
 
    可靠性约定（针对审查项 P0#3 / P0#6 / P1#18）：
    - 权重文件里的骨骼序号是「全局骨骼序号」，必须经由 globalToSkin 映射成 Skin 局部序号；
@@ -30,37 +28,72 @@
    - 只有全部步骤 0 失败，才会写出 success 标记。
 */
 
-fn mmd2maxIsQuiet =
+/* 装配配置全局变量的**声明**（值全部由 mmd2maxLoadCfg 从 MMD2MAX.CFG 写入，
+   这里一个都不给默认值）。声明排在最前面是为了 MAXScript 的解析期绑定：
+   读这些名字的小函数定义得比赋值早，名字先绑成全局才不会撞上 #20 那类
+   「Call needs function or class, got: undefined」。 */
+global MMD2MAX_CFG
+global MMD2MAX_OBJ
+global MMD2MAX_BONES
+global MMD2MAX_WEIGHTS
+global MMD2MAX_MAP
+global MMD2MAX_LIMBS
+global MMD2MAX_WIDTHS
+global MMD2MAX_MORPHS
+global MMD2MAX_PHYSICS
+global MMD2MAX_OUTPUT
+global MMD2MAX_MARKER
+global MMD2MAX_LOG
+global MMD2MAX_SHOTDIR
+global MMD2MAX_VERTS
+global MMD2MAX_SPINE_LINKS
+global MMD2MAX_FINGERS
+global MMD2MAX_FINGER_LINKS
+global MMD2MAX_FOOTBOXFLAT
+global MMD2MAX_SKIN
+global MMD2MAX_SHOT
+global MMD2MAX_QUIET
+global MMD2MAX_INTERACTIVE
+
+/* 下面四个开关：值一定来自 CFG（mmd2maxLoadCfg 已验过是 bool），所以这里**不再**
+   写 try/catch + 默认值。以前那种写法把「配置没读到」和「配置是 false」压成同一个
+   结果 —— 蒙皮被跳过、截图没抓，日志却一句错都没有。 */
+fn mmd2maxIsQuiet = MMD2MAX_QUIET
+
+fn mmd2maxIsInteractive = MMD2MAX_INTERACTIVE
+
+/* 最外层错误处理器专用的交互判定，返回值一定是 bool。为什么不能直接用上面那个：
+   mmd2maxLoadCfg() 自己抛错时 MMD2MAX_INTERACTIVE 还是 undefined，而
+   `if undefined do ...` 会在错误处理器里**再**抛一次 —— 真正的失败原因被
+   「处理器自己炸了」盖掉，屏幕上只剩一个没人点的模态弹窗（用户不在电脑前就是死锁）。
+   判不出来时按非交互处理：配置都没读到，场景里什么都没有，保留现场没有价值，
+   自己退出反而能让上层拿到 error.txt。 */
+fn mmd2maxIsInteractiveNow =
 (
-    local flag = false
-    try ( flag = (MMD2MAX_QUIET == true) ) catch ( flag = false )
-    flag
+    if MMD2MAX_INTERACTIVE == undefined do return false
+    MMD2MAX_INTERACTIVE
 )
 
-fn mmd2maxIsInteractive =
+/* 失败标记文件的路径。正常情况跟着成功标记走；CFG 没读成时 MARKER 还是
+   undefined，就退回 CFG 同目录的定名文件 —— obj_run.py 两边都查（常量
+   CFG_ERROR_NAME），所以「配置错误」这种最早期的失败也能落成磁盘证据。 */
+fn mmd2maxErrorFilePath =
 (
-    local flag = false
-    try ( flag = (MMD2MAX_INTERACTIVE == true) ) catch ( flag = false )
-    flag
+    if MMD2MAX_MARKER != undefined and MMD2MAX_MARKER != "" do
+        return (MMD2MAX_MARKER + ".error.txt")
+    local cfg = ""
+    try ( cfg = MMD2MAX_CFG as string ) catch ( cfg = "" )
+    if cfg == "" do return undefined
+    (getFilenamePath cfg) + "mmd2max_cfg.error.txt"
 )
 
 /* Max 的 Skin 修改器在大网格 + 数百根骨骼下会卡死，
    因此提供开关：为 false 时只导入网格与骨架，不挂蒙皮。 */
-fn mmd2maxSkinEnabled =
-(
-    local flag = true
-    try ( flag = (MMD2MAX_SKIN == true) ) catch ( flag = true )
-    flag
-)
+fn mmd2maxSkinEnabled = MMD2MAX_SKIN
 
 /* 截图开关：装配完成后额外抓一张「线框视口 + 可见骨骼」的 PNG，
-   用于人工核对 Biped 是否贴合模型。默认关闭，避免影响常规装配。 */
-fn mmd2maxScreenshotEnabled =
-(
-    local flag = false
-    try ( flag = (MMD2MAX_SHOT == true) ) catch ( flag = false )
-    flag
-)
+   用于人工核对 Biped 是否贴合模型。 */
+fn mmd2maxScreenshotEnabled = MMD2MAX_SHOT
 
 /* ===== 日志三兄弟必须排在所有调用者之前 =====
    MAXScript 的「空格裸调」是**解析期**绑定的：解析 `f a b` 时如果 f 还没被定义，
@@ -100,6 +133,9 @@ fn mmd2maxLog message =
 
 fn mmd2maxInitLog =
 (
+    /* 调用点紧跟 mmd2maxLoadCfg()，所以这里读到的 globals 一定已验过。
+       以前写成 `(try (MMD2MAX_OBJ) catch ("?"))`：把「配置没读成」打印成一行 `?`，
+       日志照样继续往下走 —— 正是 M1b 要根除的那类「缺配置还能绿」。 */
     try
     (
         if MMD2MAX_LOG != undefined and MMD2MAX_LOG != "" do
@@ -111,9 +147,10 @@ fn mmd2maxInitLog =
                 local ver = "?"
                 try ( ver = (maxVersion()) as string ) catch ( ver = maxVersion as string )
                 format "3ds Max: %\n" ver to:f
-                format "OBJ: %\n" (try (MMD2MAX_OBJ) catch ("?")) to:f
-                format "输出: %\n" (try (MMD2MAX_OUTPUT) catch ("?")) to:f
-                format "期望顶点数: %\n" (try (MMD2MAX_VERTS) catch ("?")) to:f
+                format "配置: %\n" (MMD2MAX_CFG as string) to:f
+                format "OBJ: %\n" (MMD2MAX_OBJ as string) to:f
+                format "输出: %\n" (MMD2MAX_OUTPUT as string) to:f
+                format "期望顶点数: %\n" (MMD2MAX_VERTS as string) to:f
                 close f
             )
         )
@@ -636,6 +673,133 @@ fn mmd2maxCol tbl rowIndex colName =
     if pos > fields.count then "" else fields[pos]
 )
 
+/* ================= 配置单源（M1b）=================
+   装配需要的每一项输入路径与开关，都来自 <输出目录>/MMD2MAX.CFG（线格式 v2：
+   第 1 行 `key<TAB>value`，键名就是下面这些 MMD2MAX_* 全局名）。写这份文件的是
+   tools/obj_run.py，全场唯一一份。
+
+   为什么不让生成脚本在头部逐行注入 global：v3 那份自动生成的 .ms 里有 22 行赋值，
+   于是「自动跑的」和「人手 fileIn 这份模板跑的」是两套配置来源 —— 手跑时少写一个
+   flag（MMD2MAX_FOOTPITCH 就是现成的例子）会摆出**不同的几何**，而两边日志照样全绿。
+   现在手跑只需要设 MMD2MAX_CFG 一个全局变量，其余全从同一个文件读，两条路径不可能分叉。
+
+   这里**没有任何默认值**：缺文件、缺键、值不是 true/false 或不是整数，一律抛错中止。
+   默认值就是那条「日志绿、场景错」的路。 */
+global MMD2MAX_CFG            /* 唯一需要外部注入的变量：CFG 文件路径 */
+global MMD2MAX_CFG_TBL = undefined
+
+fn mmd2maxCfgStr key =
+(
+    if MMD2MAX_CFG_TBL == undefined do
+        throw "还没读 CFG 就取配置了（mmd2maxLoadCfg 必须排在所有装配步骤之前）"
+    local rows = mmd2maxRows MMD2MAX_CFG_TBL
+    local cKey = mmd2maxColPos MMD2MAX_CFG_TBL "key"
+    local cVal = mmd2maxColPos MMD2MAX_CFG_TBL "value"
+    for row in rows do
+    (
+        if row.count >= cVal and row[cKey] == key do return row[cVal]
+    )
+    throw ("MMD2MAX.CFG 里没有键 " + (key as string) + "（配置单源：这里不许有默认值）")
+)
+
+fn mmd2maxCfgBool key =
+(
+    /* 只认 "true"/"false" 两个字面值。写成 1/0、yes/no、True 的一律当错误抛掉：
+       静默退成 false 就等于悄悄改了装配口径。 */
+    local s = mmd2maxCfgStr key
+    if s == "true" do return true
+    if s == "false" do return false
+    throw ("CFG 键 " + (key as string) + " 的值不是 true/false：" + (s as string))
+)
+
+fn mmd2maxCfgInt key low high =
+(
+    /* 整数值 + 取值范围一起验。范围写在装配侧这一处就够了：Python 侧
+       （semantic）负责算出合理值，这里负责拒绝任何越界/非数字的配置。
+       变量名别用 `ok`：那是 MAXScript 保留字，`local ok = ...` 直接编译失败（#20 同款）。 */
+    local s = mmd2maxCfgStr key
+    local digits = #("0","1","2","3","4","5","6","7","8","9")
+    local isNumber = s.count > 0
+    for i = 1 to s.count while isNumber do
+    (
+        local ch = substring s i 1
+        local good = ((findItem digits ch) > 0)
+        if i == 1 and ch == "-" do good = true
+        if not good do isNumber = false
+    )
+    if not isNumber do
+    (
+        local msg = "CFG 键 " + (key as string) + " 的值不是整数："
+        msg = msg + (s as string)
+        throw msg
+    )
+    local value = s as integer
+    if value < low or value > high do
+    (
+        local msg = "CFG 键 " + (key as string) + " 的值 " + (value as string)
+        msg = msg + " 超出允许范围 [" + (low as string) + "," + (high as string) + "]"
+        throw msg
+    )
+    value
+)
+
+/* 读 CFG 并把每一项写进对应的全局变量。调用点只有一个：mmd2maxMain 的第一行。
+   之后各 pass 只读这些 global —— 读不到值就是这里没配齐，会抛而不是用默认值。 */
+fn mmd2maxLoadCfg =
+(
+    local path = ""
+    try ( path = MMD2MAX_CFG as string ) catch ( path = "" )
+    if path == "" do
+        throw "没设 MMD2MAX_CFG。装配的全部配置来自 MMD2MAX.CFG：只注入这一个全局变量即可（见 README 第 4 节）。"
+    if not (doesFileExist path) do throw ("配置文件不存在：" + (path as string))
+    MMD2MAX_CFG_TBL = mmd2maxReadTable path
+    if (mmd2maxRows MMD2MAX_CFG_TBL).count == 0 do
+        throw ("配置文件是空的（没有数据行）：" + (path as string))
+    MMD2MAX_OBJ = mmd2maxCfgStr "MMD2MAX_OBJ"
+    MMD2MAX_BONES = mmd2maxCfgStr "MMD2MAX_BONES"
+    MMD2MAX_WEIGHTS = mmd2maxCfgStr "MMD2MAX_WEIGHTS"
+    MMD2MAX_MAP = mmd2maxCfgStr "MMD2MAX_MAP"
+    MMD2MAX_LIMBS = mmd2maxCfgStr "MMD2MAX_LIMBS"
+    MMD2MAX_WIDTHS = mmd2maxCfgStr "MMD2MAX_WIDTHS"
+    MMD2MAX_MORPHS = mmd2maxCfgStr "MMD2MAX_MORPHS"
+    MMD2MAX_PHYSICS = mmd2maxCfgStr "MMD2MAX_PHYSICS"
+    MMD2MAX_OUTPUT = mmd2maxCfgStr "MMD2MAX_OUTPUT"
+    MMD2MAX_MARKER = mmd2maxCfgStr "MMD2MAX_MARKER"
+    MMD2MAX_LOG = mmd2maxCfgStr "MMD2MAX_LOG"
+    MMD2MAX_SHOTDIR = mmd2maxCfgStr "MMD2MAX_SHOTDIR"
+    /* 空串只允许出现在「这个阶段可以整段跳过」的四项上（WIDTHS/MORPHS/PHYSICS/SHOTDIR）；
+       其余路径为空 = Max 一定打不开，在这里抛，比在导入器里报一句看不懂的错早一整轮。
+       LIMBS 属于必需项：没有肢段表就没有闭环缩放，Biped 会退回默认人体比例。
+       这份名单与 tools/obj_run.py 的 CFG_EMPTY_OK 必须一致。 */
+    for pair in #( #("MMD2MAX_OBJ", MMD2MAX_OBJ), #("MMD2MAX_BONES", MMD2MAX_BONES),
+                   #("MMD2MAX_WEIGHTS", MMD2MAX_WEIGHTS), #("MMD2MAX_MAP", MMD2MAX_MAP),
+                   #("MMD2MAX_LIMBS", MMD2MAX_LIMBS),
+                   #("MMD2MAX_OUTPUT", MMD2MAX_OUTPUT), #("MMD2MAX_MARKER", MMD2MAX_MARKER),
+                   #("MMD2MAX_LOG", MMD2MAX_LOG) ) do
+    (
+        if pair[2] == "" do throw ("CFG 里 " + (pair[1] as string) + " 是空路径")
+    )
+    MMD2MAX_VERTS = mmd2maxCfgInt "MMD2MAX_VERTS" 1 100000000
+    MMD2MAX_SPINE_LINKS = mmd2maxCfgInt "MMD2MAX_SPINE_LINKS" 1 5
+    MMD2MAX_FINGERS = mmd2maxCfgInt "MMD2MAX_FINGERS" 1 5
+    MMD2MAX_FINGER_LINKS = mmd2maxCfgInt "MMD2MAX_FINGER_LINKS" 1 3
+    MMD2MAX_FOOTBOXFLAT = mmd2maxCfgBool "MMD2MAX_FOOTBOXFLAT"
+    MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
+    MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
+    MMD2MAX_QUIET = mmd2maxCfgBool "MMD2MAX_QUIET"
+    MMD2MAX_INTERACTIVE = mmd2maxCfgBool "MMD2MAX_INTERACTIVE"
+    /* 分步拼接，不用行首 `+` 的跨行表达式：MAXScript 会把这种续行当成新语句。 */
+    local cfgMsg = "配置来自 " + (path as string)
+    cfgMsg = cfgMsg + "（" + ((mmd2maxRows MMD2MAX_CFG_TBL).count as string) + " 项）"
+    cfgMsg = cfgMsg + " 顶点 " + (MMD2MAX_VERTS as string)
+    cfgMsg = cfgMsg + " 脊柱 " + (MMD2MAX_SPINE_LINKS as string)
+    cfgMsg = cfgMsg + " 手指 " + (MMD2MAX_FINGERS as string) + "x" + (MMD2MAX_FINGER_LINKS as string)
+    cfgMsg = cfgMsg + " 脚盒压平轴=" + (MMD2MAX_FOOTBOXFLAT as string)
+    cfgMsg = cfgMsg + " 蒙皮=" + (MMD2MAX_SKIN as string)
+    mmd2maxLog cfgMsg
+    true
+)
+
 fn mmd2maxImportObj =
 (
     mmd2maxLog ("导入 OBJ：" + (MMD2MAX_OBJ as string))
@@ -795,33 +959,23 @@ fn mmd2maxSpineLinks =
 (
     /* Biped 脊柱节数：必须和 Python 侧算出的映射一致。
        MMD 里「腰/下半身」常在同一坐标，去重后只剩 3 级躯干 -> 只要 2 节脊柱；
-       若仍按 3 节创建，会多出一节没人用的 Bip001 Spine2。 */
-    local n = 3
-    try ( n = MMD2MAX_SPINE_LINKS as integer ) catch ( n = 3 )
-    if n < 1 do n = 1
-    if n > 5 do n = 5
-    n
+       若仍按 3 节创建，会多出一节没人用的 Bip001 Spine2。
+       值来自 CFG，范围已在 mmd2maxCfgInt 验过（1..5）—— 这里不再 clamping：
+       把越界的配置悄悄夹回范围内，等于替模型编一个它没有的脊柱节数。 */
+    MMD2MAX_SPINE_LINKS
 )
 
 fn mmd2maxFingerCount =
 (
     /* Biped 建几根手指：由 Python 侧按模型实际映射算出来（本模型只有 3 指）。
        若仍按默认 5 指建，多出来的 Finger2/Finger4 会停在 Biped 默认位置戳出手掌。 */
-    local n = 5
-    try ( n = MMD2MAX_FINGERS as integer ) catch ( n = 5 )
-    if n < 1 do n = 1
-    if n > 5 do n = 5
-    n
+    MMD2MAX_FINGERS
 )
 
 fn mmd2maxFingerLinks =
 (
     /* 每根手指几节：本模型每指 2 节（０/１）。 */
-    local n = 3
-    try ( n = MMD2MAX_FINGER_LINKS as integer ) catch ( n = 3 )
-    if n < 1 do n = 1
-    if n > 3 do n = 3
-    n
+    MMD2MAX_FINGER_LINKS
 )
 
 fn mmd2maxFigureMode ctrl flag =
@@ -1042,18 +1196,18 @@ fn mmd2maxWrap180 d =
    长度轴不靠猜、也不在现场量（摆位之后父→子的方向已经被我们写成 PMX 方向了，
    量出来必然等于 PMX，是循环论证）—— 用 `肢段` 拟合那一步的实测结果：
    「缩这根轴能把父→子距离改掉」就是长度轴的操作定义，且它发生在任何摆位之前。 */
-global MMD2MAX_LENAXIS = true
 global MMD2MAX_LENAXIS_MAP = #()
 
 fn mmd2maxLenAxisOf nm =
 (
-    /* 查这根骨的长度轴号（1/2/3）；没记账或开关关掉 ⇒ 0 = 退回「三根轴挑最顺的那根」。
+    /* 查这根骨的长度轴号（1/2/3）；没记账 ⇒ 0 = 退回「三根轴挑最顺的那根」。
        只有「恰好一个子关节」的骨会被记账（见 mmd2maxFitSegments）：Pelvis 有三个子
        （Spine + 两条腿，实测给 轴1 而复核给 轴2）、Hand 有五个子，它们的「长度」
        不是一个方向，记进去就会把躯干/骨盆一起带跑（#16 #17 的地盘）。
        定义必须排在 mmd2maxLogStructDir / mmd2maxStructErr 之前：MAXScript 在解析期
-       绑定裸调，写在后面就是 #20 那个「Call needs function or class, got: undefined」。 */
-    if not MMD2MAX_LENAXIS do return 0
+       绑定裸调，写在后面就是 #20 那个「Call needs function or class, got: undefined」。
+       M1b 删掉了 MMD2MAX_LENAXIS 这个开关：没有任何一条路径会把它写成 false，
+       留着它就等于留着一条从没跑过、也就从没验过的分支。 */
     if nm == undefined do return 0
     for e in MMD2MAX_LENAXIS_MAP do
     (
@@ -1318,10 +1472,11 @@ fn mmd2maxShoeTip limbs name =
 )
 
 /* 脚链骨盒的俯仰（#37 引入，#39 压平过，#40 翻回斜轴，#41 又压平）：
-   true = 盒子按 PMX「踝 -> 球」的**三维**方向斜插；false = 压成水平。
-   现在这个值由**导出侧**经 obj_run.py 注入（meta.tsv 的 `foot_pitch`），因为量截面
-   的轴在 Python 那边：两端必须同一个值，否则「按平轴量出来的高度」被写进斜着的
-   盒子（或反过来），第十四轮之前就栽过一次不同源。
+   MMD2MAX_FOOTBOXFLAT = true 把盒子压成**水平**轴，false 按 PMX「踝 -> 球」的三维方向斜插。
+   这个值由**导出侧**一处定（`mmd2max/export_obj.py: FOOT_BOX_FLAT`），经 meta 的
+   `foot_box_flat` 原样进 MMD2MAX.CFG 到这里（M1b 起链上没有取反）。量截面的轴在
+   Python 那边：两端必须同一个值，否则「按平轴量出来的高度」被写进斜着的盒子
+   （或反过来），第十四轮之前就栽过一次不同源。
    第十五轮压平（#39）之后用户立刻看见后果（#40）：子关节 Toe0 的 pivot 被 段校验
    钉在 PMX 球部（踝 z=7.53、球 z=1.94），轴一压平，骨盒就不再经过球部 —— 骨轴和
    「指向自己子关节」差 29.93 度。上面「画线/偏航」两行比的是同一个压平后的目标，
@@ -1342,17 +1497,17 @@ fn mmd2maxShoeTip limbs name =
      和 #40/#41 的接趾同时成立。于是默认翻回压平，代价是 链向 按构造读 29.93 度
      （水平轴的定义，不是断链），真判据换成新加的 盒隙（父盒前端面到子关节沿轴的
      距离 + 子关节须落在端面矩形内）。
-   单独打开这份 .ms（没有注入头）时默认 true = 斜轴，与第十六轮逐字一致 ——
-   实跑永远走注入头（导出侧 MMD2MAX_FOOT_FLATTEN=true ⇒ foot_pitch=0 ⇒ false）。
-   **回滚**：导出侧 `MMD2MAX_FOOT_FLATTEN = false` ⇒ 写方向与读方向一起回到斜轴，
+   这个值**不在这份脚本里定**：导出侧 `mmd2max/export_obj.py: FOOT_BOX_FLAT` 是唯一
+   开关，值原样经 meta 的 `foot_box_flat` → MMD2MAX.CFG 的 `MMD2MAX_FOOTBOXFLAT` 到这里
+   （M1b 起中间不再取反，也不再有「单独打开这份脚本时默认斜轴」那条分叉 —— 现在
+   没有 CFG 就直接中止）。
+   **回滚**：翻导出侧那一个词 ⇒ 量截面与画骨盒一起回到斜轴；
    再加上 `MMD2MAX_FOOTREACH = false` 就退回第十六轮那根牙签。 */
-global MMD2MAX_FOOTPITCH
-if MMD2MAX_FOOTPITCH == undefined do MMD2MAX_FOOTPITCH = true
 
 fn mmd2maxBoxWantDir name headPos tailPos shoeTip =
 (
     /* 骨盒「该指哪」= PMX 的 tail - head。脚链单独规定**取哪两个点**，
-       俯仰归 MMD2MAX_FOOTPITCH 管：
+       俯仰归 MMD2MAX_FOOTBOXFLAT 管（true = 压成水平轴，与导出侧量截面用的是同一根轴）：
        11:11 那一版把脚链压成水平，是因为当时转角一扎 30 度就把**子关节一起拖到
        地里**（用户：「两边的脚也没有落在地面上，Y没有90度」）。那个因早就没了：
        肢段长度已按 |踝->球| 闭环（第十二轮 `段校验 L Foot -> L Toe0 实际=11.2281
@@ -1367,8 +1522,9 @@ fn mmd2maxBoxWantDir name headPos tailPos shoeTip =
        余量里，只剩 1.53055 那一小条 —— 「前端差 5.6cm」是量错了高度，不是压平的错。
        按真实摆位重新量以后，盒高要 8.7 才够到鞋底，斜轴容不下（盒底顶穿鞋底 5.74cm、
        盒角从脚后跟后面戳出 2.7cm），压平才容得下，同时正好回到 #28 那句「平踩地面」。
-       所以轴的口径由导出侧 `MMD2MAX_FOOT_FLATTEN` 一处定，经 meta.tsv 的 foot_pitch
-       注入到这里；两端必须同一个值，否则 Python 按平轴量出来的高度，Max 又斜着摆。
+       所以轴的口径由导出侧 `FOOT_BOX_FLAT` 一处定，经 meta 的 foot_box_flat → CFG 的
+       MMD2MAX_FOOTBOXFLAT 到这里；两端必须同一个值，否则 Python 按平轴量出来的高度，
+       Max 又斜着摆。
        偏航与 #26 的读数两种口径都不变（水平分量还是同一个方向、长度也还是原长，
        复核表靠 `length want` 判短骨 stub）。
        地面保护改写成**斜度上限**：脚骨从踝到球物理上不可能陡过 45 度，超过就判
@@ -1383,7 +1539,10 @@ fn mmd2maxBoxWantDir name headPos tailPos shoeTip =
     if isToe and shoeTip != undefined do raw = shoeTip - headPos
     local horiz = sqrt (raw.x * raw.x + raw.y * raw.y)
     if horiz < 0.001 do return undefined
-    if not MMD2MAX_FOOTPITCH do return [raw.x, raw.y, 0.0] * ((length raw) / horiz)
+    /* 极性直读：CFG 里 true = 压平 ⇒ 这里就压平，和导出侧 FOOT_BOX_FLAT 同真同假。
+       （M1b 前这里是 `if not MMD2MAX_FOOTPITCH`，值又从 foot_pitch 反过一次，
+       一条链上三次取反，翻开关的人数不清最终摆哪根轴。） */
+    if MMD2MAX_FOOTBOXFLAT do return [raw.x, raw.y, 0.0] * ((length raw) / horiz)
     if (abs raw.z) > horiz do return undefined
     raw
 )
@@ -2506,12 +2665,12 @@ fn mmd2maxFitSegments root limbs axis method =
         local desired = item[3]
         local pnode = getNodeByName (root.name + (substring parentName 7 -1)) exact:true
         local cnode = getNodeByName (root.name + (substring childName 7 -1)) exact:true
-        /* mode=flat 的脚段**不参与长度缩放**：脚骨保持 Biped 默认尺寸才对得上鞋宽/鞋厚，
-           它的长度由「脚趾伸出鞋尖」决定，硬缩会把脚压成小盒子（早期版本的老毛病）。 */
-        local isFlat = (item.count >= 5 and item[5] == "flat")
-        if isFlat or pnode == undefined or cnode == undefined or axis == 0 then
+        /* M1b 删掉了 `mode == "flat"` 这条豁免：导出侧从不写 flat（_limb_rows 只发
+           link / leg / foot 三种），留着它就是一条从没跑过、也就从没验过的分支。
+           脚段的长度本来就要缩（`段校验 L Foot -> L Toe0` 是第十轮以来的实读）。 */
+        if pnode == undefined or cnode == undefined or axis == 0 then
         (
-            if not isFlat do failCount += 1
+            failCount += 1
         )
         else
         (
@@ -3190,9 +3349,17 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        此时量到的距离必然等于目标长度，缩放因子就是 1.0（等于没缩）——上一版就是
        栽在这里：骨骼网格仍是默认人体比例，于是小臂/小腿被缩成一小点、手掌接在大臂上。
        现在改为：默认姿势下先按真实段长把每节拉到位（闭环实测），再去摆位。 */
-    local limbs = #()
-    try ( limbs = mmd2maxReadLimbs (MMD2MAX_LIMBS as string) ) catch ( limbs = #() )
+    /* 这里不再包 try/catch：以前读表失败会被吞成「肢段表条目：0」，然后走下面那句
+       「跳过肢段拟合」——骨架保持 Biped 默认比例，日志却一句错都没有。肢段表是拟合的
+       唯一事实来源，读不到/读空就是这一轮不成立，直接抛。 */
+    local limbs = mmd2maxReadLimbs (MMD2MAX_LIMBS as string)
     mmd2maxLog ("肢段表条目：" + (limbs.count as string))
+    if limbs.count == 0 do
+    (
+        local msg = "肢段表为空或读不到：" + (MMD2MAX_LIMBS as string)
+        msg = msg + "（没有肢段表就没有闭环缩放，Biped 会保持默认人体比例）"
+        throw msg
+    )
 
     /* 骨盘的子段（L/R Thigh、Spine）把目标长度改写成「离 COM 锚点的距离」。
        为什么必须改：骨盆 pivot 只跟 COM 走，闭环又把 COM 抬到**髋中点**（不是 PMX 腰）。
@@ -3228,12 +3395,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         scaleMethod = probed[2]
         if scaleAxis > 0 do mmd2maxFitSegments root limbs scaleAxis scaleMethod
     )
-    if limbs.count == 0 do mmd2maxLog "未读到肢段表，跳过肢段拟合（骨架比例将保持 Biped 默认）。"
+    if scaleAxis == 0 do mmd2maxLog "未探到可用的长度轴，跳过肢段拟合（骨架比例将保持 Biped 默认）。"
 
     /* 手部粗细：Biped 默认手指远比网格粗，按网格实测半径收缩横截面。
-       必须放在肢段拟合之后——拟合用的 setTransform #scale 会整组覆盖 scale。 */
-    local widths = #()
-    try ( widths = mmd2maxReadWidths (MMD2MAX_WIDTHS as string) ) catch ( widths = #() )
+       必须放在肢段拟合之后——拟合用的 setTransform #scale 会整组覆盖 scale。
+       这项是纯外观（不改关节位置），所以文件缺失=按默认粗细继续，但表头缺列照抛。 */
+    local widths = mmd2maxReadWidths (MMD2MAX_WIDTHS as string)
     if widths.count > 0 do
     (
         local wid = mmd2maxApplyWidths root widths
@@ -3529,7 +3696,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     /* ===== 足盒接趾（#41）：链已经摆完，最后把骨盒的**远端面**拉到 PMX 脚掌 =====
        用户两张对照图：左边 = 第十六轮（一根斜牙签从踝往下探，趾骨盒悬在它前方），
        右边 = 一块落地的厚盒子，趾方块贴它的正面。牙签的「细」由 足背截面 管（#37，
-       按 MMD2MAX_FOOT_FLATTEN 量到的是踝→鞋底 clearance，不再是被逐带取紧的 2.32），
+       按导出侧 FOOT_BOX_FLAT 量到的是踝→鞋底 clearance，不再是被逐带取紧的 2.32），
        「悬空」这一段以前**没人管**：肢段拟合跑在摆位之前、判据又是两 pivot 的三维
        间距（11.228），盒前端却只到 7.935 —— 差的 3.29cm 就是图里那块空气。
        为什么排在这里而不是 脚趾两段 里：这里的长度轴与踝 pivot 都是**转角和收尾之后**
@@ -3626,8 +3793,9 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             if fnode != undefined and cnode != undefined and toeTgt != undefined \
                and ankleTgt != undefined do
             (
-                /* 判据与转角 pass 逐字同源：两根脚骨都比**三维**结构方向
-                   （Foot = 踝->球、Toe0 = 球->网格鞋尖），压不压平全看 MMD2MAX_FOOTPITCH。
+                /* 判据与转角 pass 逐字同源：两根脚骨都比同一个 mmd2maxBoxWantDir 给的
+                   方向（Foot = 踝->球、Toe0 = 球->网格鞋尖），压不压平全看
+                   MMD2MAX_FOOTBOXFLAT（true = 压成水平轴，与导出侧 FOOT_BOX_FLAT 同真同假）。
                    #28 那版在这里压平是为了让「刚修平的脚」读出 0 度，代价是盒子被钉成
                    水平的板、前端离趾骨盒还差 5.6cm 高（第十二轮藏网格特写拍到）。
                    地面保护统一收在 mmd2maxBoxWantDir 的 45 度斜度上限里；Toe0 这一行
@@ -3725,8 +3893,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     (
         local pnode = getNodeByName (root.name + (substring item[1] 7 -1)) exact:true
         local cnode = getNodeByName (root.name + (substring item[2] 7 -1)) exact:true
-        local isFlat = (item.count >= 5 and item[5] == "flat")
-        if pnode != undefined and cnode != undefined and not isFlat do
+        if pnode != undefined and cnode != undefined do
         (
             local got = mmd2maxSegLen pnode cnode
             local err = abs (got - item[3])
@@ -4118,12 +4285,15 @@ fn mmd2maxApplySkin meshes boneNodes =
     mmd2maxLog ("读取权重行数：" + (wlines.count as string))
     -- 顶点数取自网格对象本身（见上方 meshVertexCount），不用 skinOps.GetNumberVertices
     local vertexCount = meshVertexCount
-    local expected = 0
-    try ( expected = MMD2MAX_VERTS as integer ) catch ( expected = 0 )
+    /* 期望顶点数直接来自 CFG（mmd2maxCfgInt 已保证是正整数）。
+       M1b 前这里是 `try ( MMD2MAX_VERTS as integer ) catch ( expected = 0 )` 再加
+       `if expected > 0 and …`：配置没读到时 expected=0，整条顶点数校验被静默跳过，
+       权重照样按序号写进去 —— 正是「日志绿、场景错」的那类写法。 */
+    local expected = MMD2MAX_VERTS
 
     /* 审查项 P1#18：顶点数必须严格一致，否则权重按顶点序号写会整体错位。
        这里直接抛错，而不是只告警。 */
-    if expected > 0 and vertexCount != expected do
+    if vertexCount != expected do
         throw ("网格顶点数 " + (vertexCount as string) + " 与期望 " + (expected as string) + " 不一致，权重可能错位，已中止。")
     if wlines.count != vertexCount do
         throw ("权重行数 " + (wlines.count as string) + " 与网格顶点数 " + (vertexCount as string) + " 不一致，已中止。")
@@ -4190,39 +4360,14 @@ fn mmd2maxApplySkin meshes boneNodes =
             mmd2maxLog ("权重进度：" + (i as string) + "/" + (wlines.count as string))
     )
 
-    /* v2 交叉验证改进：SDEF/QDEF 顶点的形变质量。
-       PMX 的 SDEF 是球面混合蒙皮、QDEF 是双四元数蒙皮；我们导出时按 LBS 近似
-       （与 Blender MMD Tools 的处理一致），但 Max 的 Skin 修改器自带双四元数(DQ)
-       混合，可在不重新蒙皮的前提下显著改善肘/膝“糖果纸塌陷”。
-       这里在权重写完后开启 DQ 混合（默认 0.7，可微调）。用 hasProperty 探测不同
-       Max 版本的属性名，try/catch 包裹，绝不影响主流程。 */
-    local dqWanted = false
-    try ( dqWanted = (MMD2MAX_DQ == true) ) catch ( dqWanted = false )
-    if dqWanted then
-    (
-        try
-        (
-            local dqVal = 0.7   -- 0=纯线性, 1=纯双四元数；0.7 兼顾体积保真与膝肘自然度
-            if hasProperty skinMod #dqBlend then
-            (
-                skinMod.dqBlend = dqVal
-                mmd2maxLog ("已开启 Skin 双四元数混合（dqBlend=" + (dqVal as string) + "）。")
-            )
-            else if hasProperty skinMod #useDQ then
-            (
-                skinMod.useDQ = true
-                mmd2maxLog "已开启 Skin 双四元数混合（useDQ=true）。"
-            )
-            else
-            (
-                mmd2maxLog "本版本 Skin 修改器未暴露双四元数属性，跳过 DQ（退回纯 LBS）。"
-            )
-        )
-        catch
-        (
-            mmd2maxLog ("开启双四元数混合异常（不影响已写入的蒙皮权重）：" + (getCurrentException() as string))
-        )
-    )
+    /* M1b 删掉了「按 meta 的 has_sdef/has_qdef 开启 Skin 双四元数混合」这一段。
+       理由不是 DQ 没用，而是这段从没被执行过：跑过的五个模型全是 has_sdef=0，
+       于是 `dqBlend` / `useDQ` 这两个属性名到底存不存在、写了以后肘膝到底变不变，
+       一次都没实测过；而它整段被 try/catch 兜住，真出错也只留一行日志。
+       留着 = 一条「配置能打开、却没人验过」的分支，正是 v4 契约第 V 条要清掉的东西。
+       SDEF/QDEF 的处理口径保持既有的事实：导出侧按近似 LBS 写权重，并在导出摘要里
+       明确提示会丢旋转中心与体积保真（mmd2max/export_obj.py 的 warnings）。
+       真要做 DQ，先写探针量一次属性名与效果，再作为一条有读数的 pass 加回来。 */
 
     enableSceneRedraw()
     local weightElapsed = ((timeStamp() - weightStart) / 1000.0) as string
@@ -4709,6 +4854,9 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
 
 fn mmd2maxMain =
 (
+    /* 配置必须第一个读：后面每一步（含日志落哪、.max 存哪）都依赖它。
+       读不到就抛，整轮中止 —— 绝不带着默认值继续摆。 */
+    mmd2maxLoadCfg()
     mmd2maxInitLog()
     mmd2maxPrepareScene()
     mmd2maxImportObj()
@@ -4803,14 +4951,21 @@ catch
 (
     local message = getCurrentException()
     mmd2maxLog ("错误：" + message)
+    /* 这一段自己绝对不能再抛：它是失败路径上唯一的取证手段。
+       mmd2maxErrorFilePath 在 CFG 都没读成时会退回 <CFG 目录>\mmd2max_cfg.error.txt，
+       所以上层（tools/obj_run.py 的 CFG_ERROR_NAME）两种文件名都要查。 */
     try
     (
-        local errorFile = createFile (MMD2MAX_MARKER + ".error.txt") encoding:#utf8
-        format "%\n" message to:errorFile
-        close errorFile
+        local errorPath = mmd2maxErrorFilePath()
+        if errorPath != undefined do
+        (
+            local errorFile = createFile errorPath encoding:#utf8
+            format "%\n" message to:errorFile
+            close errorFile
+        )
     )
     catch ()
-    if mmd2maxIsInteractive() do
+    if mmd2maxIsInteractiveNow() do
     (
         try ( messageBox ("转换失败：\n" + message) title:"mmd2max 失败" ) catch ()
     )
@@ -4819,7 +4974,7 @@ catch
        那一下又给 Max 记一次异常终止，下次启动就弹崩溃对话框。
        真·报错弹窗（没被这里 catch 住的）走的是另一条路：obj_run 捕获到弹窗
        会保留 Max 现场，不杀掉。 */
-    if not mmd2maxIsInteractive() do
+    if not mmd2maxIsInteractiveNow() do
     (
         mmd2maxLog "失败：写完成 error.txt 后 quitMax 退出（现场已在日志与 error.txt 里）。"
         try ( quitMax quiet:true ) catch ( try ( quitMax ) catch () )

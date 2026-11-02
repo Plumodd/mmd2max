@@ -85,6 +85,15 @@ spec 具名列；MAXScript 只写、只回读。v3 里 `widths.tsv`（手掌/手
 | --- | --- | --- |
 | M1 | 线格式 v2：每个 spec 第一行是列名表头，单一 Python writer，MAXScript 建 name→index 后按列名取值；去掉 `bones.tsv` 与 `香菱_bones.tsv` 双份 | 第十七轮的判据数字逐位不变 |
 | M1b | 配置单源：25 个 `MMD2MAX_*` 注入项收成一个 cfg 块 + `MMD2MAX.CFG`；缺块即 abort；删死 flag（`MMD2MAX_LENAXIS`）、`mode=="flat"` 死分支、从没走到的 DQ 分支；`foot_pitch` 三重反转改一条直读 | 手跑 .ms 与自动跑几何**不可能**不一致 |
+
+**实跑记录**：M1 ✅（对 v3 第十七轮基线）；M1b ✅（第十九轮 `baselines/round19_objrun.log`）。
+判据是 `python tools/diff_round.py --allow "^配置:" <基线> <本轮日志>` ⇒ exit 0：
+17→19 与 18→19 都**只剩 M1b 新增的那一行「配置: …MMD2MAX.CFG」**，其余全是时间、耗时与路径。
+这个对比器本身是新写的（`tools/diff_round.py` + `tests/test_diff_round.py`），因为手写 sed 裁
+时间戳在这台机器上会把整份日志读成「全变了」（时间戳不补零 + 分隔符回显与字节不一致）；
+写它时又抓出它自己两个**会造成漏判**的缺陷（吃掉非时间戳行的行头、把 `累计误差=0.224741`
+的小数部分当字节数遮掉），已用三处注入变异复核。细节见
+[README_HANDOVER.md §7 第 24 条](file:///C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03/README_HANDOVER.md)。
 | M2 | 目标值全部搬到 Python + `verdicts.tsv`（phase/check/bone/expected/actual/tol/status/stale，ASCII）+ Python 侧报告校验器（schema、覆盖率、容差） | 任何 FAIL 或缺覆盖 ⇒ 退出码非 0 |
 | M3 | pass 注册表：`requires/writes/invalidates/gate_check/max_iters` 数据化，runner 拓扑排序 + 陈旧断言；收敛循环的退出条件从"撞 3 遍上限"改成"判据真达标" | 第十七轮实测：三遍的落位最大值 5.6995 一动不动、方向超标 4→5→5，是靠上限退出的，"尝试=0 ⇒ 方向达标"从来不成立 |
 | M4 | 真回读验收：蒙皮用 `skinOps.GetVertexBoneIDsAndWeights`，骨盒用节点世界包围盒，落位/转角用 `biped.getTransform`，Morpher 用通道名；`biped.saveFigFile` 快照 + 超差 `loadFigFile` 回滚 + 记 FAIL | 判据全部来自回读，写入侧计数不再参与验收 |

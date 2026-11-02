@@ -26,9 +26,31 @@ from mmd2max import export_obj  # noqa: E402
 # 基线里只有这 6 类文件；morphs/physics 第十七轮没落盘，不进回归范围。
 BASELINE_GLOB = "{stem}_*.tsv"
 
+# 已定价的**格式**变更白名单（只对 meta.tsv 生效，逐条打印出来，绝不静默放过）。
+# M1b 把「脚的俯仰口径」从三重反转（导出侧 MMD2MAX_FOOT_FLATTEN → meta 的 foot_pitch
+# 取反 → Max 端 MMD2MAX_FOOTPITCH 再 `if not`）压成一条直读 `foot_box_flat`：
+# 键名换了、极性也换了，所以 `foot_pitch 0`（0 = 不俯仰 = 压平）与 `foot_box_flat true`
+#（true = 压平）是**同一个几何**的两个写法。白名单只认这一对，别的任何变化照旧判失败。
+META_RENAMES = {("foot_pitch", "0"): ("foot_box_flat", "true")}
+
 
 def read_lines(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def rename_meta_keys(lines: list[str]) -> tuple[list[str], list[str]]:
+    """把基线 meta 的旧键按白名单写成新键，返回（改写后的行, 改写了哪几行的说明）。"""
+    out, notes = [], []
+    for line in lines:
+        key, _, value = line.partition("\t")
+        hit = META_RENAMES.get((key.strip(), value.strip()))
+        if hit is None:
+            out.append(line)
+            continue
+        new_key, new_value = hit
+        out.append(f"{new_key}\t{new_value}")
+        notes.append(f"{key}={value} -> {new_key}={new_value}")
+    return out, notes
 
 
 def load_scale(baseline_dir: Path, stem: str) -> float:
@@ -84,6 +106,10 @@ def main(argv: list[str]) -> int:
             bad += 1
         body = [ln for ln in new_lines[1:] if not ln.startswith("#")]
         data = [ln for ln in old_lines if not ln.startswith("#")]
+        if old.name.endswith("_meta.tsv"):
+            data, notes = rename_meta_keys(data)
+            for note in notes:
+                print(f"  [白名单改写] {old.name}: {note}")
         if body == data:
             print(f"  [数字不变] {old.name:<24} 数据 {len(body):>6} 行")
             print(f"      表头: {header}")
@@ -95,8 +121,8 @@ def main(argv: list[str]) -> int:
               f"行数 {len(data)} -> {len(body)}")
         print(f"      旧: {data[diff] if diff < len(data) else '<无此行>'}")
         print(f"      新: {body[diff] if diff < len(body) else '<无此行>'}")
-    print("\n结论：" + ("M1 验收通过 —— 只有表头是新增的，数据逐位不变。"
-                        if not bad else f"M1 未通过：{bad} 个文件的数据行发生变化。"))
+    print("\n结论：" + ("M1/M1b 验收通过 —— 只有表头与白名单改名是新增的，数据逐位不变。"
+                        if not bad else f"M1/M1b 未通过：{bad} 个文件的数据行发生变化。"))
     return 0 if not bad else 1
 
 

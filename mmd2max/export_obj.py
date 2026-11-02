@@ -771,7 +771,7 @@ FOOT_BOX_FWD_FRAC = 0.7067    # 往前伸到这么多段长（Biped 自己钉的
 #      （香菱的鞋是靴子，靴口在踝上方 0.8cm，靴筒一直往上到 17cm）。
 #   3) 宽只许**盒子里面**的网格投票：量带变成一个更宽的横条，香菱的裙摆顶点
 #      （离轴 +136cm）会混进来把宽从 3.71 撑到 8.44（比整只鞋 6.41 还宽、左右差 2.2）。
-MMD2MAX_FOOT_HEELBOX = True
+FOOT_HEELBOX = True
 
 # 脚的轴俯仰开关：**只管轴的俯仰**，true ⇒ 第十五轮那只水平轴 + 高 8.66 的盒子，
 # false ⇒ 轴按 PMX「踝->球」的三维方向斜插（第十六轮 = 一根斜牙签）。
@@ -797,8 +797,9 @@ MMD2MAX_FOOT_HEELBOX = True
 # 水平轴的定义，不是断链；真正的判据换成新加的 盒隙（父盒前端面到子关节沿轴的距离 +
 # 子关节须落在端面矩形内）。README 第 22/23 条记的是同一笔账。
 # 轴一翻，Max 端的「写方向」也必须跟着翻，否则「量截面」和「画盒子」又不同源 ——
-# 这条经 meta.tsv 的 `foot_pitch` 传给 obj_run.py，由它注入 MMD2MAX_FOOTPITCH。
-MMD2MAX_FOOT_FLATTEN = True
+# 这一个词是唯一开关：值原样写进 meta 的 foot_box_flat，再由 obj_run 搬进 MMD2MAX.CFG，
+# Max 侧读到的 bool 与这里写的 bool 同真同假（M1b 起中间不再取反）。
+FOOT_BOX_FLAT = True
 
 
 def _toe_sections(pts, faces, ball, ux, uy, t_hi, x_half, z_cap, planes):
@@ -886,9 +887,9 @@ def _foot_link_box(pts, ankle, ball, heelbox=None, flatten=None):
         所以小腿在脚踝上方继续延伸的那些面不会被误当成鞋面来收紧判据。
     """
     if heelbox is None:
-        heelbox = MMD2MAX_FOOT_HEELBOX
+        heelbox = FOOT_HEELBOX
     if flatten is None:
-        flatten = MMD2MAX_FOOT_FLATTEN
+        flatten = FOOT_BOX_FLAT
     ax, ay, az = ankle
     bx, by, bz = ball
     dx, dy, dz = bx - ax, by - ay, bz - az
@@ -1696,12 +1697,12 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         # 有这两个数才能一眼判断是导入器吞了顶点，还是权重表写错了。
         f"vertex_count\t{len(positions)}",
         f"dropped_verts\t{dropped_verts}",
-        # #40：量骨盒截面用的轴（0=水平投影、1=踝→球三维斜轴）必须和 Max 端
-        # 转角用的轴**同一个值**，否则「按斜轴量的截面」被写进压平的盒子。
-        # obj_run.py 把它注入成 MMD2MAX_FOOTPITCH。默认 1 = 斜轴 = 骨盒指回自己
-        # 的子关节（链通）；翻成 0 只是把第十五轮那只框住脚跟的盒子调回来，代价
-        # 是 Toe0 的起始轴离 Foot 末端 29.93 度（#40 那句抱怨）。
-        f"foot_pitch\t{0 if MMD2MAX_FOOT_FLATTEN else 1}",
+        # #40/#41：脚链骨盒的轴俯仰口径。导出侧按哪根轴量截面，Max 端就必须按同一根
+        # 轴写骨盒，否则「按水平轴量出来的高度」被塞进斜插的盒子里。
+        # 这里直接写**字面值** true/false（不写 0/1、不反转）：obj_run 原样搬进
+        # MMD2MAX.CFG，MAXScript 按 bool 读，一条链上没有任何取反（M1b 之前
+        # FOOT_BOX_FLAT→foot_pitch→FOOTPITCH→`if not` 连反三次，翻开关的人数不清自己翻到哪儿了）。
+        f"foot_box_flat\t{'true' if FOOT_BOX_FLAT else 'false'}",
     ]
 
     plan.positions = positions
@@ -1889,11 +1890,15 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
             warnings.append(f"{empty} 个顶点导出为空权重行（兜底后仍无法映射）。")
             raise PMXError(f"导出发现 {empty} 个空权重顶点，已中止以避免静默丢失权重。")
 
-    # ---- 元数据（供 Max 端决定开启双四元数混合 / 绕序等）----
+    # ---- 元数据（装配口径见 MMD2MAX.CFG：obj_run.py 按这份 meta 生成）----
     meta_path = outdir / f"{source.stem}_meta.tsv"
     _write_lines(meta_path, plan.meta_lines)
     if "SDEF" in model.deform_types or "QDEF" in model.deform_types:
-        print("  [提示] 含 SDEF/QDEF 顶点：Max 端将自动开启 Skin 双四元数混合以改善形变。")
+        # 诚实提示：Max 端那段「按 has_sdef 开双四元数混合」在 M1b 删掉了 —— 跑过的
+        # 五个模型全是 has_sdef=0，那段从没执行过，留着只是看着安心。真遇到 SDEF 模型
+        # 时这句是唯一会说「形变口径和源文件不一样」的地方，别把它删了。
+        print("  [提示] 源模型含 SDEF/QDEF 骨，但 Max 端按普通线性混合装配"
+              "（双四元数分支已在 M1b 删除，meta 里的 has_sdef/has_qdef 目前无人读取）。")
 
     # ---- 材质清单（扩展字段，供将来 Max 端构建更完整的材质）----
     materials_path = outdir / f"{source.stem}_materials.tsv"

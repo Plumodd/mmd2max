@@ -96,6 +96,7 @@ mmd2max_v3_src_2026-11-01/
 │   ├── run_model.py      # ★★ 一键：模型目录 → 导出 → 生成 .ms（--gen-only，不启动 Max）→ 体检
 │   ├── gui.py            # ★★ 调参台：build_plan 即时数字对照 + 三视图预览 + ①导出②生成脚本③跑 Max
 │   ├── obj_run.py        # 生成 mmd2max_run.ms；驱动 Max 轮询/截图（不传 --gen-only 才动进程）
+│   ├── diff_round.py     # ★ 两轮日志归一对比（判「重构有没有动几何」就靠它，别手搓 sed）
 │   ├── uia_dialog.py     # UIA 读写启动弹窗：按**确切按钮名** Invoke（Qt 弹窗没有子 HWND，坐标法点不准）
 │   ├── check_ms.py       # MAXScript 静态体检（保留字/括号/字符串/if-do-else/localTime/续行）
 │   ├── make_ascii_copy.py# 中文名导出件 → ASCII 副本
@@ -132,8 +133,35 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 | `<名>_widths.tsv` | `biped_target width` —— Biped 默认手指比网格粗得多，按此收缩横截面 |
 | `<名>_morphs.tsv` | `row_kind morph_index morph_name morph_name_en morph_panel morph_type item_count_or_flag`，`@V vertex_index offset_x offset_y offset_z` 为其顶点明细 |
 | `<名>_physics.tsv` | `row_kind rigid_index rigid_name rigid_name_en rigid_bone rigid_group rigid_nocollide_mask rigid_shape rigid_size_* rigid_pos_* rigid_rot_* rigid_mass rigid_move_damping rigid_rotation_damping rigid_repulsion rigid_friction rigid_physics_mode`，`@JOINT joint_*` 为关节明细；尺寸与位置同 `scale`；骨序号已映射到保留骨 |
-| `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_pitch` —— `obj_run.py` 据此注入 `MMD2MAX_SPINE_LINKS/FINGERS/DQ` |
+| `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_box_flat` —— 装配侧只取 `spine_links fingers finger_links foot_box_flat` 四个键，写进 `MMD2MAX.CFG`；**缺任一个键 = 直接中止**（不接受默认值，见 §4b） |
 | `<名>_materials.tsv` | `index name texture alpha spec_* sphere_* draw_flags` —— **Max 侧目前没有任何读取点**（#56 待删） |
+
+## 4b. 配置单源：`MMD2MAX.CFG`（M1b）
+
+生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 21 个输入与开关
+全部从 `test_runs/<模型名>/MMD2MAX.CFG` 读（同样是线格式 v2：第 1 行 `key<TAB>value`）。
+键名 = MAXScript 全局名，两边同一套词，没有任何映射表可写错：
+
+`MMD2MAX_OBJ / BONES / WEIGHTS / MAP / LIMBS / WIDTHS / MORPHS / PHYSICS / OUTPUT / MARKER / LOG /
+VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTDIR / INTERACTIVE / QUIET`
+
+规则（违反任何一条都在 **Python 侧**就中止，不留到 Max）：
+
+- **没有默认值**。`mmd2maxLoadCfg` 读不到文件、缺键、值不合法一律 `throw`；
+  以前「缺 `spine_links` 退回硬编码 3」就是 v4 要根除的那类「配置有默认值」——日志全绿、几何是另一套。
+- **允许空串的只有 `MMD2MAX_MORPHS` / `MMD2MAX_PHYSICS` / `MMD2MAX_WIDTHS`**（该阶段整段跳过）；
+  其余路径为空 = 抛错。这份名单在 `obj_run.CFG_EMPTY_OK` 与 Max 端 `mmd2maxLoadCfg` 各写一次，
+  由 `test_maxscript_contract.ConfigSingleSourceContract` 钉住两边一致。
+- **值写字面量**：bool 写 `true/false`（不再 `0/1` 再取反——`FOOT_BOX_FLAT→foot_pitch→FOOTPITCH→if not`
+  曾连反三次），路径写原始反斜杠（转义是 `.ms` 那层 `mmd2maxCfgStr` 的事，不污染数据文件）。
+- **自检**：`obj_run.build_cfg` 断言 CFG 的键集合 == `CFG_KEYS`；`test_obj_run_guard.CfgContractTests`
+  反向从 `.ms` 里 grep 出所有 `mmd2maxCfgStr|Bool|Int "MMD2MAX_*"` 调用，要求与 CFG 覆盖同一份名单
+  （两套独立实现，任一边漏一个键就红）。
+- **CFG 读失败也留证据**：错误写进 `mmd2max_cfg.error.txt`（此时 `MMD2MAX_MARKER` 还没值，
+  所以不能用 `<标记>.error.txt`）；`obj_run` 认这个文件，退出码 4，GUI 不许报「完成」。
+
+手跑 `scripts/max_import_obj.ms` 与自动跑 `mmd2max_run.ms` 现在读到的是**同一份** CFG，
+所以「手动 fileIn 摆出不同几何」这条路在结构上不存在了。
 
 
 ---
@@ -152,11 +180,21 @@ python -m mmd2max.export_obj "<pmx>" "<outdir>" [scale|auto] [min_weight] \
 #   full = 保留全部骨（v1 行为）；humanoid = 只留标准人形骨
 #   accessory = 附属骨链根的挂法：跟随 MMD 层级 / 挂到几何最近的 Biped
 
-# 3) Max 端装配（会 resetMaxFile 并 taskkill 3dsmax.exe —— 先征询用户！）
+# 3) Max 端装配（resetMaxFile 只作用于它自己新起的实例；跑完脚本末尾 quitMax）
 python tools/obj_run.py <导出目录> <模型名> --shot [--physics] [--no-skin] [--manual] [--gen-only]
+
+# 4) 判「这一轮有没有动几何」——用工具，别手搓 sed 裁时间戳
+python tools/diff_round.py --allow "^配置:" baselines/round18_objrun.log test_runs/<模型名>/<模型名>_objrun.log
 ```
 
 `--shot` 抓正/顶视图线框图到 `<导出目录>/shots/<输出名>_front.png`、`_top.png`（`<输出名>` = 模型名，带 `--no-skin`/`--physics` 时含 `_noskin`/`_phys` 后缀）。
+
+**关于「先征询用户」**：2026-11-02 起用户已长期授权直接启动 3ds Max（理由：`obj_run` 新起的实例不会杀掉别的
+Max 进程，也不点任何弹窗）。仍然成立的硬约束有两条 ——
+① **MAXScript 报错弹窗只截图、绝不点、绝不关**（把现场留给用户看），
+② 只有 `Startup Failure` / `Heads Up` 这两个**启动**弹窗按 UIA **确切按钮名**点白名单那一个，
+`Restore Factory Settings…` 永远不碰。`taskkill /F` 只是 `quitMax` 没生效时的兜底（它会污染 Max 的崩溃计数，
+攒够就每次启动弹崩溃框，把 `-U MAXScript` 自动执行整个挡死）。
 
 ### 5.1 图形界面（调参优先用它，别反复跑 CLI）
 
@@ -219,6 +257,8 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
 - **网格跟的是 PMX 的 `tail - head`，不是「head → 下一个 head」（#27）**：PMX 每根骨自带 head 和 tail，**显示方向 = tail − head**，网格是照着它做的，用户眼里的「结构」就是它；而脚本只把 pivot 摆到 head，Biped 画出来的段是 head → 下一节的 head，**这两个方向是不是同一个只有量局轴才知道**（`#pos` 摆位、`段校验` 距离、`校验 … 偏差` 落位全都答不了方向）。离线按 `香菱_bones.tsv` 算过：手指链其实**是同一个方向**（左中指１ 的 tail 就是左中指２ 的 head，PMX 手指按 head-to-tail 串），躯干链也是（上半身2 的 tail = 首 的 head ⇒ 画出来倾 +17.42°，与 PMX 结构倾完全一致）。所以这张表真正的用途是判一件事：**骨盒到底跟不跟 pivot 转** —— 全表读 0 度 = 跟，用户的抱怨就落在别处（0.5cm 落位差 / 掌心 / 白锥）；手指或躯干读出大夹角 = 不跟（#26 的脚骨正是这个机制），那时要修的是**转角**，而转角的写法已经查到手了（Max 自带脚本用的是 `#rotation` + 全局 quat，见上面 §6 Biped 那条），脚本里仍然不猜死：探针在临时骨架上现场选写法、`转角 pass` 只在探针通过时才动真骨架。三类天生不可比的段要知道：`Bip001 L/R Hand`（一父带五子，方向没定义）、掌心跨度（腕→各指根，PMX 里没这根骨）、`Bip001 Spine`（PMX 下半身 骨指向下、Biped 段指向上，预测差 169.9°）。可量的拆法是把三维夹角投影到两个面 —— `mmd2maxLeanDeg v = atan2 v.y v.z`（矢状面，+ 后仰 / − 前倾）与水平偏航 `atan2 v.y v.x`；三维夹角会把「后仰 17°」和「绕竖轴转 17°」混成同一个数，读了也没法对着截图讲。
 - **但「显示方向 = tail − head」对脚链不成立，一刀切会把脚转进地里（11:11 之后用户反馈）**：香菱 `足首` 的 tail 就是**踩地点**（`左足首` head z=7.53、tail z=1.94，比踝低 5.59cm），三维方向天生下扎 30°；`つま先` 的 tail 又从踩地点**竖直向上 7.66cm**（和上面那条 `指先` stub 同一个约定）。转角 pass 照着 tail−head 转完，`转角 Bip001 L Foot 夹角=30.5448->0.0`、`结构向 … 目标倾=-120.042` —— 骨盒从原来的水平（`实测倾=-90`）被拧成插进地板，趾盒竖直朝天，用户看到的正是「两边的脚也没有落在地面上，Y没有90度」。**修法 = 脚链单独定判据**（`mmd2maxBoxWantDir`）：`* Foot` 用 PMX 来向的**水平投影**（偏航原样保住，#26 修好的外八不会丢；俯仰钉成 ±90），`* Toe0` 用**网格实测鞋尖**的水平投影（PMX 那根是竖直 stub，没有方向信息）；压不出水平分量时返回 `undefined` = 这根骨整段跳过并打一行「转角不做」。转角、`结构向` 复核、`画线` 复核三处**必须共用这一个判据**，否则「脚修平了、复核仍报它 30 度」，下一轮就会照着那个数把地又踩穿。`mmd2maxFlatDir` 返回时保留原长度，因为 `结构向` 靠 `length want < 1.0` 判短骨 stub，单位化会把脚误判成 stub 而**静默不计入超标**。
   > **⚠️ 这条的「压平」半边第十三轮翻掉、第十五轮翻回来、第十六轮（#40）又翻回去（见 §7 第 19~22 条）**：第十三轮的理由是「压平留下骨盒被钉成踝高度的水平板、前端离趾骨盒差 5.6cm 高」—— 第十四轮回读证明那只账记错了对象：盒子本来就 84.8% 挂在轴下方，是 Python 按对称量把它压成 1.53cm 的牙签板，与俯仰无关。按真实摆位重算后盒高要 8.66 才够到鞋底，斜轴容不下（盒底顶穿鞋底 5.74cm、盒角从脚后跟后面戳出 2.7cm），**压平才装得下**，同时正好回到 #28 那句「平踩地面」—— 于是第十五轮压平。**#40 把这一半又翻回来了，因为压平有一个没被任何校验看见的代价：骨盒的底面永远垂直于骨轴，轴一压平，盒子就不再指向自己的子关节**（踝→球 的俯仰是 29.93°，压平后 `链向 Bip001 L Foot -> L Toe0 骨轴与子关节夹角` 会读 29.93 度、垂距 5.59cm = 踝比脚掌高出的那一截）。所以现在的口径 = **脚链用踝→球的三维方向（斜轴）**，`mmd2maxBoxWantDir` 里 `if not MMD2MAX_FOOTPITCH` 那一支降级成回滚位；45 度斜度上限继续留着（斜度陡过 45 度判成「tail 是关节/踩地点约定」）。**开关从这一个变成两个，各管各的**：`MMD2MAX_FOOT_HEELBOX` 管「高/量带」（False ⇒ 第十四轮的对称内切），`MMD2MAX_FOOT_FLATTEN` 专管轴的俯仰（True ⇒ 第十五轮那个框住脚跟、但链断开的水平板）；`meta.tsv: foot_pitch` 现在只写 `MMD2MAX_FOOT_FLATTEN` 的反值。**仍然成立的两半**：脚链必须单独规定「取哪两个点」（Toe0 用网格实测鞋尖，PMX 那根是竖直 stub），以及三处判据必须同源、`want` 必须保留原长度。
+  >
+  > **（#41 更正 + M1b 改名，这段是本节的当前口径）**：① 上面「现在的口径 = 斜轴」已经被 **#41 又翻回压平**，理由是「平轴必断链」的前提（盒子沿轴的长度改不了）被探针推翻 —— 长度轴乘 k 时盒远端与子节点同步乘 k，所以 Max 端 `足盒接趾` 能把平轴那只厚盒子的前端面拉到 PMX 球部，链就接上了。**当前默认 = 压平（`foot_box_flat = true`），而 `盒隙结论 没接上=0 根` 才是这一版脚链的真判据**（见 §6 第 3 条）。② 这一节里的开关名在 M1b 之后全部作废，改名对照：**`MMD2MAX_FOOT_HEELBOX` → 导出侧 `FOOT_HEELBOX`**（管高/量带，未进 CFG）；**`MMD2MAX_FOOT_FLATTEN`（导出侧）+ `meta.tsv: foot_pitch` + `MMD2MAX_FOOTPITCH`（Max 端注入）三层 → 一个词 `FOOT_BOX_FLAT` → `meta.tsv: foot_box_flat` → CFG `MMD2MAX_FOOTBOXFLAT`**，同向不反转；`MMD2MAX_FOOTREACH` / `MMD2MAX_GAPTOL` 仍是 Max 端全局（M1b 只合并了「每条链上都参与取反」的那三个，其余留在脚本内）。翻回滚位现在意味着改 `mmd2max/export_obj.py` 里那一个词然后**重跑导出**，因为 CFG 是由 meta 生成的，直接编辑 `MMD2MAX.CFG` 会被下一次导出踩掉。
 - **骨盒「指不指向自己的子关节」是 pivot 落位与两点距离永远量不出来的（#40，项目记忆里「恒等式校验看不见偏航」的第二次）**：`段校验 Foot -> Toe0 误差=6.7e-06`、`校验 Bip001 L Foot 偏差=6.5e-06`、`脚趾复摆 摆后=1.9e-06` 三行在第十五轮全绿，而用户截图里 Toe0 的盒子明摆着没接上 Foot 的盒子末端 —— 因为 **link 的末端天生就是子关节的 pivot**（Biped 的 IK 结构保证），量它等于量自己；被转走的是**画出来的盒子**，它躺在 `mmd2maxBoxWantDir` 返回的那根轴上，而那一轮所有脚相关的复核（`转角` / `画线` / `结构向` / `脚骨偏航结论`）比的目标**也是同一根压平的轴**。修法不是再补一条日志，是换一个**独立**的量：`链向 <Foot> -> <Toe0>` 拿 `mmd2maxBipedAxes fnode` 三根局轴各自与 `cnode.transform.translationpart - fnode.transform.translationpart` 求夹角、取最小，>3 度记一根「断开」，并打 `链向结论 断开=N 根（门槛 3.0 度）`。这个量**不许**调 `mmd2maxBoxWantDir`（调了就又变成自己跟自己比），契约测试 `test_foot_chain_continuity_readback_targets_the_real_child` 钉住这一点。
 - **不用开 Max 就能核实场景里到底有哪些节点名**（回答「这根骨叫什么」这类问题够用）：`.max` 末尾的 `Objects` 汇总段把每个节点名写成 `00 <len:int32LE> <UTF-8 字节>`，用 UTF-8 解码即可（`香菱.max` 190854000 附近）。三条踩过的坑：① `grep -I` 会因为二进制直接跳过整个文件；② **别拿 GBK 解** —— 那是 UTF-8 字节当 GBK 读，`右腕` 会变成 `鍙宠厱`，看着像乱码其实文件是好的（本轮差点据此报一个「附属骨全名乱码」的假缺陷）；③ 名字在文件里另有 UTF-16 形式（节点实体段），两处计数不同不代表名字有问题。实测 11:11 那具场景里 `Bip001 L Clavicle` 与 `Bip001 R Clavicle` 都在、就是这俩名（`左肩/右肩` 是 PMX 骨名，脚本只给 BoneGeometry 改名，Biped 节点名一律保留：`if (classOf nodes[i]) != BoneGeometry do continue`），全场景没有任何名为 `FGGG` 的对象，`WeaponL`/`WeaponR` 是模型自带的两根 ASCII 名附属骨（挂在左右手臂链上）。
 - **`指先` 骨是模型自己的显示 stub，不是结构**：香菱共 10 根（左右各 5，全部没有 Biped 映射），实测每根的 `tail - head = (0, 0, +7.656)` —— 笔直朝 **+Z（正上方）穿出指尖 7.66cm**，而真指节只有 1.37~2.62cm；`左中指先` 的 head 就等于 `左中指３` 的 tail。用户截图里那些**白锥**就是它们（我们按 PMX 原样做成 BoneGeometry），黄色 Biped 指链停在最后一节的 pivot 上。所以「手指对不上白锥」不能当成指链转角的证据 —— 白锥本身就不沿着手指；判手指贴合要拿**指链 vs 网格轮廓**（新的 `hand_side` / `hand_front` 特写）。09:37 的局轴表进一步说明黄节自己也偏：`结构向 Bip001 L Finger1 轴1 … 实测倾=179.988 差偏航=4.16593`、`… Finger4 轴1 … 实测倾=179.988 差偏航=-15.6435 夹角=13.5473` —— 骨盒笔直朝下、各指水平还差 4°~16°，而白锥笔直朝上，两者本来就该分叉，用户「手指没贴合」看到的正是这条分叉，不能拿白锥当方向基准。
@@ -446,10 +486,38 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
     - 静态：`check_ms [OK]`、`Ran 273 tests OK (skipped=1)`。改动：新增 `FootReachContract` 6 条（不许调任何不存在的盒体积 API / 接趾目标必须是 PMX 球部 / 读数与写法用同一根手柄 / **接趾必须在收尾重摆与脚趾复摆之后**且自带第二次复摆 / `盒隙` 量面不量轴且不许出现 `mmd2maxBoxWantDir` / 开关只声明一次），`FootHeelBoxHandoffTests` 与 `FootLinkBoxTests` 按「默认平轴」改口并各自钉住回滚位。
     - ⇒ **#41 结案（三件事各有中线，图与数一致）**。#39 与 #40 从「互斥」改判为「同时成立」。**#12 的视觉验收仍开着** —— 这一版脚链是不是用户要的结构，只有他能判。
 
+24. **M1b「配置单源」落地（2026-11-03 01:57 第十九轮，香菱，退出码 0，`香菱.max` 191111168 字节落盘，Max 自行 `quitMax`，无弹窗）：注入的 22 个 global 收成一个 `MMD2MAX_CFG`，缺配置改成中止而不是退回默认**。
+
+    - **为什么非做不可**：v3 在生成的 `.ms` 头部逐行注入 22 个 `global MMD2MAX_*`，于是「自动跑的」与「人手 `fileIn scripts/max_import_obj.ms` 的」是**两套配置来源** —— 手跑漏一个 flag 就摆出不同的几何，两边日志照样全绿；另一半是「默认值就是那条日志绿、场景错的路」：旧 `read_meta` 缺 `spine_links` 退 3、缺 `foot_pitch` 退 true，每一次退都改变几何，而改变本身**不留任何一行日志**。现在 `.ms` 头部只有 `global MMD2MAX_CFG = "<路径>"` 一行，其余 21 项全从 `<目录>/MMD2MAX.CFG`（线格式 v2，键名 = MAXScript 全局名）读，两条路径共用同一份文件，结构上不可能分叉。
+    - **缺块 = 中止，不是退回**：CFG 文件读不到、缺键、值不合法，Python 侧 `build_cfg` / `read_meta` 直接 `SystemExit`；Max 端 `mmd2maxLoadCfg` 一律 `throw`。允许空串的只有 `MMD2MAX_MORPHS` / `MMD2MAX_PHYSICS` / `MMD2MAX_WIDTHS`（该阶段整段跳过），名单在 `obj_run.CFG_EMPTY_OK` 与 Max 端各写一次；`MMD2MAX_LIMBS` 以前被 `try` 包着、读不到就打一行「未读到肢段表」继续跑（= Biped 保持默认人体比例的静默几何错误），现在路径非空校验 + `limbs.count == 0` 都抛错。
+    - **删掉的死分支**：`global MMD2MAX_LENAXIS`（没有任何路径会写 false，留着就是一条从没跑过也从没验过的分支）、`mode=="flat"`、双四元数（DQ）分支；`FOOT_BOX_FLAT → meta foot_pitch → MMD2MAX_FOOTPITCH → if not` 那**三重反转**压成一条直读 `MMD2MAX_FOOTBOXFLAT`（值写字面量 `true/false`，不写 0/1、不取反）。契约测试 `LengthAxisContract` / `StructDirectionContract` 钉住「声明区 0 个带值的 `global MMD2MAX_*`、正好 22 个裸声明」「`mmd2maxLenAxisOf node` 恰好 3 个读点」「`_code(SCRIPT)` 里不许再出现 `MMD2MAX_FOOTPITCH`」。
+    - **CFG 读失败也得能报出来（本轮补的真缺陷）**：外层 `catch` 原来写 `MMD2MAX_MARKER + ".error.txt"` —— 而 `MMD2MAX_MARKER` 恰恰是 CFG 才填得上的，配置一失败这里就 `undefined + string` 二次抛错，本轮连一行错误文本都留不下；`if MMD2MAX_INTERACTIVE do …` 同理是 `if undefined`。新增 `mmd2maxErrorFilePath()`（MARKER 有就用它，否则退到 CFG 同目录的 `mmd2max_cfg.error.txt`）与 `mmd2maxIsInteractiveNow()`（undefined ⇒ false）。`obj_run` 配套：清理陈旧文件时一起删 `mmd2max_cfg.error.txt`、轮询里认它并 break（原来只有标记/弹窗两条出口，配置失败会空转到 3600 秒再被 `taskkill /F`，把崩溃计数弄脏）、`result_code` 把 **error 文件排在 marker/.max 之前**（脚本报错绝不允许因为 .max 恰好落了盘就返回 0）。
+    - **两侧名单互相独立核对**：`test_obj_run_guard.CfgContractTests.test_cfg_covers_every_key_the_maxscript_reads` 从 `.ms` 里 grep 出全部 `mmd2maxCfgStr|Bool|Int "MMD2MAX_*"` 调用，与 `obj_run.CFG_KEYS` 求集合相等；`build_cfg` 另断言生成的键集合 == `CFG_KEYS`。任一边漏一个键，红的都是这一条而不是几何。
+    - **静态**：`check_ms [OK]`（非严格债 64 条，见 #54）、`Ran 297 tests OK (skipped=2)`。顺手修了 `check_ms.strip_comments` 的**行号错位**（整段注释替换成等长空格时没保留 `\n`，报「行 553」实际在 720）—— 改成 `_blank_out` 只把非换行符变空白。
+    - **第十九轮读数（`baselines/round19_objrun.log`）**：与 `round18_objrun.log` 逐行 diff（先剥掉行首时间戳），**实质差异只有一行** `配置: …\MMD2MAX.CFG`，其余四行是耗时抖动。再与 v3 的 `round17_objrun.log` 对照（额外归一 `mmd2max_v3/v4_src_…` 路径与「X.X 秒」）：**同样只剩那一行新增** ⇒ M1 与 M1b 两步都判为几何中性，一次都没改变验收读数。不许退的账全部逐位相同：`Biped 肢段拟合 成功=39 失败=0 累计误差=0.224741`、`Biped 摆位 成功=30 失败=0 节点缺失=0 髋中点残余偏差=2.6226e-06`、`收敛 转角尝试=39+3+3 改善=45 未改善=0 抛错=0`、`盒隙结论 没接上=0 根`、`权重写入 已写入顶点 18892 失败顶点 0`、`Skin 内骨骼数 321`、`.max` 字节数与第十八轮一致。
+    - **比对用的归一命令（下一轮照抄，别再手工裁时间戳）**：
+      `python tools/diff_round.py --allow "^配置:" baselines/round18_objrun.log test_runs/香菱/香菱_objrun.log`
+      ⇒ exit 0 = 除放行名单外没有实质差异；exit 1 = 有，并把每一处 +/- 列出来。
+      手写 sed 在这台机器上踩过两种坑（都写进了 `tools/diff_round.py` 的文件头）：① 时间戳**不补零**，
+      同一份日志里它的字符数会变（晚 11 点那轮比下午那轮多一个字符），按固定宽度裁一定裂；
+      ② 日期分隔符的**字节是 `0x2F`（斜杠）、终端回显成短横线**，照着显示写 `^[0-9]{4}` 后面接短横线
+      就**静默不匹配** —— 不报错、只是什么都没剥，于是整份 413 行日志被读成「全变了」；
+      第十九轮第一次核对真的就是这么错的，`list(Path(f).read_bytes()[i:i+20])` 才给出真相。
+      本工具的剥离规则只认「四位年 + 任意非数字分隔 + 月 + 日 + 空格 + 时:分:秒」，与分隔符和补零无关。
+    - **写这个对比器时抓出它自己的两个缺陷**（都有测试钉住：`tests/test_diff_round.py`）：
+      ① 剥离规则最初是「行首两个非空格 token」，于是 `香菱.max 191111168 字节` 这种不以时间戳开头的行
+      也被吃掉行头 —— 两行不同的日志能塌成同一行 ⇒ **漏判**；改成必须先认得出「日期+时间」才动手。
+      ② 屏蔽字节数最初用「单词边界 + 6 位以上数字」，它把 `累计误差=0.224741` 的小数部分
+      也一起遮成 `<N>` —— **正好遮掉「证明重构没动几何」所依赖的那个读数**，
+      这是本项目最不能犯的错（验收层自己就变成恒等式）；
+      改成前后都不许挨着数字或小数点。改完用三处注入变异复核：把 `累计误差` / `转角…改善` / `失败顶点`
+      各改一个数字，三次都必须报实质差异 —— 确认这台判据不是永远说「没变化」。
+    - **仍然欠着的（不算缺陷，是明账）**：`MMD2MAX_FOOTREACH = true` / `MMD2MAX_GAPTOL = 0.5`（`max_import_obj.ms:2309`）还是脚本内硬赋值的全局，没进 CFG —— M1b 只合并了「每条链上都参与取反」的那三个开关，这两个没有反转链、手跑与自动跑读到的是同一个字面量，所以不构成本轮那个分叉；但它们仍是「翻开关要改 .ms」，归 #52/#56 一起收。`meta.tsv` 里的 `has_sdef` / `has_qdef` 从 M1b 起**没有任何读点**（导出侧已改为如实打印「按普通线性混合装配」的提示），归 #56 删。
+
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
 2. `足盒缩后 … 本地 min/max` 的竖直比例必须还是 15.2 : 84.8（`FootHeelBoxHandoffTests` 钉的四个数）；换了 Max 版本若这个比例变了，那四个常量（`FOOT_BOX_*`）要跟着重新回读，不能猜。
-3. **`盒隙 <Foot> -> <Toe0> … 端面覆盖=true` 且 `盒隙结论 没接上=0 根` 是这一版脚链的唯一真判据（#41）**。`链向 … 骨轴与子关节夹角` 现在**按构造读 29.9 度、`断开=2 根` 是预期**（压平水平轴的定义），别再拿它当成绩也别拿它当回归 —— 它只在 `MMD2MAX_FOOT_FLATTEN=false`（斜轴回滚位）时才该回到 ≤3 度。两行一起看才知道口径：`画线 … 目标` 的 z 分量 =0 ⇒ 平轴（#41 默认），≠0 ⇒ 斜轴。
+3. **`盒隙 <Foot> -> <Toe0> … 端面覆盖=true` 且 `盒隙结论 没接上=0 根` 是这一版脚链的唯一真判据（#41）**。`链向 … 骨轴与子关节夹角` 现在**按构造读 29.9 度、`断开=2 根` 是预期**（压平水平轴的定义），别再拿它当成绩也别拿它当回归 —— 它只在 `FOOT_BOX_FLAT=false`（斜轴回滚位，M1b 前叫 `MMD2MAX_FOOT_FLATTEN`）时才该回到 ≤3 度。两行一起看才知道口径：`画线 … 目标` 的 z 分量 =0 ⇒ 平轴（#41 默认），≠0 ⇒ 斜轴。
 4. 老账不动：`脚骨偏航结论 骨=0.0 趾=0.0`、`段校验 Foot -> Toe0 ≤0.05`、`脚趾复摆 摆后 ≤0.01`（注意 `起始偏差` 在**接趾之后**会跳到 2.2cm 量级，那是盒被拉长的必然，复摆能收回去；收不回去才是回归）、`结构向 复核 夹角>3.0度=6`。
 5. 仍开着的：#12 视觉验收（脚链三件事各有中线，等用户判这一版）、#27（Spine2 后仰 / 颈前倾 / 手指贴合）、#29（锁骨 0.955 已定价）、#35（用户拖 `Bip001 L Toe0` 的实测）、`foot_top` 被裙摆挡住不可用、`meta.tsv` 的 `has_sdef/has_qdef` 恒 0。
 

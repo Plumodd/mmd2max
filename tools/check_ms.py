@@ -45,10 +45,17 @@ RESERVED = {
 }
 
 
+def _blank_out(match: "re.Match") -> str:
+    """注释整段变空白，但**换行必须留着**：早先用 `" " * len(...)` 把块注释里的
+    换行也吃成空格，于是报出来的行号从第一处块注释起一路往前偏 —— 实测真实第 720
+    行报成「行 553」。这个工具的用处就是让人照着行号去找代码，号不对等于没有。"""
+    return "".join(ch if ch == "\n" else " " for ch in match.group(0))
+
+
 def strip_comments(src: str) -> str:
     """把注释替换成等长空白，保持行号不变。"""
-    src = re.sub(r"/\*.*?\*/", lambda m: " " * len(m.group(0)), src, flags=re.S)
-    src = re.sub(r"--[^\n]*", lambda m: " " * len(m.group(0)), src)
+    src = re.sub(r"/\*.*?\*/", _blank_out, src, flags=re.S)
+    src = re.sub(r"--[^\n]*", _blank_out, src)
     return src
 
 
