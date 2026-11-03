@@ -58,7 +58,7 @@ def main():
         (dst / f"{ascii_stem}.mtl").write_text(mtl_text, encoding="utf-8")
 
     # TSV：原样复制（数值列无编码问题；骨骼名可能显示为乱码但不影响装配）
-    for suffix in ("_bones.tsv", "_weights.tsv", "_materials.tsv", "_biped_map.tsv"):
+    for suffix in ("_bones.tsv", "_weights.tsv", "_biped_map.tsv"):
         f = src / f"{stem}{suffix}"
         if f.is_file():
             shutil.copy2(f, dst / f"{ascii_stem}{suffix}")

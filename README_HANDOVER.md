@@ -130,7 +130,7 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 
 | 文件 | 列名（= 文件第 1 行） |
 | --- | --- |
-| `<名>.obj` / `.mtl` / `textures/` | 数值为 **`(x, y, −z)` Y-up**；面绕序已翻一次；`vt u (1−v)` |
+| `<名>.obj` / `.mtl` / `textures/` | 数值为 **`(x, y, −z)` Y-up**；面绕序已翻一次；`vt u (1−v)`；材质只交 `.mtl`，Max 端 `#maxOpsFileOp.loadMaterials` 直接吃，没有别的旁路清单 |
 | `<名>_bones.tsv` | `idx bone_name parent role biped_target head_x head_y head_z tail_x tail_y tail_z skin_flag max_parent`（Z-up，13 列；`role` ∈ skeleton/control/morph；`max_parent` −1 表示按 `parent` 挂） |
 | `<名>_biped_map.tsv` | `bone_index biped_node pmx_bone_name` —— **biped 唯一路径，缺条目 = Max 侧直接抛错** |
 | `<名>_weights.tsv` | `vertex_index bone_weight_pairs`，第 2 列是变长的 `骨序号:权重` 对（序号是**全局骨序号**，Max 侧必须经 `globalToSkin` 映射） |
@@ -139,7 +139,6 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 | `<名>_morphs.tsv` | `row_kind morph_index morph_name morph_name_en morph_panel morph_type item_count_or_flag`，`@V vertex_index offset_x offset_y offset_z` 为其顶点明细 |
 | `<名>_physics.tsv` | `row_kind rigid_index rigid_name rigid_name_en rigid_bone rigid_group rigid_nocollide_mask rigid_shape rigid_size_* rigid_pos_* rigid_rot_* rigid_mass rigid_move_damping rigid_rotation_damping rigid_repulsion rigid_friction rigid_physics_mode`，`@JOINT joint_*` 为关节明细；尺寸与位置同 `scale`；骨序号已映射到保留骨 |
 | `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_box_flat` —— 装配侧只取 `spine_links fingers finger_links foot_box_flat` 四个键，写进 `MMD2MAX.CFG`；**缺任一个键 = 直接中止**（不接受默认值，见 §4b） |
-| `<名>_materials.tsv` | `index name texture alpha spec_* sphere_* draw_flags` —— **Max 侧目前没有任何读取点**（#56 待删） |
 
 判据的三张表（M2b/M2c，同在 `test_runs/<模型名>/`，ASCII 定名、不带模型前缀）：
 

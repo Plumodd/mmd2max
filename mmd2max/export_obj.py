@@ -8,7 +8,6 @@
     <name>.obj / <name>.mtl   网格、UV、法线、材质分组
     <name>_bones.tsv          骨骼：序号 名称 父序号 头坐标 尾坐标 [skin标志]
     <name>_weights.tsv        权重：顶点序号 <tab> 骨骼:权重 <tab> ...
-    <name>_materials.tsv      材质与贴图路径（含透明度/高光等扩展字段）
     <name>_tex/               贴图副本（保留原始子目录，避免同名冲突）
 
 坐标约定：全部在 `mmd2max/coords.py`（唯一事实来源）。要点：MMD 是左手系、Max 是
@@ -1767,7 +1766,6 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
         <name>_limbs.tsv          Biped 肢段长度表
         <name>_widths.tsv         Biped 手部粗细表
         <name>_meta.tsv           给 Max 端的数字汇总
-        <name>_materials.tsv      材质清单
     """
     scale = plan.scale
     model = plan.model
@@ -1900,21 +1898,14 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
         print("  [提示] 源模型含 SDEF/QDEF 骨，但 Max 端按普通线性混合装配"
               "（双四元数分支已在 M1b 删除，meta 里的 has_sdef/has_qdef 目前无人读取）。")
 
-    # ---- 材质清单（扩展字段，供将来 Max 端构建更完整的材质）----
-    materials_path = outdir / f"{source.stem}_materials.tsv"
-    with materials_path.open("w", encoding="utf-8") as stream:
-        stream.write("index\tname\ttexture\talpha\tspec_r\tspec_g\tspec_b\t"
-                     "spec_power\tsphere_index\tsphere_mode\tdraw_flags\n")
-        for index, material in enumerate(model.materials):
-            texture = texture_paths[material.texture_index] \
-                if 0 <= material.texture_index < len(texture_paths) else ""
-            d = material.diffuse
-            s = material.specular
-            stream.write(f"{index}\t{material.name}\t{texture}\t{d[3]:.4f}\t"
-                         f"{s[0]:.4f}\t{s[1]:.4f}\t{s[2]:.4f}\t"
-                         f"{material.specular_power:.4f}\t"
-                         f"{material.sphere_index}\t{material.sphere_mode}\t"
-                         f"{material.draw_flags}\n")
+    # ---- 材质：只交 .mtl，不再另出清单 ----
+    # 以前这里还写一份 <name>_materials.tsv（alpha / spec / sphere / draw_flags），
+    # 注释写的是「供将来 Max 端构建更完整的材质」。将来一直没来：Max 侧只自检
+    # `.mtl` 的 mtllib / map_Kd（scripts/max_import_obj.ms 的材质自检），全仓库没有任何
+    # 读者，只有 stdout 打印一行路径。留着的代价不是磁盘，是「看起来像契约」——
+    # 会让人以为改材质口径要改这张表，而真正的口径在 .mtl 里。
+    # MMD 特有的 sphere_mode / draw_flags 确实没进 .mtl；真要接toon时从 pmx 现读
+    # （mmd2max/pmx.py 的 Material 已经解析了这些字段），不要预先落一张没人读的表。
 
     for w in warnings:
         print(f"  [警告] {w}")
@@ -1925,7 +1916,6 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
         "bones": bones_path,
         "biped_map": biped_map_path,
         "weights": weights_path,
-        "materials": materials_path,
         "meta": meta_path,
         "morphs": morphs_path,
         "physics": physics_path,
@@ -1996,7 +1986,7 @@ def main(argv: list[str]) -> int:
     info = export(source, outdir, build_plan(
         source, scale, min_weight, humanoid_only=humanoid_only,
         filter_useless=filter_useless, accessory_parent=accessory))
-    for key in ("obj", "bones", "weights", "materials", "morphs", "physics"):
+    for key in ("obj", "bones", "weights", "morphs", "physics"):
         print(f"  {key}: {info[key]}")
     print(f"  顶点 {info['vertex_count']}  三角面 {info['face_count']}  "
           f"原骨骼 {info['bone_count']} -> 保留 {info['kept_bone_count']}  "
