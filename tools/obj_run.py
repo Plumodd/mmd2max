@@ -10,6 +10,9 @@
 """
 from __future__ import annotations
 
+import os
+import re
+import string
 import subprocess
 import sys
 import time
@@ -42,13 +45,118 @@ from mmd2max.verdicts import (  # noqa: E402
 )
 from uia_dialog import invoke_safe_button  # noqa: E402
 
-# 五个装配目标值在 CFG 里的键名（顺序 = mmd2max.targets.TARGETS 的声明顺序）。
+# 装配目标值在 CFG 里的键名（顺序 = mmd2max.targets.TARGETS 的声明顺序）。
 # 只在这里取一次 keys()：Max 侧 mmd2maxLoadCfg 逐键必读，名单和 targets 分叉就是缺键中止。
 TARGET_CFG_KEYS = tuple(TARGETS)
 
-MAX_EXE = r"C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe"
-STARTUP_DIR = (Path.home() / "AppData/Local/Autodesk/3dsMax"
-               / "2022 - 64bit/ENU/scripts/startup")
+# 3ds Max 装在哪不写死。这里原来是一个写死的装目录字面量（C 盘 Program Files 下那台
+# 2022）：换一台把 Max 装在别的盘、别的根（比如 D:\Programs）的机器就整条链路起不来，
+# 而报的错只是「找不到文件」，使用者分不清是自己机器没装好还是脚本坏了。
+# 发现顺序 = 环境变量 -> 注册表 -> 常见目录 glob，三条都只为拿到 <装目录>\3dsmax.exe。
+# 版本仍优先 2022：全部探针与判据（骨盒、#rotation、.fig 载体）只在这一个版本上量过，
+# 拿 2024 跑不是「更新更好」，是「没实测」——所以选中非 2022 时要在日志里说一声。
+MAX_EXE_ENV = "MMD2MAX_MAX_EXE"
+VERIFIED_MAX_YEAR = 2022
+# 没注册表（绿色版、卸载残留、权限读不到）时才走这条：只认这些根下的 Autodesk\3ds Max *。
+MAX_EXE_DIR_ROOTS = ("Program Files", "Program Files (x86)", "Programs", "Software")
+MAX_EXE_HINT = (
+    f"没找到 3ds Max 的 3dsmax.exe（试过环境变量 {MAX_EXE_ENV}、注册表 "
+    r"HKLM\SOFTWARE\Autodesk\3dsMax 与各盘的 Autodesk\3ds Max *）。"
+    f"装在别处就用 {MAX_EXE_ENV}=完整路径 指过来，例如 "
+    f'set {MAX_EXE_ENV}=D:\\Programs\\Autodesk\\3ds Max 2022\\3dsmax.exe')
+
+
+def _reg_max_exes() -> list[tuple[int, Path]]:
+    """注册表里的 (版本年, 3dsmax.exe)。子键名是内部版本号：24.0 = 2022。
+
+    只收 exe 真在盘上的那条 —— 这台机的 23.0（2021）还躺在注册表里，目录早没了，
+    照着它启动就是拿一条陈旧记录去撞一个不存在的文件。
+    """
+    try:
+        import winreg
+    except ImportError:  # 非 Windows：没有注册表这条路
+        return []
+    out: list[tuple[int, Path]] = []
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for base in (r"SOFTWARE\Autodesk\3dsMax",
+                     r"SOFTWARE\WOW6432Node\Autodesk\3dsMax"):
+            try:
+                root = winreg.OpenKey(hive, base)
+            except OSError:  # 允许失败：这台机没写过这个键（未装、或装在别的厂商目录）
+                continue
+            with root:
+                for i in range(winreg.QueryInfoKey(root)[0]):
+                    name = winreg.EnumKey(root, i)
+                    head = name.split(".")[0]
+                    if not head.isdigit():  # "Current Version" 这类非版本子键
+                        continue
+                    try:
+                        with winreg.OpenKey(root, name) as key:
+                            loc = winreg.QueryValueEx(key, "Installdir")[0]
+                    except OSError:  # 允许失败：这条版本键没带装目录
+                        continue
+                    exe = Path(loc) / "3dsmax.exe"
+                    if exe.is_file():
+                        out.append((int(head) + 1998, exe))
+    return out
+
+
+def _glob_max_exes() -> list[tuple[int, Path]]:
+    """逐盘扫 <盘>\\<程序目录>\\Autodesk\\3ds Max <年>\\3dsmax.exe。"""
+    out: list[tuple[int, Path]] = []
+    for letter in string.ascii_uppercase:
+        drive = Path(letter + ":\\")
+        if not drive.is_dir():
+            continue
+        for root_name in MAX_EXE_DIR_ROOTS:
+            vendor = drive / root_name / "Autodesk"
+            if not vendor.is_dir():
+                continue
+            for entry in sorted(vendor.glob("3ds Max *")):
+                matched = re.search(r"3ds Max (\d{4})", entry.name)
+                exe = entry / "3dsmax.exe"
+                if matched and exe.is_file():
+                    out.append((int(matched.group(1)), exe))
+    return out
+
+
+def find_max_exe() -> Path | None:
+    """要启动的 3dsmax.exe；一条候选都没有返回 None（在导入期抛错会让测试全灭）。"""
+    override = os.environ.get(MAX_EXE_ENV, "").strip()
+    if override:
+        return Path(override).expanduser() if Path(override).is_file() else None
+    seen: dict[str, tuple[int, Path]] = {}
+    for year, exe in _reg_max_exes() + _glob_max_exes():
+        seen.setdefault(str(exe).lower(), (year, exe))
+    if not seen:
+        return None
+    # 先要 2022（判据在它上面量的），剩下的按新到旧；同一版本多条路径时取字典序第一个，
+    # 至少每次跑都是同一条，不会因为扫描顺序变了就换一台 Max。
+    ranked = sorted(seen.values(), key=lambda yx: (yx[0] != VERIFIED_MAX_YEAR, -yx[0]))
+    return ranked[0][1]
+
+
+def max_year_of_exe(exe: Path) -> int | None:
+    """从目录名读版本年（3ds Max 2022 -> 2022）；读不出返回 None（不瞎猜）。"""
+    matched = re.search(r"3ds Max (\d{4})", str(exe))
+    return int(matched.group(1)) if matched else None
+
+
+def max_startup_dirs(exe: Path) -> list[Path]:
+    """上一代「把脚本丢进启动目录让它自动执行」留下的目录，清理用。
+
+    目录名带版本和语言（`2022 - 64bit\\ENU`），语言这台机是 ENU、中文装可能是 CHS，
+    所以按年份取、把下面实际存在的语言目录都扫出来，不猜。
+    """
+    local = Path(os.environ.get("LOCALAPPDATA")
+                 or (Path.home() / "AppData" / "Local"))
+    year = max_year_of_exe(exe) or VERIFIED_MAX_YEAR
+    root = local / "Autodesk" / "3dsMax" / f"{year} - 64bit"
+    if not root.is_dir():
+        return []
+    return [p for p in (d / "scripts" / "startup" for d in sorted(root.glob("*")))
+            if p.is_dir()]
+
 SHOTS = TOOLS.parent / "outputs" / "shots"
 TEMPLATE = TOOLS.parent / "scripts" / "max_import_obj.ms"
 
@@ -137,7 +245,7 @@ CFG_KEYS = (
     # 以前它是 .ms 里的字面量 `for passNo = 1 to 3`，Python 只能靠契约测试去钉一个
     # 自己看不见的数；现在 audit_gate 拿同一个数核对 Max 报回来的 iters。
     "MMD2MAX_CONVERGE_MAX",
-    # 五个装配目标值（容差/开关），全部来自 mmd2max.targets —— M2 把它们从 .ms 里的
+    # 装配目标值（容差/开关），全部来自 mmd2max.targets —— M2 把它们从 .ms 里的
     # `global MMD2MAX_DIRTOL = 3.0` 搬到这里：写的一方必须是有测试的一方。
     *TARGET_CFG_KEYS,
     "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
@@ -310,6 +418,7 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
             morph_count=int(meta["morph_count"]),
             skin=cfg["MMD2MAX_SKIN"] == "true",
             foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
+            rollback=cfg["MMD2MAX_ROLLBACK"] == "true",
         )
     except ValueError as error:
         # 导出表少列、值不是数字、截面目标非正 —— 这些都在「尺」这一侧。换成 SystemExit
@@ -646,10 +755,22 @@ def main() -> int:
         log(f'  fileIn @"{out_script}"')
         return 0
 
+    max_exe = find_max_exe()
+    if max_exe is None:
+        # 走到这一步脚本、CFG、规格表都已落盘，只差启动 —— 把三条发现路径都念出来，
+        # 让人一眼知道是「这台机的 Max 在别处」而不是「脚本坏了」。
+        log(MAX_EXE_HINT)
+        return 2
+    found_year = max_year_of_exe(max_exe)
+    log(f"3ds Max：{max_exe}（{found_year or '版本号读不出'}）")
+    if found_year is not None and found_year != VERIFIED_MAX_YEAR:
+        log(f"警告：全部探针与判据只在 {VERIFIED_MAX_YEAR} 上实测过；"
+            f"{found_year} 的差异未经确认，结果不能当基线。")
+
     if manual:
         # 用 cmd /c start 把 Max 完全分离启动：即便本 Python 进程退出，Max
         # 也不会被 Bash 后台任务拆掉，全部交给人工。脚本保留不删除。
-        launch_cmd = f'cmd /c start "" "{MAX_EXE}" -U MAXScript "{out_script}"'
+        launch_cmd = f'cmd /c start "" "{max_exe}" -U MAXScript "{out_script}"'
         try:
             subprocess.Popen(launch_cmd, shell=True)
             log(f"已分离启动 Max（手动模式）：{launch_cmd}")
@@ -674,14 +795,15 @@ def main() -> int:
         stale.unlink(missing_ok=True)
 
     # 清理可能残留的旧启动脚本，避免下次 Max 启动误执行
-    try:
-        (STARTUP_DIR / "mmd2max_objrun.ms").unlink(missing_ok=True)
-    except Exception:  # noqa: BLE001
-        pass
+    for startup in max_startup_dirs(max_exe):
+        try:
+            (startup / "mmd2max_objrun.ms").unlink(missing_ok=True)
+        except OSError:  # 允许失败：清理陈旧启动脚本失败不该拖停一轮正常装配
+            pass
 
     # 通过 -U MAXScript 让 Max 启动后自动执行装配脚本
     # （UI/视口已就绪，适合截图；不依赖启动目录的时序猜测）
-    proc = subprocess.Popen([MAX_EXE, "-U", "MAXScript", str(out_script)])
+    proc = subprocess.Popen([str(max_exe), "-U", "MAXScript", str(out_script)])
     log(f"3dsmax pid={proc.pid}（-U MAXScript 执行 {out_script}）")
 
     # 报错弹窗截图统一存到 <base>/shots，便于 ViewImage 自行读取错误文本

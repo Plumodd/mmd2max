@@ -450,11 +450,10 @@ class App(tk.Tk):
         if not weights.is_file():
             self.status_var.set(f"还没有导出产物：缺 {weights.name}，先按 ①")
             return
-        from obj_run import MAX_EXE            # 借路径常量，跑 Max 仍走子进程
-        if not Path(MAX_EXE).is_file():
-            messagebox.showerror(
-                "找不到 3ds Max",
-                f"{MAX_EXE}\n\n请改 tools/obj_run.py 里的 MAX_EXE。")
+        from obj_run import MAX_EXE_HINT, find_max_exe   # 借同一套发现逻辑
+        max_exe = find_max_exe()
+        if max_exe is None:
+            messagebox.showerror("找不到 3ds Max", MAX_EXE_HINT)
             return
         argv = self._max_argv(outdir, source)
         shown = "python tools/obj_run.py " + " ".join(str(a) for a in argv[2:])
@@ -467,7 +466,7 @@ class App(tk.Tk):
                 "清空，未保存的内容不会弹提示；\n"
                 "  2) 结束后脚本自己 quitMax 正常退出（只有超时没退才兜底 taskkill /F "
                 "强杀）；期间请不要另外开 3ds Max 场景。\n\n"
-                f"启动的可执行文件：{MAX_EXE}\n"
+                f"启动的可执行文件：{max_exe}\n"
                 "期间请不要动鼠标键盘（脚本要自己处理启动弹窗、抓截图）。\n"
                 "整个过程可能持续几分钟到几十分钟。",
                 # 默认焦点给「取消」：回车键不该把 Max 拉起来

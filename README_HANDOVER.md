@@ -64,16 +64,16 @@ v3 改成 det=−1，于是：
 
 | 项 | 值 |
 | --- | --- |
-| 解释器 | `C:/Users/Administrator/.local/bin/python3.12.exe`（uv 装的 CPython 3.12.14）。**`python` / `py` / `python3` 都不在 PATH**，命令里写全路径 |
+| 解释器 | **Python 3.8+ 就行，不是只能 3.12**。本机跑的是 `C:/Users/Administrator/.local/bin/python3.12.exe`（uv 装的 CPython 3.12.14），而 `python` / `py` / `python3` 都不在 PATH，所以命令里写全路径。别人那台机器只要有任意 3.8+；`启动GUI.bat` 自己会探（顺序与理由见 [README_V4 §7](file:///C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03/README_V4.md)）。第三方库为零 |
 | 编码 | 每条命令都要 `PYTHONIOENCODING=utf-8`，否则中文 print 在 GBK 控制台炸 |
 | 第三方库 | 无，纯标准库 |
-| 3ds Max | 2022（`C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe`） |
-| 跑测试 | **逐个文件跑**：目录里没有 `tests/__init__.py`，所以 `unittest discover` 会报 `Start directory is not importable` |
+| 3ds Max | 本机实测装在 `C:\Program Files\Autodesk\3ds Max 2022`（注册表 `HKLM\SOFTWARE\Autodesk\3dsMax\24.0` 的 `Installdir` 与逐盘 glob 两条路都指向它；这台机器上**没有** `D:\Programs\Autodesk`）。装在别的盘/别的根**不必改代码**：`tools/obj_run.py:find_max_exe()` 自动发现，也可用环境变量 `MMD2MAX_MAX_EXE` 指过去。发现顺序、为什么优先 2022、找不到时的退出码见 [README_V4 §7](file:///C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03/README_V4.md) |
+| 跑测试 | `cd tests && PYTHONIOENCODING=utf-8 python -m unittest discover -s . -p "test_*.py"`（**必须先进 tests 目录再 discover**：目录里没有 `tests/__init__.py`，从项目根 `-s tests` 会报 `Start directory is not importable`） |
 
 ```bash
-cd C:/Users/Administrator/Desktop/mmd2max_v3_src_2026-11-01
-for f in tests/test_*.py; do PYTHONIOENCODING=utf-8 ~/.local/bin/python3.12.exe "$f"; done   # 50 用例全绿
-PYTHONIOENCODING=utf-8 ~/.local/bin/python3.12.exe tools/check_ms.py                          # MAXScript 静态体检
+cd C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03
+cd tests && PYTHONIOENCODING=utf-8 ~/.local/bin/python3.12.exe -m unittest discover -s . -p "test_*.py"   # 509 用例全绿
+PYTHONIOENCODING=utf-8 ~/.local/bin/python3.12.exe tools/check_ms.py                                       # MAXScript 静态体检
 ```
 
 当前：**50 用例全绿**（coordinate 7 / export 12 / limbs 8 / pmx 6 / real_model 4(跳过 1) / semantic 5 / validation 8）。
@@ -104,7 +104,6 @@ mmd2max_v4_src_2026-11-03/
 │   ├── uia_dialog.py     # UIA 读写启动弹窗：按**确切按钮名** Invoke（Qt 弹窗没有子 HWND，坐标法点不准）
 │   ├── check_ms.py       # MAXScript 静态体检（保留字/括号/字符串/if-do-else/localTime/续行）
 │   ├── make_ascii_copy.py# 中文名导出件 → ASCII 副本
-│   ├── boot_interact.py  # 旧「自动点弹窗」驱动，保留参考
 │   └── desktop.py        # 窗口枚举/截图/剪贴板（ctypes，非必需）
 ├── tests/                # unittest + fixtures/sample_model（合成 PMX 由 make_sample.py 生成）
 ├── baselines/            # 各轮冻结件（日志 / CFG / 判据三张表），回归锁只指这里，不指 test_runs/
