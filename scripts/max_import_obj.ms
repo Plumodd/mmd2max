@@ -4418,6 +4418,48 @@ fn mmd2maxCreateBones =
     nodes
 )
 
+/* ================= M4b：Skin 回读验收的四个实测前提 =================
+   探针在 probes/readback_m4*.ms（a/b/c/d/e/f 六轮），读数是同名的 .txt。下面每一句
+   写法都有出处，没有实测过的假设不许进这段代码：
+     P1 刚 addModifier 的 Skin **顶点表还没建**：任何 skinOps 读写都抛
+        `Exceeded the vertex count`（M4e T0/T3/T4/T5）。点亮它靠的是「让修改器堆栈真求值
+        一次」—— 取 mesh.numVerts（T1）或 redrawViews()（T2）；skinOps 自己的读不算求值
+        （T3/T4 仍然抛）。所以写权重之前必须显式预热，而不是指望 select 顺手办好。
+     P2 每个顶点**只能写一次**：第二次 ReplaceVertexWeights / SetVertexWeights 无论写什么，
+        回读都是 0.0/0.0 且此后永久坍缩（M4e T1/T2/T6）。所以「写完再刷一遍」这条路不存在，
+        闭环只能是「读出坏的 → 关掉归一化 → 重写一次」。
+     P3 唯一的补救动作：`skinOps.unNormalizeVertex smod v true` 之后再写才落得进去（M4e T6）。
+     P4 没写过的顶点回读是「某根骨 @ 1.0」而不是空（M4f A1/A2，骨号还会变），
+        所以「读到非空」证明不了写进去过；能证明的是 IsVertexModified（写前 0、写后 1，
+        M4f B2/D3）。回读因此既数权重、也数这个标记。
+   另外两条只影响怎么读数（M4f）：每顶点骨数没有被裁到 4 的默认上限（B1 写 5 读 5）；
+   权重大约小于 1e-8 会被存成 0.0（C2），所以链路计数按**骨号在不在**算，不按权重大小算。 */
+fn mmd2maxSkinReadable skinMod =
+(
+    /* 拿第一个真实顶点号试探顶点表建好没有：建好了返回 #(骨号数组, 权重数组)，
+       没建好就抛 —— catch 成 undefined，classOf 就不是 Array。 */
+    /* 语句形式的 try/catch + 显式失败值：v4 契约 rule 10 禁止 `local x = try (...) catch (...)`
+       （编译期就死、弹窗只给标题的那种）。探针里这形状跑出过读数，但边界没单独测过，
+       不值得拿一整轮实跑去赌 —— 何况「读不到」写成 -1 比写成 undefined 更明白。 */
+    local probe = -1
+    try ( probe = skinOps.GetVertexBoneIDsAndWeights skinMod 1 ) catch ( probe = -1 )
+    (classOf probe) == Array and probe.count >= 2
+)
+
+fn mmd2maxSkinPrime meshObj skinMod =
+(
+    /* 点亮新建 Skin 的顶点表：先走便宜的那条（读一次网格顶点数 = 逼堆栈求值），
+       还不行再 redrawViews() 逼一次。返回值是「最终可不可读」，
+       调用方拿它决定要不要中止 —— 绝不允许预热没成功还往下写。 */
+    select meshObj
+    modPanel.setCurrentObject skinMod
+    local dummyVerts = 0
+    try ( dummyVerts = meshObj.numVerts ) catch () -- 允许失败：要的是「读顶点数逼堆栈求值」这个动作，取没取到无所谓；能不能写由下一行 mmd2maxSkinReadable 真读一遍判定。
+    if mmd2maxSkinReadable skinMod do return true
+    try ( redrawViews() ) catch () -- 允许失败：备用预热（探针 M4e T2）；没点亮照样落到返回值，调用方会中止。
+    mmd2maxSkinReadable skinMod
+)
+
 fn mmd2maxApplySkin meshes boneNodes =
 (
     if meshes.count == 0 do throw "没有可蒙皮的网格"
@@ -4463,6 +4505,13 @@ fn mmd2maxApplySkin meshes boneNodes =
         append skinFlags flag
         if flag == 1 do target += 1
     )
+    /* skinFlags 按 bones.tsv 的**行号**建，下面却按 boneNodes 的**下标**去取 ——
+       两边数量不等就是「骨表行」和「场景骨对象」错位，权重会整体绑错骨。
+       以前不检查：行少的时候 skinFlags[i] 是 undefined，`undefined == 1` 为假，
+       那根骨就被静默跳过（不报错，只是 Skin 里少一根骨、它名下的权重全落空）。 */
+    if rows.count != boneNodes.count do
+        throw ("骨骼表 " + (rows.count as string) + " 行与场景骨骼 " \
+            + (boneNodes.count as string) + " 个数量不符：权重里的骨号无法一一对应，已中止。")
     mmd2maxLog ("加入 Skin 的骨骼数：" + (target as string) + " / 总数 " + (rows.count as string))
 
     /* 预建 全局骨骼序号 -> Skin 局部序号 的映射（审查项 P0#3 / P1#23）。
@@ -4498,7 +4547,10 @@ fn mmd2maxApplySkin meshes boneNodes =
         )
         if (mod i 50) == 0.0 do mmd2maxLog ("已处理骨骼 " + (i as string) + "/" + (boneNodes.count as string))
     )
-    try ( skinOps.forceUpdate skinMod ) catch ()
+    /* 原先这里有一句 try ( skinOps.forceUpdate skinMod ) catch ()，整条是死的：
+       skinOps 的 143 个成员里没有 forceUpdate（probes/skinops_members.txt），
+       它每次都抛 Unknown property 再被 catch 吞掉 —— 一行永远不会成功的「保险」。
+       真正需要的是让堆栈求值一次，见下面的 mmd2maxSkinPrime（M4e 探针 T1/T2）。 */
     local addElapsed = ((timeStamp() - addStart) / 1000.0) as string
     local boneTotal = (skinOps.GetNumberBones skinMod) as string
     mmd2maxLog ("添加骨骼耗时：" + addElapsed + " 秒，Skin 内骨骼数 " + boneTotal)
@@ -4506,12 +4558,16 @@ fn mmd2maxApplySkin meshes boneNodes =
     if failedBones > 0 do
         throw ("有 " + (failedBones as string) + " 根骨骼加入 Skin 失败：" + (failedBoneNames as string))
 
-    /* 写权重前先让 Skin 成为修改器面板的当前对象。
-       实跑踩到：第一个顶点（vi=1）ReplaceVertexWeights 失败、其余 5893 个全部正常，
-       属于 Skin 修改器尚未进入编辑状态的时序问题。标准做法是先 select 网格再
-       modPanel.setCurrentObject。 */
-    select meshObj
-    modPanel.setCurrentObject skinMod
+    /* 写权重前必须先把 Skin 的顶点表点亮（M4e T0/T3/T4/T5：不点亮就是每发都抛
+       Exceeded the vertex count）。原先这里只有 select + setCurrentObject，
+       它治的是「第一个顶点写不进去」，真正起作用的是紧随其后的那次堆栈求值 ——
+       本函数在前面读过 meshObj.numVerts，但那一次发生在 addModifier **之前**，
+       对新建的 Skin 不算数。现在把这件事写成显式一步，并且读不出来就直接中止：
+       「一个顶点都没写进去但返回值为 OK」的状态是实测存在的（M4c/M4e），
+       绝不能靠后面的计数兜。 */
+    if not (mmd2maxSkinPrime meshObj skinMod) do
+        throw ("Skin 顶点表预热后仍读不出来（网格 " + meshObj.name \
+            + "，顶点 " + (meshVertexCount as string) + "）：权重写不进去，已中止。")
 
     /* 读权重并写入。weights.tsv 只有前两列有名字：vertex_index + bone_weight_pairs，
        而 bone_weight_pairs 往右是**变长的** `骨序号:权重` 对（每行顶点绑的骨数不同），
@@ -4630,6 +4686,316 @@ fn mmd2maxApplySkin meshes boneNodes =
     if failedVerts > 0 do
         throw ("有 " + (failedVerts as string) + " 个顶点未能写入有效蒙皮权重，已中止（不写 success 标记）。")
 )
+
+/* ---------- 回读用的两个纯函数：一次对撞、一次全表扫描 ---------- */
+fn mmd2maxSkinCmp expIds expWs rbIds rbWs =
+(
+    /* 一个顶点的「期望 vs 场景读数」，返回 #(最大权重误差, 缺失链路数, 期望主控骨, 回读主控骨)。
+       期望权重必须先归一化：实测 Skin 总是归一化后才存（写 0.4/0.2 读回 0.667/0.333，M4b 探针），
+       拿没除的那份去比除了的那份，每一行都会假 FAIL。
+       主控骨取第一个最大值：M4b 实测 Skin 保留写入顺序（写 #(3,1) 读回 #(3,1)），
+       所以并列时两边取到同一格，不需要额外的并列规则。 */
+    local maxErr = 0.0
+    local missing = 0
+    for i = 1 to expIds.count do
+    (
+        local hit = 0
+        for j = 1 to rbIds.count do
+            if rbIds[j] == expIds[i] do hit = j
+        if hit == 0 then
+        (
+            missing += 1
+            if expWs[i] > maxErr do maxErr = expWs[i]
+        )
+        else if hit <= rbWs.count then
+        (
+            local diff = rbWs[hit] - expWs[i]
+            if diff < 0.0 do diff = -diff
+            if diff > maxErr do maxErr = diff
+        )
+    )
+    local expDom = 0
+    local best = -1.0
+    for i = 1 to expWs.count do
+        if expWs[i] > best do ( best = expWs[i]; expDom = expIds[i] )
+    local rbDom = 0
+    best = -1.0
+    for i = 1 to rbWs.count do
+        if rbWs[i] > best do ( best = rbWs[i]; rbDom = rbIds[i] )
+    #(maxErr, missing, expDom, rbDom)
+)
+
+fn mmd2maxSkinScan smod expIdsArr expWsArr vertexCount boneCount =
+(
+    /* 全表回读一遍（实测 3752 顶点 0.007 秒、100 顶点 0.0 秒，18892 顶点同样不用采样）。
+       返回的每一格都是**场景里量到的**，不是写入侧的自述：
+       #(读到顶点数, 读失败数, 未被写入顶点数, 零权重顶点数, 主控骨不符数,
+         缺失链路数, 场景链路总数, 最大权重误差, 最大权重和偏差, 每骨链路数, 坏顶点清单) */
+    local okCount = 0
+    local failCount = 0
+    local unmodCount = 0
+    local zeroCount = 0
+    local domMiss = 0
+    local missLinks = 0
+    local linksRead = 0
+    local wErrMax = 0.0
+    local sumErrMax = 0.0
+    local badList = #()
+    local rbLinks = #()
+    for i = 1 to boneCount do append rbLinks 0
+    for vi = 1 to vertexCount do
+    (
+        /* 写没写过的证据（P4）：没写过的顶点照样能读出「一根骨 @ 1.0」，
+           只有 IsVertexModified 分得开「真写过」和「Skin 的默认值」。 */
+        local modFlag = 0
+        try ( modFlag = skinOps.IsVertexModified smod vi ) catch ( modFlag = -1 )
+        if modFlag != 1 do unmodCount += 1
+        local rb = undefined
+        try ( rb = skinOps.GetVertexBoneIDsAndWeights smod vi ) catch ( rb = "EX" )
+        if (classOf rb) != Array or rb.count < 2 or (classOf rb[1]) != Array then
+            failCount += 1
+        else
+        (
+            okCount += 1
+            local rbIds = rb[1]
+            local rbWs = rb[2]
+            local rbSum = 0.0
+            for i = 1 to rbIds.count do
+            (
+                local bid = rbIds[i]
+                if bid >= 1 and bid <= boneCount do rbLinks[bid] = rbLinks[bid] + 1
+                linksRead += 1
+                if i <= rbWs.count do rbSum += rbWs[i]
+            )
+            /* 链路按骨号计（P4 的另一半：权重会被存成 0.0，骨号不会）；
+               零权重顶点按权重和判 —— 坍缩的顶点读回来是 0.0/0.0，和没写完全不同。 */
+            if rbSum <= 1e-6 do
+            (
+                zeroCount += 1
+                append badList vi
+            )
+            local sErr = rbSum - 1.0
+            if sErr < 0.0 do sErr = -sErr
+            if sErr > sumErrMax do sumErrMax = sErr
+            local eIds = expIdsArr[vi]
+            if eIds.count > 0 then
+            (
+                local cmp = mmd2maxSkinCmp eIds expWsArr[vi] rbIds rbWs
+                if cmp[1] > wErrMax do wErrMax = cmp[1]
+                missLinks += cmp[2]
+                if cmp[3] != cmp[4] do domMiss += 1
+            )
+        )
+        if (mod vi 5000) == 0.0 do
+            mmd2maxLog ("  回读进度：" + (vi as string) + "/" + (vertexCount as string))
+    )
+    #(okCount, failCount, unmodCount, zeroCount, domMiss, missLinks, linksRead, wErrMax, sumErrMax, rbLinks, badList)
+)
+
+fn mmd2maxVerifySkin meshes boneNodes =
+(
+    /* M4b：蒙皮的**真回读**。期望值全部来自 weights.tsv / bones.tsv（Python 写下的输入），
+       读数全部来自场景里那个 Skin 修改器，两边来自不同进程 —— 这才是验收。
+       正式脚本 23 轮的 written_vertices=18892 数的是「ReplaceVertexWeights 返回没抛」，
+       而 M4c/M4e 实测「返回 OK 而权重是 0.0」真实存在，那条计数证明不了场景里挂着权重。
+       这一段**只报数不判定**（v4 契约：判在 Python），只有「量不了」才抛：
+       没有 Skin 修改器、顶点表读不出来、行数和网格顶点数对不上、骨号映射不成立。 */
+    local tStart = timeStamp()
+    if meshes.count != 1 do
+        throw ("蒙皮回读只支持单网格，实际 " + (meshes.count as string) + " 个")
+    local meshObj = meshes[1]
+    local smod = undefined
+    for i = 1 to meshObj.modifiers.count do
+        if smod == undefined and (classOf meshObj.modifiers[i]) == Skin do smod = meshObj.modifiers[i]
+    if smod == undefined do
+        throw ("网格 " + meshObj.name + " 上没有 Skin 修改器，但 skin_apply 报了 ran：回读无处可取")
+    local vertexCount = meshObj.numVerts
+    if vertexCount <= 0 do throw ("网格顶点数读成 " + (vertexCount as string) + "，回读无从对应")
+    if not (mmd2maxSkinPrime meshObj smod) do
+        throw "回读预热失败：Skin 顶点表仍然读不出来（前提 P1，见 mmd2maxSkinPrime 上方笔记）"
+
+    /* ── 骨号映射：与写入侧同一条规则，但这里拿它去核对**场景回读到的骨名** ── */
+    local lines = mmd2maxReadTable MMD2MAX_BONES
+    local rows = mmd2maxRows lines
+    local cSkinFlag = mmd2maxColPos lines "skin_flag"
+    if rows.count != boneNodes.count do
+        throw ("回读时骨骼表 " + (rows.count as string) + " 行与场景骨骼 " \
+            + (boneNodes.count as string) + " 个不符：骨号对不上，读数全是垃圾")
+    local skinFlags = #()
+    for i = 1 to rows.count do
+    (
+        local flag = 1
+        if rows[i].count >= cSkinFlag do
+            if rows[i][cSkinFlag] == "0" do flag = 0
+        append skinFlags flag
+    )
+    local globalToSkin = #()
+    for i = 1 to boneNodes.count do append globalToSkin 0
+    local skinNodeNames = #()
+    local skinId = 0
+    for i = 1 to boneNodes.count do
+    (
+        if skinFlags[i] == 1 do
+        (
+            skinId += 1
+            globalToSkin[i] = skinId
+            append skinNodeNames boneNodes[i].name
+        )
+    )
+    local boneTotal = 0
+    try ( boneTotal = skinOps.GetNumberBones smod ) catch ( boneTotal = 0 )
+    if boneTotal != skinNodeNames.count do
+        throw ("Skin 里回读到 " + (boneTotal as string) + " 根骨，映射期望 " \
+            + (skinNodeNames.count as string) + " 根：骨号映射不成立，中止回读")
+    /* 映射成立还不够，还得一根根对名字：globalToSkin 是按 skinFlags 顺序累加的，
+       哪一天 AddBone 的顺序变了，这里先响，而不是让下面 18892 行权重全比错。 */
+    local nameMismatch = 0
+    for i = 1 to skinNodeNames.count do
+    (
+        local gotName = ""
+        try ( gotName = skinOps.GetBoneName smod i 0 ) catch ( gotName = "读不到" )
+        if (gotName as string) != skinNodeNames[i] do
+        (
+            nameMismatch += 1
+            if nameMismatch <= 5 do
+                mmd2maxLog ("  回读骨名不符 Skin#" + (i as string) + " 场景=" \
+                    + (gotName as string) + " 期望=" + skinNodeNames[i])
+        )
+    )
+
+    /* ── 期望值：weights.tsv 重读一遍，按列名取，归一化后存进按顶点号编址的数组 ── */
+    local wtbl = mmd2maxReadTable MMD2MAX_WEIGHTS
+    local wlines = mmd2maxRows wtbl
+    local cVert = mmd2maxColPos wtbl "vertex_index"
+    local cPairs = mmd2maxColPos wtbl "bone_weight_pairs"
+    if wlines.count != vertexCount do
+        throw ("权重行数 " + (wlines.count as string) + " 与网格顶点数 " \
+            + (vertexCount as string) + " 不符，回读无从对应")
+    local expIdsArr = #()
+    local expWsArr = #()
+    for i = 1 to vertexCount do ( append expIdsArr #(); append expWsArr #() )
+    local expLinks = #()
+    for i = 1 to skinNodeNames.count do append expLinks 0
+    local indexSeqBad = 0
+    local pairsDropped = 0
+    local linksExpected = 0
+    local vertsNoExp = 0
+    for i = 1 to wlines.count do
+    (
+        local p = wlines[i]
+        local ids = #()
+        local ws = #()
+        if p.count >= cPairs then
+        (
+            /* 权重行必须按 vertex_index 落位；这里既检查「序号 == 行号」，
+               也用它当数组下标的正当理由（不检查就是拿错位的数据当判据）。 */
+            local viRaw = (p[cVert] as integer)
+            if viRaw + 1 != i do indexSeqBad += 1
+            local wsum = 0.0
+            for j = cPairs to p.count do
+            (
+                local pair = mmd2maxSplit p[j] ":"
+                if pair.count >= 2 then
+                (
+                    local g = (pair[1] as integer)
+                    local w = pair[2] as float
+                    if g >= 0 and g < boneNodes.count and globalToSkin[g + 1] > 0 then
+                    (
+                        local sid = globalToSkin[g + 1]
+                        append ids sid
+                        append ws w
+                        wsum += w
+                        expLinks[sid] = expLinks[sid] + 1
+                        linksExpected += 1
+                    )
+                    else pairsDropped += 1
+                )
+            )
+            if ids.count > 0 and wsum > 0.0 do
+            (
+                for k = 1 to ws.count do ws[k] = ws[k] / wsum
+            )
+        )
+        if ids.count == 0 do vertsNoExp += 1
+        expIdsArr[i] = ids
+        expWsArr[i] = ws
+    )
+
+    /* ── 扫一遍；有坍缩顶点就按 P3 补救一次，再扫一遍 ── */
+    disableSceneRedraw()
+    local scan = mmd2maxSkinScan smod expIdsArr expWsArr vertexCount skinNodeNames.count
+    local zeroPre = scan[4]
+    local repaired = 0
+    if scan[11].count > 0 do
+    (
+        /* 顺序不能反：先 unNormalizeVertex 关掉归一化，再写第二次。
+           反过来就是「在已经坍缩的顶点上再写一次」，M4e T6 实测读回来还是 0.0。 */
+        for vi in scan[11] do
+        (
+            local eIds = expIdsArr[vi]
+            if eIds.count > 0 then
+            (
+                try ( skinOps.unNormalizeVertex smod vi true ) catch () -- 允许失败：只是重写的前置动作（P3），没救回来的顶点留在 zero_verts 里变红，不会被静默咽掉。
+                local okFix = false
+                try ( skinOps.ReplaceVertexWeights smod vi eIds expWsArr[vi]; okFix = true ) catch () -- 允许失败：抛了就不计入 repaired，重扫的 zero_verts 才是最终读数。
+                if okFix do repaired += 1
+            )
+        )
+        scan = mmd2maxSkinScan smod expIdsArr expWsArr vertexCount skinNodeNames.count
+    )
+    enableSceneRedraw()
+
+    local linkDiffMax = 0
+    local linkMismatchBones = 0
+    for i = 1 to skinNodeNames.count do
+    (
+        local d = expLinks[i] - scan[10][i]
+        if d < 0 do d = -d
+        if d > linkDiffMax do linkDiffMax = d
+        if d > 0 do linkMismatchBones += 1
+    )
+
+    /* #35 那两个看得见的数：脚尖骨/足首骨各拿到多少顶点。以前只有写入侧的日志行，
+       现在报场景回读的链路数；Python 那边拿同一个 weights.tsv 独立数一遍，
+       两边对不上就是中间有人在丢链路。 */
+    for i = 1 to skinNodeNames.count do
+    (
+        local nm = skinNodeNames[i]
+        if matchPattern nm pattern:"* Toe0" or matchPattern nm pattern:"* Foot" do
+            mmd2maxReport "skin_rb" "links" nm scan[10][i]
+    )
+
+    mmd2maxReport "skin_rb" "verts_read" "-" scan[1]
+    mmd2maxReport "skin_rb" "read_fail" "-" scan[2]
+    mmd2maxReport "skin_rb" "unmodified_verts" "-" scan[3]
+    mmd2maxReport "skin_rb" "index_seq_bad" "-" indexSeqBad
+    mmd2maxReport "skin_rb" "pairs_dropped" "-" pairsDropped
+    mmd2maxReport "skin_rb" "verts_no_exp" "-" vertsNoExp
+    mmd2maxReport "skin_rb" "links_expected" "-" linksExpected
+    mmd2maxReport "skin_rb" "links_read" "-" scan[7]
+    mmd2maxReport "skin_rb" "links_missing" "-" scan[6]
+    mmd2maxReport "skin_rb" "name_mismatch" "-" nameMismatch
+    mmd2maxReport "skin_rb" "zero_verts_pre" "-" zeroPre
+    mmd2maxReport "skin_rb" "repaired" "-" repaired
+    mmd2maxReport "skin_rb" "zero_verts" "-" scan[4]
+    mmd2maxReport "skin_rb" "dom_mismatch" "-" scan[5]
+    mmd2maxReport "skin_rb" "weight_err_max" "-" scan[8]
+    mmd2maxReport "skin_rb" "sum_err_max" "-" scan[9]
+    mmd2maxReport "skin_rb" "link_diff_max" "-" linkDiffMax
+    mmd2maxReport "skin_rb" "link_mismatch_bones" "-" linkMismatchBones
+    local elapsed = ((timeStamp() - tStart) / 1000.0)
+    mmd2maxReport "skin_rb" "elapsed_s" "-" elapsed
+    mmd2maxReport "pass" "ran" "skin_verify" 1
+
+    local vmsg = "蒙皮回读：" + (scan[1] as string) + "/" + (vertexCount as string) + " 顶点"
+    vmsg = vmsg + "，未写入=" + (scan[3] as string) + "，零权重=" + (scan[4] as string)
+    vmsg = vmsg + "（补前 " + (zeroPre as string) + "，补救重写 " + (repaired as string) + "）"
+    vmsg = vmsg + "，主控不符=" + (scan[5] as string) + "，缺失链路=" + (scan[6] as string)
+    vmsg = vmsg + "，链路 期望/回读=" + (linksExpected as string) + "/" + (scan[7] as string)
+    vmsg = vmsg + "，最大权重误差=" + (scan[8] as string) + "，耗时 " + (elapsed as string) + " 秒"
+    mmd2maxLog vmsg
+)
+
 
 /* ================= 顶点变形（表情）→ Morpher =================
    MMD 表情（顶点 morph）在 Max 端最自然的落地方式是 Morpher 修改器通道。
@@ -4952,7 +5318,7 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 local idx = p[cRIdx] as integer
                 local name = p[cRName]
                 local boneNew = p[cRBone] as integer
-                local shape = p[cRShape] as integer
+                local shapeIdx = p[cRShape] as integer
                 local sx = p[cRSX] as float
                 local sy = p[cRSY] as float
                 local sz = p[cRSZ] as float
@@ -4969,12 +5335,12 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 local ex = sx          /* Max X 半宽 */
                 local ey = sz          /* Max Y 半长 */
                 local ez = sy          /* Max Z 半高 */
-                if shape == 0 then
+                if shapeIdx == 0 then
                 (
                     /* 球：size = 半径 */
                     proxy = Sphere radius:(amax ex 0.001) pos:[px,py,pz] segs:8
                 )
-                else if shape == 2 then
+                else if shapeIdx == 2 then
                 (
                     /* 胶囊：PMX 的 size = (半径, 半高, 0)，轴向是局部 Y（转成 Max 就是 Z）。
                        Max 的 Capsule 轴向也是 Z，height 是「含两端的整体高度」。 */
@@ -4996,7 +5362,7 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                     proxy.name = ("RB_" + (idx as string) + "_" + name)
                     proxy.wirecolor = color 255 128 0
                     /* Box 的 pivot 在底角，用 center 把它挪到刚体中心 */
-                    if shape != 0 and shape != 2 do
+                    if shapeIdx != 0 and shapeIdx != 2 do
                         try ( proxy.center = [px, py, pz] ) catch ()
                     /* 关键：`(eulerAngles) as quat` 这条转换在部分 Max 版本上不成立，
                        异常又被 try 吞掉 —— 结果 363 个代理**全部保持竖直**，
@@ -5123,7 +5489,13 @@ fn mmd2maxMain =
     local boneNodes = mmd2maxCreateBones()
     local meshes = mmd2maxMeshes()
     if mmd2maxSkinEnabled() then
+    (
         mmd2maxApplySkin meshes boneNodes
+        /* M4b：写完立刻从场景里读回来。验收不再看写入侧的计数 —— written_vertices
+           数的是「ReplaceVertexWeights 返回没抛」，而探针实测「返回 OK 而权重 0.0」
+           与「没写过也读得出 1.0」都真实存在，那条计数证明不了场景里挂着权重。 */
+        mmd2maxVerifySkin meshes boneNodes
+    )
     else
         mmd2maxLog "按 MMD2MAX_SKIN=false 跳过蒙皮（仅网格 + 骨架）。"
 

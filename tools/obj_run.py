@@ -36,6 +36,8 @@ from mmd2max.verdicts import (  # noqa: E402
     SPEC_NAME,
     build_spec,
     parse_table,
+    parse_weights,
+    skin_expectation,
     spec_text,
 )
 from uia_dialog import invoke_safe_button  # noqa: E402
@@ -273,11 +275,29 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
             f"{base / f'{stem}_meta.tsv'} 缺少键 {'、'.join(missing)}：装配的期望值必须有来源，"
             "重跑 tools/run_model.py 生成新的 meta")
     _, limbs = parse_table(Path(cfg["MMD2MAX_LIMBS"]).read_text(encoding="utf-8"))
+    # 蒙皮回读的期望值（M4b）：骨骼表与权重表各读一遍。路径取自 CFG，所以 Max 打开的是
+    # **同一份文件**，而解析发生在另一个进程 —— 这正是这批判据不是恒等式的原因：
+    # 一边算的是「输入文件说了什么」，另一边量的是「场景里的 Skin 挂着什么」。
+    _, bones = parse_table(Path(cfg["MMD2MAX_BONES"]).read_text(encoding="utf-8"))
+    weights_rows = parse_weights(Path(cfg["MMD2MAX_WEIGHTS"]).read_text(encoding="utf-8"))
+    vertex_count = int(cfg["MMD2MAX_VERTS"])
+    # meta 的 kept_bones 从这里开始只干一件事：核对「骨骼表的行数 == 导出摘要说的骨数」。
+    # 它以前顶在 `skin/bones` 的期望值上，而那一行报的是 skinOps.GetNumberBones ——
+    # 两个数只在「每一根骨都参与蒙皮」时相等（香菱正好如此，所以这条尺歪了 23 轮没人看见）。
+    # 现在期望值来自 bones.tsv 的 skin_flag（`skin_expect.bones_skinned`）。
+    if len(bones) != int(meta["kept_bones"]):
+        raise SystemExit(f"骨骼表 {len(bones)} 行，meta 的 kept_bones 是 {meta['kept_bones']}："
+                         "两份导出产物已经分叉，重跑 tools/run_model.py；"
+                         "拿分叉的表装出来的判据全是垃圾，不如不跑这一轮")
+    if len(weights_rows) != vertex_count:
+        raise SystemExit(f"权重表 {len(weights_rows)} 行，CFG 的 MMD2MAX_VERTS 是 {vertex_count}："
+                         "权重按顶点序号写入，行数与顶点数不符就是整表错位（#13 那一类）")
+    skin_expect = skin_expectation(bones, weights_rows)
     rows = build_spec(
         model=stem,
-        vertex_count=int(cfg["MMD2MAX_VERTS"]),
+        vertex_count=vertex_count,
         limbs=limbs,
-        kept_bones=int(meta["kept_bones"]),
+        skin_expect=skin_expect,
         morph_count=int(meta["morph_count"]),
         skin=cfg["MMD2MAX_SKIN"] == "true",
         foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",

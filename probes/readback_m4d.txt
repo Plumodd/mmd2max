@@ -1,0 +1,51 @@
+===== wrapper: fileIn C:/Users/Administrator/AppData/Local/Temp/mmd2max_probe/readback_m4d.ms =====
+===== M4d probe start =====
+  A0 首写 v5 = -- Runtime error: Exceeded the vertex countSkin:ASkin | v5 EX
+  A1 二写 v5 = -- Runtime error: Exceeded the vertex countSkin:ASkin | v5 EX
+  A2 SetWeight 3 参 = -- Argument count error: setWeight wanted 2, got 3
+  A2 读 v5 EX
+  A3 SetWeight 4 参 = -- Argument count error: setWeight wanted 2, got 4
+  A3 读 v5 EX
+  A4 SetWeight 4 参(骨序在前) = -- Argument count error: setWeight wanted 2, got 4
+  A4 读 v5 EX
+  A5 SetWeight 5 参 = -- Argument count error: setWeight wanted 2, got 5
+  A6 isUnNormalizeVertex v5 = 0
+  A7 unNormalizeVertex v5 true = OK
+  A7b isUnNormalizeVertex v5 = 0
+  A8 之后重写 v5 = -- Runtime error: Exceeded the vertex countSkin:ASkin | v5 EX
+  A8b SetVertexWeights = -- Runtime error: Exceeded the vertex countSkin:ASkin | v5 EX
+  A9 unNormalizeVertex v5 false = OK | v5 EX
+  A10 isRigidVertex v5 = 0
+  A11 rigidVertex v5 true = OK
+  A11b 重写后读 = v5 EX
+  A12 RemoveZeroWeights = OK
+  A12b 读 v5 EX
+  A13 删零之后再写 v5 = -- Runtime error: Exceeded the vertex countSkin:ASkin | v5 EX
+  A14 scaleWeight v5 2.0 = -- Argument count error: scaleWeight wanted 2, got 3
+  A14b 读 v5 EX
+  A15 SetBoneWeights 4 参 = -- Argument count error: setBoneWeight wanted 4, got 3
+  A15b 读 v5 EX
+  A16 GetBoneWeight smod 2 5 = -- Runtime error: Exceeded the vertex countSkin:ASkin (GetBoneWeight(bone,vert) 口径核对)
+  W v2 写失败: -- Runtime error: Exceeded the vertex countSkin:Skin
+  B0 旁证：objects=42 蒙皮回读 v2 ids=#(1) ws=#(1.0) sum=1.0
+  B1 快照项数 = 31 / 节点数 31 耗时 = 0.0 秒
+  B4 挪开 foot = 3.00006 旋转分量差 = 3.98904
+  B5 纯数据还原：31 项耗时 0.025 秒 最大位置误差=0.57403 最大四元数分量差=4.0
+  B6 还原后仍可写 = OK
+  B7 旁证 Skin 权重还在 = v2 ids=#(1) ws=#(1.0) sum=1.0 objects=42
+  C1 figureMode=true = true
+  C2 saveFigFile = true
+  C3 文件 size = 11126L
+  C4 figureMode=false = false
+  C5 挪开量 foot = 3.00006（先确认 setTransform 真的把骨挪动了，否则后面的「还原成功」是假的）
+  C6 回滚前 figureMode = false
+  C7 figureMode=true = true
+  C8 loadFigFile = true
+  C9 Figure 模式内 load 后 foot 离快照 = 1.62125e-05
+  C10 figureMode=false = false
+  C11 出 Figure 后 foot 离快照 = 1.62125e-05 pelvis = 0.0 hand = 4.46193e-05
+  C12 save 耗时 0.005 秒 / load(含两次切模式) 耗时 0.005 秒
+  C13 load 后仍可 setTransform = OK
+  C14 load 后旁证：objects = 42（回滚前 42） 蒙皮回读 = v2 ids=#(1) ws=#(1.0) sum=1.0 BoneGeometry 在 = $Bone:m4wBone @ [0.000000,30.000000,0.000000]
+  C15 fig 路线后逐节点最大位置误差 = 2.00006（对照 B5 的最大位置误差 0.57403）
+===== M4d readback probe done =====

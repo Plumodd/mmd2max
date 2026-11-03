@@ -145,6 +145,44 @@ baselines/round22_objrun.log baselines/round23_objrun.log` ⇒ **exit 0**，415�
 `test_maxscript_contract.py` 现在 2011 行 / 123 个方法 / 435 个 assertIn + 67 个 assertNotIn —— 它从不执行 MAXScript，只把中文日志措辞钉死。这不是测试，是**给重构上锁**。
 M5 之前不动它（它还能挡住手滑改日志格式），M5 一次性换掉。
 
+M4b ✅（第二十四轮 `baselines/round24_objrun.log`，`--shot`，退出码 **0**）：蒙皮第一次被**从场景里读回来**验收。
+期望值那一侧全部来自输入文件（`tools/obj_run.py` 解析 `bones.tsv` + `weights.tsv`，
+`verdicts.skin_expectation()` 数出「作者要什么」），Max 那一侧只报「Skin 修改器里到底挂着什么」：
+
+| 读数 | 本轮实测 | 尺的来源 |
+| --- | --- | --- |
+| `skin_rb/links_read` | 26742 | weights.tsv 的权重对总数（Python 另一进程数） |
+| `skin_rb/links/` 四根脚骨 | L Foot 363 / L Toe0 74 / R Foot 366 / R Toe0 74 | 按骨号出现次数逐根数 |
+| `skin_rb/verts_read` | 18892 | CFG 的顶点数 = 权重表数据行数 |
+| `zero_verts` / `dom_mismatch` / `name_mismatch` / `unmodified_verts` | 全 0 | 「写完立刻读」的硬要求 |
+| `weight_err_max` / `sum_err_max` | 0.0 / **1.19209e-07** | 期望 0，容差 1e-4 / 1e-3（float32 往返） |
+| `repaired` / `zero_verts_pre` / `elapsed_s` | 0 / 0 / 1.318 秒 | 过程量 ⇒ `kind=report`，合法的修权不该判红 |
+
+`sum_err_max` 那个非零的 1.19e-07 正是「这是真量出来的」的证据：抄来的数会是 0。
+配套的 `--no-skin` 冒烟轮（第二十五轮 `baselines/round25_noskin_objrun.log`，退出码 0）证明降级方向对：
+141 通过 / 0 失败 / **30 未跑** —— 23 条回读 + 4 条写入侧 + `skin_apply`/`skin_verify` 两条收工边界
++ 一条 `physics_build`，全部 `when=if_present` 退成 SKIP 而不是 FAIL，规格表一行没少。
+几何中性：`diff_round.py --allow "^配置" --allow "^收敛闸门" --allow "^回读进度" --allow "^蒙皮回读"
+round23 round24` ⇒ **exit 0**（416→420 行，多出的四行全是回读自己的进度与汇总）。
+规格 147→**171** 行（+23 条回读判据 +1 条 `pass/ran skin_verify`），通道 49→**69**。
+
+顺带扳正一条歪了 23 轮的尺：`skin/bones` 的期望值原先拿 meta 的 `kept_bones`，可它报的是
+`skinOps.GetNumberBones` —— 只有「每一根骨都参与蒙皮」的模型才碰巧相等（香菱正好如此，所以一直是绿的）。
+换一具有 `skin_flag=0` 的骨就会判红，而错的是尺。现在期望值来自骨骼表的 `skin_flag`，
+`kept_bones` 退回去只干一件事：交叉核对「骨骼表行数 == 导出摘要说的骨数」，分叉当场中止（两条新守卫用例）。
+
+**探针 m4~m4f 换来的六条硬事实**（全部落进 `mmd2maxVerifySkin`，别再靠猜 API 行为）：
+新建的 Skin 必须先被堆栈求值一次才读得动（`mesh.numVerts` 或 `redrawViews()`，`skinOps` 的**读**操作不算求值）；
+每个顶点只有**第一次**写生效，第二次写会把权重永久变成 0.0，唯一补救是 `skinOps.unNormalizeVertex smod v true`
+再重写；Skin 总会归一化并保持写入顺序；没写过的顶点读回来是 `<某根骨> @ 1.0` 而不是空；
+`IsVertexModified` 返回整数 0/1 而非布尔；权重 ≲1e-8 会被存成 0.0 但**骨号还在** —— 所以链路按骨号出现次数数，
+按权重数就会少数（M4f C2）。18892 个顶点全表读一遍 1.3 秒，不是性能瓶颈。
+
+**规则 10 的边界还没测清**（记成待办，别当已解决）：契约测试禁的是 `local x = try (…) catch (…)`，
+而 v3 的规则文本把「try 当表达式取值」和「行尾续行」捆在一句里说。探针里那种写法跑通过，所以真正致命的
+很可能是**顶层 `local`**（那本身就该 abort 整份文件）。本轮选择改代码绕开、而不是赌一整轮实跑去放宽规则；
+下次单开一个探针把「顶层 local」「try 当表达式」「行尾续行」三者**分别**测一遍，再决定这条规则怎么切。
+
 ## 5. 顺手从网上捡到的两条（v3 完全没用上）
 
 - **PMX 自带 roll/扭转轴**：骨记录里有「轴固定化 Fixed Axis」和「局部轴 Local Axis /

@@ -156,6 +156,12 @@ PASSES: tuple[Pass, ...] = (
     _pass("skin_apply", "蒙皮（Skin 修改器）",
           requires=("accessory_build", "mesh_import"),
           writes=("mesh", "skin"), optional=True),
+    # 蒙皮回读（M4b）：读的是场景里那个 Skin 修改器，期望值来自 weights.tsv / bones.tsv。
+    # 它排在 skin_apply 之后、morpher_build 之前，因为 `writes` 里的 skin_rb 只能由这一段报，
+    # 而 Morpher 会往同一个网格上叠通道 —— 回读必须在通道建立之前量，量的才是蒙皮那一刻的权重。
+    # optional 的理由只有 `--no-skin`：蒙皮整段跳过时这里无事可读。
+    _pass("skin_verify", "蒙皮回读复核（场景 Skin 读回）",
+          requires=("skin_apply",), writes=("skin_rb",), optional=True),
     _pass("morpher_build", "表情（Morpher 通道）", requires=("mesh_import",),
           writes=("morpher",), optional=True),
     _pass("physics_build", "物理刚体与关节", requires=("accessory_build",),

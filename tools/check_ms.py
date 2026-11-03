@@ -33,7 +33,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# MAXScript 保留字（与变量命名冲突的那些；不追求完整，覆盖实际踩过的坑）
+# MAXScript 保留字（与变量命名冲突的那些；不追求完整，覆盖实际踩过的坑。
+# 新增只认实测：`shape` 是 M4 探针第一次跑被「Cannot assign to read-only variable: shape」
+# 打死之后加进来的，不是照抄文档 —— 抄一份来路不明的名单只会让人以为查得全。
 RESERVED = {
     "on", "off", "in", "of", "to", "by", "do", "then", "else", "if", "for",
     "while", "break", "continue", "return", "exit", "with", "try", "catch",
@@ -41,7 +43,7 @@ RESERVED = {
     "not", "true", "false", "undefined", "ok", "mapped", "build", "at", "time",
     "coordsys", "about", "animate", "redraw", "undo", "print", "format", "case",
     "default", "struct", "macroScript", "utility", "rollout", "plugin", "tool",
-    "rcmenu", "silent", "quiet", "none", "all", "as", "of",
+    "rcmenu", "silent", "quiet", "none", "all", "as", "of", "shape",
 }
 
 
@@ -60,13 +62,30 @@ def strip_comments(src: str) -> str:
 
 
 def check_reserved(src: str) -> list[str]:
+    """保留字撞名检查：`local` / `global` / `fn 名` / 函数参数，四种声明形式全覆盖。
+
+    为什么 `fn` 的名字也要查：MAXScript 的 `fn name params = body` 编译成「给 name 赋值」，
+    而保留字是**只读**的，所以 `fn shape x = ...` 不在编译期报语法错，而是在执行到那一行时抛
+    「Cannot assign to read-only variable: shape」—— 整份脚本中止，而且 MMD2MAX.REPORT 里
+    一行读数都还没有。这一条是 M4 探针（probes/readback_m4.txt）第一次跑就是这么死的：
+    工具原先只看 `local`，`fn shape` 直接从它眼皮底下过去了。
+    保留字不区分大小写：Max 的内建类叫 `Shape`，写 `shape` 一样撞。
+    """
     problems = []
     clean = strip_comments(src)
-    for m in re.finditer(r"\blocal\s+([A-Za-z_]\w*)", clean):
-        name = m.group(1)
-        if name in RESERVED:
-            line = clean[:m.start()].count("\n") + 1
-            problems.append(f"行 {line}: `local {name}` —— `{name}` 是 MAXScript 保留字")
+
+    def report(name: str, form: str, position: int) -> None:
+        if name.lower() not in RESERVED:
+            return
+        line = clean[:position].count("\n") + 1
+        problems.append(f"行 {line}: `{form} {name}` —— `{name}` 是 MAXScript 保留字"
+                        f"（保留字不区分大小写，且执行到那一行才抛，编译期看不出来）")
+
+    for pattern, form in ((r"\blocal\s+([A-Za-z_]\w*)", "local"),
+                          (r"\bglobal\s+([A-Za-z_]\w*)", "global"),
+                          (r"\bfn\s+([A-Za-z_]\w*)", "fn")):
+        for m in re.finditer(pattern, clean):
+            report(m.group(1), form, m.start())
     for m in re.finditer(r"\bfn\s+\w+\s+([^=]*?)=", clean):
         for param in m.group(1).split():
             if param in RESERVED:
@@ -220,37 +239,74 @@ def _paren_delta(code: str) -> int:
     return delta
 
 
+IF_HEAD_DO = re.compile(r"\bif\b.*\bdo\b\s*\(?\s*$")
+
+
+def _next_code(lines, start):
+    """start（0-based）之后第一条非空行：返回 (内容, 下标)；到末尾返回 ("", len)。"""
+    i = start
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i >= len(lines):
+        return "", i
+    return lines[i].strip(), i
+
+
+def _block_end(depths, open_at, start_depth):
+    """括号块从 open_at 行开始，返回** closes 它的那一行**下标（找不到就到文件尾）。"""
+    for j in range(open_at + 1, len(depths)):
+        if depths[j] <= start_depth:
+            return j - 1
+    return len(depths) - 1
+
+
 def check_if_do_else(src: str) -> list[str]:
-    """if...do 没有 else 分支：要写 else 必须用 if...then。本项目真实踩过这个坑。"""
+    """if...do 不许接 else（要接必须写 if...then）——本项目真踩过这个 Syntax error。
+
+    判断「这个 if...do 的块体到哪结束」：
+      - if 行以 `(` 结尾，或紧跟的非空行以 `(` 开头 → 是括号块，跟着括号深度回到
+        if 行所在深度的那一行就是块尾；
+      - 否则块体就是紧跟的那**一条语句**（行尾 `\\` 续行要一起吃掉）。
+    然后只看块尾之后的第一条非空行是不是 `else`。
+
+    为什么重写：以前是一条全局 pending 队列，靠「深度变深」认定进入了块体。
+    单语句体不进括号，那些项永远等不到变深，于是漏到几百行之外的第一个 else 上 ——
+    把 `if (mod i 10000) == 0.0 do` 这种**已经实跑过 23 轮**的行报成缺陷。
+    假阳性的代价不是多改一行，是没人再信这个检查器（M2b 文档里写的就是这件事）。
+    """
     problems = []
     lines = _strip_lines(src)
-    for index, code in enumerate(lines, start=1):
-        if re.search(r"\bif\b.*\bdo\b.*\belse\b", code):
-            problems.append(f"行 {index}: if...do 不允许接 else，请把 do 改成 then。")
-    pending = []  # 每项 [记录行号, 记录时的括号深度, 是否已进入其代码块]
+    depths = []
     depth = 0
-    for index, code in enumerate(lines, start=1):
-        stripped = code.strip()
-        if re.search(r"\bif\b.*\bdo\b\s*\(?\s*$", stripped):
-            pending.append([index, depth, False])
+    for code in lines:
+        depths.append(depth)
         depth += _paren_delta(code)
-        for item in list(pending):
-            start_line, start_depth, entered = item
-            if depth > start_depth:
-                item[2] = True
-                continue
-            if not entered:
-                continue
-            following = ""
-            for nxt in lines[index:]:
-                if nxt.strip():
-                    following = nxt.strip()
-                    break
-            if following.startswith("else"):
-                problems.append(
-                    f"行 {start_line}: if...do 不允许接 else（下一非空行是 else），"
-                    f"请把 do 改成 then。")
-            pending.remove(item)
+
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if re.search(r"\bif\b.*\bdo\b.*\belse\b", stripped):
+            problems.append(f"行 {index + 1}: if...do 不允许接 else，请把 do 改成 then。")
+        if not IF_HEAD_DO.search(stripped):
+            index += 1
+            continue
+        start_depth = depths[index]
+        if stripped.endswith("("):
+            end = _block_end(depths, index, start_depth)
+        else:
+            following, next_at = _next_code(lines, index + 1)
+            if following.startswith("("):
+                end = _block_end(depths, next_at, start_depth)
+            else:
+                end = next_at
+                while end < len(lines) and lines[end].strip().endswith("\\"):
+                    end += 1
+        after, _ = _next_code(lines, end + 1)
+        if after.startswith("else"):
+            problems.append(
+                f"行 {index + 1}: if...do 不允许接 else（块体结束后的第一条非空行是 "
+                f"else），请把 do 改成 then。")
+        index += 1
     return problems
 
 

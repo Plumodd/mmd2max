@@ -46,9 +46,16 @@ v3 的验收长成这样：Max 侧自己数 `成功=39 失败=0`、自己判断�
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 from mmd2max import passes
-from mmd2max.targets import DIR_TOL_DEG, GAP_TOL_CM, TOE_TOL_CM
+from mmd2max.targets import (
+    DIR_TOL_DEG,
+    GAP_TOL_CM,
+    TOE_TOL_CM,
+    WEIGHT_ERR_TOL,
+    WEIGHT_SUM_TOL,
+)
 
 # 两张表的名字（与 tools/obj_run.py 共用；改了这边不改那边 = 报告永远拼不上）
 SPEC_NAME = "MMD2MAX.VERDICTS"
@@ -195,6 +202,116 @@ def segment_expectation(limb: dict[str, str],
 GAP_COVERED_TRUE = "true"
 
 
+# ---------------------------------------------------------------------------
+# 蒙皮回读的期望值（M4b）：从 weights.tsv + bones.tsv 独立算一遍
+# ---------------------------------------------------------------------------
+#
+# 为什么这份计算必须在 Python 再写一遍，而不是拿 Max 报的 `links_expected` 当尺：
+# 23 轮以来的 `skin/written_vertices` 数的是「ReplaceVertexWeights 返回没抛」，而探针
+# 实测「返回 OK 而权重是 0.0」（M4e）和「没写过也读得出某根骨 @ 1.0」（M4f A1）都真实
+# 存在 —— 写入侧的自述证明不了场景。现在 Max 从**场景**读回一份数，Python 从**输入文件**
+# 算出一份期望，两边来自不同进程，这才是验收。
+#
+# 两条规则必须与 .ms 逐字同语义，否则第一轮就会假 FAIL：
+#  1. 参与蒙皮的骨 = `skin_flag != "0"` 的行，Skin 里的骨号按表里的行序从 1 开始累加
+#     （mmd2maxApplySkin 的 globalToSkin）。
+#  2. 链路按**骨号出现次数**计，不按权重大小计（M4f C2：≲1e-8 的权重会被存成 0.0，
+#     骨号还在；按权重数就会少数链路）。
+LINK_SUBJECT_SUFFIXES = (" Toe0", " Foot")
+
+
+class SkinExpectation(NamedTuple):
+    """一次蒙皮的期望值，全部从输入文件算出，一个都不来自 Max。"""
+
+    links_expected: int
+    verts_no_exp: int
+    bones_skinned: int
+    # 看得见的那几根（脚尖/足首）：(Max 里的节点名, 期望链路数)，按骨号顺序。
+    links_by_bone: tuple[tuple[str, int], ...]
+
+
+def parse_weights(text: str) -> list[list[tuple[int, float]]]:
+    """weights.tsv → 每个顶点一串 `(全局骨号, 权重)`。
+
+    这张表**不走** `parse_table`：第 2 列往后是变长的 `骨号:权重` 对（香菱每行 1~4 对），
+    而 parse_table 遇到「列数比列名多」必须报错 —— 那是它该做的（多出来的列意味着有人
+    改了格式却没改列名表）。所以这里单独一份解析，语义与 .ms 的
+    `for j = cPairs to p.count` 一致。
+
+    行序即顶点号：Max 那边既按行序落位、也拿 `vertex_index` 核对行序（`index_seq_bad`），
+    这里同样要求第 i 行的 vertex_index == i（0-based）。不满足就抛 —— 权重按序号写入，
+    行序错了就是整份权重错位（#13 那一类），不能让下一轮 Max 去「量出来再看」。
+    """
+    body = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln for ln in body.split("\n") if ln.strip() and not ln.startswith("#")]
+    if not lines:
+        raise ValueError("权重表是空的（连列名行都没有）")
+    header = lines[0].split("\t")
+    if tuple(header[:2]) != ("vertex_index", "bone_weight_pairs"):
+        raise ValueError(f"权重表的前两列名不是 vertex_index/bone_weight_pairs，"
+                         f"而是 {header[:2]}")
+    verts: list[list[tuple[int, float]]] = []
+    for number, line in enumerate(lines[1:], start=2):
+        cells = line.split("\t")
+        index = int(cells[0])
+        if index != number - 2:
+            raise ValueError(f"权重表第 {number} 行的 vertex_index 是 {index}，"
+                             f"按行序应该是 {number - 2}：权重按序号写入，行序错位 = 全表错位")
+        pairs: list[tuple[int, float]] = []
+        for cell in cells[1:]:
+            if not cell:
+                continue          # 行尾多一个制表符：Max 那边同样当「没有这一对」跳过
+            bone, sep, weight = cell.partition(":")
+            if not sep:
+                raise ValueError(f"权重表第 {number} 行有不含冒号的权重项 {cell!r}："
+                                 "格式该是 `骨号:权重`，静跳过会少数链路")
+            pairs.append((int(bone), float(weight)))
+        verts.append(pairs)
+    return verts
+
+
+def skin_expectation(bones: list[dict[str, str]],
+                     weights_rows: list[list[tuple[int, float]]]) -> SkinExpectation:
+    """按上面那两条规则数一遍期望链路；骨号映射与节点名都在这里定，Max 那边不许自己猜。"""
+    for number, row in enumerate(bones):
+        if row.get("idx") is not None and int(row["idx"]) != number:
+            raise ValueError(f"骨骼表第 {number} 行的 idx 是 {row['idx']}，与行序不符："
+                             "权重表里的骨号就是这里的行序，错位会蒙错骨")
+    skinned: list[str] = []
+    for row in bones:
+        if row.get("skin_flag") == "0":
+            continue
+        # 节点名 = Biped 目标名（人形骨复用 Biped 节点），否则 = 建出来的 BoneGeometry 名。
+        skinned.append(row.get("biped_target") or row["bone_name"])
+
+    global_to_skin: dict[int, int] = {}
+    skin_id = 0
+    for i, row in enumerate(bones):
+        if row.get("skin_flag") == "0":
+            continue
+        skin_id += 1
+        global_to_skin[i + 1] = skin_id          # 权重表里的骨号是 0-based 全局行号
+
+    counts = [0] * (skin_id + 1)
+    links = 0
+    verts_no_exp = 0
+    for pairs in weights_rows:
+        touched = 0
+        for bone, _weight in pairs:
+            sid = global_to_skin.get(bone + 1)
+            if sid is None:
+                continue          # 指向不蒙皮的骨/越界：由 pairs_dropped 那条 gate 兜
+            counts[sid] += 1
+            links += 1
+            touched += 1
+        if touched == 0:
+            verts_no_exp += 1
+    by_bone = tuple((nm, counts[sid]) for sid, nm in enumerate(skinned, start=1)
+                    if nm.endswith(LINK_SUBJECT_SUFFIXES))
+    return SkinExpectation(links_expected=links, verts_no_exp=verts_no_exp,
+                           bones_skinned=skin_id, links_by_bone=by_bone)
+
+
 def row(phase: str, check: str, subject: str, expected, tol,
         kind: str, when: str = "always") -> tuple[str, str, str, str, str, str, str]:
     """规格行 → 七个**字符串**字段（wire format 只搬文本，判定时再 float()）。
@@ -233,7 +350,7 @@ def _priced(model: str, table: dict, key):
 
 
 def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
-               kept_bones: int, morph_count: int,
+               skin_expect: SkinExpectation, morph_count: int,
                skin: bool = True, foot_reach: bool = True) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
 
@@ -244,6 +361,12 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     哪些行出现也由导出结果决定：脚链、脚趾复摆、大腿扭转的主体都从 limbs 的 `mode`
     列推出来，所以换一具模型（指骨数不同、没有脚链）规格表自己就跟着变，不需要谁
     在实跑前手改这张表。
+
+    `skin_expect` 是**必填**的：蒙皮那一组判据的期望值全部来自 weights.tsv / bones.tsv
+    （`skin_expectation()`），没有它就没有尺。以前这里收的是 meta 的 `kept_bones`，
+    而 `skin/bones` 报的是 `skinOps.GetNumberBones` —— 只有「每一根骨都参与蒙皮」的模型
+    才碰巧相等（香菱正好如此，所以 23 轮都是绿的）；换一具有 skin_flag=0 的模型，
+    那条 gate 会判红而错的是尺。现在两件事各归各位。
     """
     rows: list[tuple[str, ...]] = []
     foot_rows = [x for x in limbs if x.get("mode") == "foot"]
@@ -392,10 +515,57 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
 
     # ── 蒙皮（--no-skin 时整段跳过）──────────────────────────────
     when = "always" if skin else "if_present"
-    rows.append(row("skin", "bones", GLOBAL, kept_bones, 0, "gate", when=when))
+    rows.append(row("skin", "bones", GLOBAL, skin_expect.bones_skinned, 0, "gate",
+                    when=when))
     rows.append(row("skin", "failed_vertices", GLOBAL, 0, 0, "gate", when=when))
     rows.append(row("skin", "written_vertices", GLOBAL, vertex_count, 0, "gate",
                     when=when))
+
+    # ── 蒙皮回读（M4b）：期望值全部来自 weights.tsv / bones.tsv ────
+    # 上面那三条 skin/* 全是**写入侧的自述**（boneTotal 是 AddBone 之后数一遍，
+    # written_vertices 数的是「ReplaceVertexWeights 返回没抛」）。这一组读的是场景：
+    # skinOps 从那个 Skin 修改器里把每个顶点的骨号与权重取回来，再和这边算的期望对撞。
+    #
+    # 三条分组，各自管一件事：
+    #  ① 「量没量到」：read_fail / verts_read / unmodified_verts。
+    #     unmodified_verts 的期望是 `verts_no_exp` 而不是 0 —— 权重表里本来就没有链路的
+    #     顶点确实不该被写入，硬写 0 等于拿一条不成立的尺去判（#19 那类「永远过不去的
+    #     gate」）。而一旦 Max 那边的 verts_no_exp 与这边不一致，这条就会跟着红。
+    #  ② 「解析有没有分叉」：index_seq_bad / pairs_dropped / verts_no_exp / links_expected。
+    #     这四条量的都是 Max 那份 weights.tsv 解析器 —— 期望 0（前两）或这边的计数（后两）。
+    #     权重指向 skin_flag=0 的骨会被丢掉（pairs_dropped），那是真缺陷：那一块网格从此
+    #     不会跟着动，所以它是 gate 而不是 report。
+    #  ③ 「场景里的权重对不对」：zero_verts / dom_mismatch / weight_err_max / sum_err_max /
+    #     links_read / links_missing / link_diff_max / link_mismatch_bones，外加脚尖与足首
+    #     各一根骨的链路数（#35 的可见读数：Toe0 从 0 变 74、Foot 从 377 降到 363）。
+    rows.append(row("skin_rb", "verts_read", GLOBAL, vertex_count, 0, "gate", when=when))
+    rows.append(row("skin_rb", "read_fail", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "unmodified_verts", GLOBAL,
+                    skin_expect.verts_no_exp, 0, "gate", when=when))
+    rows.append(row("skin_rb", "index_seq_bad", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "pairs_dropped", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "verts_no_exp", GLOBAL,
+                    skin_expect.verts_no_exp, 0, "gate", when=when))
+    rows.append(row("skin_rb", "links_expected", GLOBAL,
+                    skin_expect.links_expected, 0, "gate", when=when))
+    rows.append(row("skin_rb", "links_read", GLOBAL,
+                    skin_expect.links_expected, 0, "gate", when=when))
+    rows.append(row("skin_rb", "links_missing", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "name_mismatch", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "zero_verts", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "dom_mismatch", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "link_diff_max", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "link_mismatch_bones", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "weight_err_max", GLOBAL, 0, WEIGHT_ERR_TOL, "gate",
+                    when=when))
+    rows.append(row("skin_rb", "sum_err_max", GLOBAL, 0, WEIGHT_SUM_TOL, "gate",
+                    when=when))
+    # 这三条是「发生过什么」而不是「该等于几」：补写次数与补救前的坍缩数只要出现就够，
+    # 定成 gate 反而会在某一轮真的救回顶点时把 good case 判成 FAIL。
+    for check in ("zero_verts_pre", "repaired", "elapsed_s"):
+        rows.append(row("skin_rb", check, GLOBAL, None, None, "report", when=when))
+    for subject, count in skin_expect.links_by_bone:
+        rows.append(row("skin_rb", "links", subject, count, 0, "gate", when=when))
 
     # ── 表情通道（#24/#25：容量 ≠ 已用，必须逐条回读名字与目标）──
     # 表情表为空（CFG 允许 MMD2MAX_MORPHS 空）时整段跳过 → if_present。
@@ -411,6 +581,7 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     # 跑到，没跑是故障，不该被当成合法跳过。
     rows.extend(passes.spec_rows({
         "skin_apply": "always" if skin else "if_present",
+        "skin_verify": "always" if skin else "if_present",
         "foot_reach": "always" if foot_reach else "if_present",
         "toe_snap_reach": "always" if foot_reach else "if_present",
         "morpher_build": "always" if morph_count > 0 else "if_present",
@@ -468,6 +639,31 @@ def parse_table(text: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
 # `mmd2maxReport "…" "…"` 字面量对撞 —— 少一个就是「这条判据永远不会有人填」，
 # 多一个就是「报告里出现规格表不认识的行」。两侧都由测试逼着同步。
 # fixture 必须覆盖三种 mode（foot / leg / 其余）与指节，否则通道集合会缺类。
+
+# 蒙皮通道的 fixture 走**真解析**（这两小段就是导出的形状：变长权重行 + 一根不蒙皮的骨），
+# 而不是手搭一个 SkinExpectation —— 手搭的话，`skin_rb` 的通道集合就只反映我当时的想象。
+FIXTURE_BONES = "\t".join(("idx", "bone_name", "parent", "role", "biped_target",
+                           "head_x", "head_y", "head_z", "tail_x", "tail_y", "tail_z",
+                           "skin_flag", "max_parent")) + "\n" + "\n".join((
+    "\t".join(("0", "全ての親", "-1", "control", "", "0", "0", "0", "0", "0", "1",
+               "0", "-1")),
+    "\t".join(("1", "左足", "0", "skeleton", "Bip001 L Foot", "0", "0", "0", "0", "0",
+               "1", "1", "-1")),
+    "\t".join(("2", "左つま先", "1", "skeleton", "Bip001 L Toe0", "0", "0", "0", "0",
+               "0", "1", "1", "-1")),
+    "\t".join(("3", "裙子A", "0", "accessory", "", "0", "0", "0", "0", "0", "1",
+               "1", "-1")),
+)) + "\n"
+
+FIXTURE_WEIGHTS = "vertex_index\tbone_weight_pairs\n" + "\n".join((
+    "0\t1:0.700000\t2:0.300000",
+    "1\t2:1.000000",
+    "2\t3:1.000000",
+)) + "\n"
+
+FIXTURE_SKIN_EXPECT = skin_expectation(parse_table(FIXTURE_BONES)[1],
+                                       parse_weights(FIXTURE_WEIGHTS))
+
 CHANNELS: frozenset[tuple[str, str]] = frozenset(
     (r[0], r[1]) for r in build_spec(
         model=PRICED_MODEL, vertex_count=1,
@@ -479,5 +675,5 @@ CHANNELS: frozenset[tuple[str, str]] = frozenset(
                 "desired_len": "2.344292", "mode": "link"},
                {"parent_target": "Bip001 Spine", "child_target": "Bip001 Spine1",
                 "desired_len": "8.325677", "mode": "link"}],
-        kept_bones=1, morph_count=1, skin=True, foot_reach=True)
+        skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True)
 )
