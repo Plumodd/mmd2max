@@ -607,6 +607,105 @@ def _clamp_tip_bone_lengths(bone_names, parents, heads, tails, limit: float = 2.
                     h[2] + d[2] / length * limit)
 
 
+# 胸部骨的识别：只认「左右胸」这一类，不认躯干段。
+# 为什么不能只看「名字里有胸」：上半身/下半身/胸腔/胸郭都带「胸」或挨着胸，
+# 它们是躯干中轴、tail 由 Biped 链决定，改了指向就把整条脊柱搞坏。
+BREAST_WORDS = ("胸", "バスト", "breast", "bust")
+BREAST_SKIP = ("上半身", "下半身", "胸腔", "胸郭", "胸骨")
+
+
+def _is_breast_bone(name: str, name_en: str = "") -> bool:
+    text = f"{name} {name_en}"
+    if any(word in name for word in BREAST_SKIP):
+        return False
+    return any(word in text for word in BREAST_WORDS)
+
+
+def _aim_breast_bones(bone_names, bone_names_en, parents, deform, positions,
+                      scale, heads, tails, min_region: int = 6) -> list[str]:
+    """把胸部骨（左胸/右胸/バスト…）的 tail 改成**从网格量出来的乳头点**。
+
+    为什么必须改：PMX 里这对骨的 tail_offset 是一根纯竖直的短棒（香菱实测
+    head→tail = +Z 7.66cm，正好等于 scale 的默认尾长），作者只是留了个默认值，
+    没有任何方向含义。Max 按 head→tail 画 BoneGeometry，于是胸腔上长出两根向上的
+    牙签 —— 用户 2026-11-03 的截图判据：「胸部的骨骼应该表现胸部的指向方向，
+    应该指向乳头」。
+
+    乳头怎么定义才不靠猜（probes/breast_axis_probe.py 实测）：
+      · 取「以这根骨为最大权重、且权重 ≥0.5」的顶点当它自己的皮肤区域。香菱实测
+        左右各 18 个点，包围盒 2.82 × 3.09 × 4.19cm —— MMD 的胸部骨本来就只绑乳头
+        那一小块，所以区域本身就是答案的一半，不必再猜整个乳房的外形。
+      · 顶点 = 沿 head→区域质心 方向投影最外的 25% 求均值，迭代两轮收敛。
+        为什么不直接取「最靠前那个点」：单点会被一个野顶点带跑；为什么不用质心：
+        质心在鼓面内部（实测比顶点靠后 1.2cm，方向差 13°）。
+      · 这条估计**不假设角色朝哪个轴**（只用骨自己的 head 和它绑着的点），所以
+        换模型、换朝向都成立。探针里它和「最靠前 25% 均值」读到同一个点（4.55cm /
+        与竖直夹 96.4°，即水平略向下），两条独立算法对撞一致才敢当判据。
+
+    只在「这根骨没有保留的后代」时动手：有后代的话 tail 已经指向子关节（真链），
+    覆盖它就是把骨骼链画错。区域太小（<min_region 点）也原样留着 —— 宁可不改，
+    也不拿三五个点编出一个方向。返回改动了哪几根（进 plan.notes，日志里留痕）。
+    """
+    candidates = [i for i, name in enumerate(bone_names)
+                  if _is_breast_bone(name, bone_names_en[i] if i < len(bone_names_en) else "")]
+    if not candidates:
+        return []
+    has_child = [False] * len(bone_names)
+    for i, parent_index in enumerate(parents):
+        if 0 <= parent_index < len(has_child):
+            has_child[parent_index] = True
+    region: dict[int, list] = {i: [] for i in candidates}
+    for index, weights in enumerate(deform):
+        if not weights:
+            continue
+        owner, weight = max(weights, key=lambda pair: pair[1])
+        if owner in region and weight >= 0.5:
+            # positions 是 **PMX 原始坐标**（未转换未缩放），heads/tails 是 Max 坐标，
+            # 两边必须经同一个 convert_vec 才可比 —— _neck_axis_y 走的是同一条路。
+            region[owner].append(convert_vec(positions[index], scale))
+    changed = []
+    for i in candidates:
+        if has_child[i]:
+            continue
+        pts = region.get(i) or []
+        head = heads[i]
+        if len(pts) < min_region:
+            continue
+        centroid = tuple(sum(p[k] for p in pts) / len(pts) for k in range(3))
+        aim = centroid
+        for _ in range(2):
+            direction = _unit(_sub(aim, head))
+            ranked = sorted(pts, key=lambda p: _dot(_sub(p, head), direction),
+                            reverse=True)
+            group = ranked[:max(1, len(ranked) // 4)]
+            aim = tuple(sum(p[k] for p in group) / len(group) for k in range(3))
+        if _dist(head, aim) < 1e-3:
+            continue          # 顶点几乎落在骨头上：没有方向可言，别把 tail 变成零长
+        tails[i] = aim
+        changed.append(f"{bone_names[i]}→({aim[0]:.2f},{aim[1]:.2f},{aim[2]:.2f})"
+                       f" {len(pts)}点/{_dist(head, aim):.2f}cm")
+    return changed
+
+
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _dist(a, b):
+    return _dot(_sub(a, b), _sub(a, b)) ** 0.5
+
+
+def _unit(v):
+    length = _dot(v, v) ** 0.5
+    if length < 1e-12:
+        return (0.0, 0.0, 1.0)
+    return (v[0] / length, v[1] / length, v[2] / length)
+
+
 def _neck_axis_y(positions, scale: float, neck, band: float = 3.0):
     """量颈部网格的前后中线（Max y，前 = -y）。采不到可靠切片返回 None。
 
@@ -1599,6 +1698,12 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
 
     # 眼部 tip 骨（目先/瞳）的 tail 在 MMD 里指得很远，画出来像长箭头；压短它
     _clamp_tip_bone_lengths(bone_names, parents, heads, tails)
+    # 胸部骨：PMX 给的是一根竖直牙签，改成指向网格里量出来的乳头
+    breast_notes = _aim_breast_bones(
+        bone_names, [model.bones[old].name_en for old in kept],
+        parents, deform, positions, scale, heads, tails)
+    for note in breast_notes:
+        plan.notes.append(f"  胸部骨指向乳头：{note}")
     # 颈部：把 首 挪到「颈部网格实测中线」（MMD 的躯干骨在体腔中心、颈骨在颈轴，
     # 两者不同线；按上下骨取中点会把脖子拽到喉咙前面，见 _center_neck 文档）
     neck_shift = _center_neck(heads, biped_mapping, old_to_new, positions, scale)
