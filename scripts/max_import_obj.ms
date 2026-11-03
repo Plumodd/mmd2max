@@ -61,7 +61,7 @@ global MMD2MAX_SKIN
 global MMD2MAX_SHOT
 global MMD2MAX_QUIET
 global MMD2MAX_INTERACTIVE
-/* 五个装配目标值（M2 起由 mmd2max/targets.py 写进 CFG，这里只声明、不给默认值）。
+/* 装配目标值（M2 起由 mmd2max/targets.py 的 TARGETS 写进 CFG，这里只声明、不给默认值）。
    声明必须排在任何读取者之前：以前这几个数就写在声明行末尾，于是「这份脚本自己带着判据」，
    Python 侧根本不知道有哪些数 —— 现在缺键一律中止，和路径/开关同一待遇。 */
 global MMD2MAX_DIRTOL
@@ -69,6 +69,13 @@ global MMD2MAX_ROLLTOL
 global MMD2MAX_TOETOL
 global MMD2MAX_GAPTOL
 global MMD2MAX_FOOTREACH
+/* 快照回滚开关（M4d）。和 FOOTREACH 一样只声明不给默认值：值来自 CFG，
+   而 CFG 的值来自 mmd2max/targets.py 的 ROLLBACK。它决定的是「一刀写坏了场景里剩什么」，
+   不是某个目标值，所以必须能整段关掉来自证它不改几何。 */
+global MMD2MAX_ROLLBACK
+/* 接趾守卫的触发阈值（厘米）：骨盒远端比动手前更远这么多才算「推过头」。
+   它和 ROLLBACK 是两件事 —— ROLLBACK 决定「有没有这条退路」，这个数决定「什么时候走」。 */
+global MMD2MAX_RBTRIG
 /* mmd2maxLoadCfg 算好的配置摘要，由 mmd2maxMain 在 mmd2maxInitLog **之后**打出来
    （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
 global MMD2MAX_CFGSUMMARY
@@ -885,7 +892,8 @@ fn mmd2maxLoadCfg =
        上限 9 是留给「真需要多跑两遍」的余量；下限 1：0 遍的循环根本不该存在，
        而撞上限这件事本身要能被校验器复现，所以这里必须是个可核对的整数。 */
     MMD2MAX_CONVERGE_MAX = mmd2maxCfgInt "MMD2MAX_CONVERGE_MAX" 1 9
-    /* 五个装配目标值（M2）：范围与 mmd2max/targets.py 的 TARGETS 元组逐字对应，
+    /* 装配目标值（M2 起全部住在 mmd2max/targets.py，条数会随功能长，所以这里不写死数字）：
+       范围与 TARGETS 元组逐字对应，
        由 tests/test_targets.py 钉住。这里不给默认值 —— 容差没读到就中止，
        比「按 0 度容差把每根骨都判成超标」或者「按上一轮的 5 度悄悄放行」都可诊断得多。
        9999 那个上限是回滚位：DIRTOL/ROLLTOL/TOETOL 同时是「比它小就别动这根骨」的门控，
@@ -895,6 +903,8 @@ fn mmd2maxLoadCfg =
     MMD2MAX_TOETOL = mmd2maxCfgNum "MMD2MAX_TOETOL" 0.0 9999.0
     MMD2MAX_GAPTOL = mmd2maxCfgNum "MMD2MAX_GAPTOL" 0.0 50.0
     MMD2MAX_FOOTREACH = mmd2maxCfgBool "MMD2MAX_FOOTREACH"
+    MMD2MAX_ROLLBACK = mmd2maxCfgBool "MMD2MAX_ROLLBACK"
+    MMD2MAX_RBTRIG = mmd2maxCfgNum "MMD2MAX_RBTRIG" 0.0 50.0
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
     MMD2MAX_QUIET = mmd2maxCfgBool "MMD2MAX_QUIET"
@@ -912,6 +922,8 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 趾落位容差=" + (MMD2MAX_TOETOL as string)
     cfgMsg = cfgMsg + " 盒隙容差=" + (MMD2MAX_GAPTOL as string)
     cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
+    cfgMsg = cfgMsg + " 快照回滚=" + (MMD2MAX_ROLLBACK as string)
+    cfgMsg = cfgMsg + " 回滚触发=" + (MMD2MAX_RBTRIG as string)
     cfgMsg = cfgMsg + " 收敛上限=" + (MMD2MAX_CONVERGE_MAX as string)
     /* 判据通道两个路径进摘要：日志里要能看出「这轮按哪张规格表验收、读数落在哪个文件」，
        否则事后只剩一份日志、拼不出任何判定。 */
@@ -2494,7 +2506,9 @@ fn mmd2maxFitBoneReach node axisIdx pivot targetPos =
        摆位**之前**、判据又是两 pivot 的三维间距；摆位随后把子节点搬到 PMX 目标，
        却没人回头补父骨的长度 ⇒ 第十六轮盒前端停在 7.935、子节点在 11.228，
        中间 3.29cm 空气（用户两张对照图里那块「悬在牙签前方的趾骨」）。
-       返回 #(最终差值, 迭代次数, 停滞?, 目标沿轴坐标, 盒远端坐标)，读不到返回 undefined。 */
+       返回 #(最终差值, 迭代次数, 停滞?, 目标沿轴坐标, 盒远端坐标, 动手前的差值)，
+       读不到返回 undefined。第 6 列是给快照回滚（M4d）用的：判「这一刀有没有把盒子推得
+       比动手之前更远」需要动手前后各一个数，而只有这里量得到动手前那个。 */
     local axes = mmd2maxBipedAxes node
     if axes == undefined do return undefined
     local cv = targetPos - pivot
@@ -2504,6 +2518,7 @@ fn mmd2maxFitBoneReach node axisIdx pivot targetPos =
     local iter = 0
     local stalled = false
     local gap = 1e9
+    local gap0 = 1e9
     local along = 0.0
     local far = 0.0
     while iter < 4 do
@@ -2512,6 +2527,7 @@ fn mmd2maxFitBoneReach node axisIdx pivot targetPos =
         if far == undefined do exit
         along = dot cv u
         gap = along - far
+        if iter == 0 do gap0 = gap
         if abs gap <= 0.02 * along do exit
         if far < 0.05 do exit
         local f = along / far
@@ -2523,7 +2539,7 @@ fn mmd2maxFitBoneReach node axisIdx pivot targetPos =
         if chk == undefined do exit
         if abs (chk - far) < 0.01 do ( stalled = true; exit )
     )
-    #(gap, iter, stalled, along, far)
+    #(gap, iter, stalled, along, far, gap0)
 )
 
 fn mmd2maxFitBoneExtent node axisIdx target =
@@ -2832,6 +2848,205 @@ fn mmd2maxVerifyBoxes root limbs widths =
         )
     )
     #(measured, failed)
+)
+
+/* ================= 快照回滚（M4d） =================
+
+   这一节回答的问题是「一刀写坏了，场景里还剩什么」。以前答案是「剩下那一刀」——
+   #scale 把骨盒撑爆（#37）、复摆把趾骨摆飞（#38）、接趾留下牙签（#41），全都只能
+   在事后复核里被读出来，写的那一刻没有任何退路。
+
+   载体由探针定死（probes/figfile_m4h.txt，全部是实测而不是文档）：
+     · `biped.saveFigFile` / `biped.loadFigFile` 收的是 **controller**（`root.controller`），
+       传节点抛「Unable to convert: $Biped_Object:Bip001 … to type: Controller」；
+     · 两者都必须在 Figure 模式内，否则「Cannot run the operation in this mode」；
+     · **一份 .fig 连骨盒一起还原**：把 L Thigh 的 #scale 乘 1.3（盒跨度 40.86→53.12）
+       再 load 回来，盒角差读到 5.72205e-06、#scale 差 4.76837e-07（H2）——所以快照
+       不必自己再抄一张 #scale 表（H3 证明逐骨写回同样能复原，留作 .fig 失效的退路）；
+     · `saveFigFile` 这个动作**自己**在进出 Figure 模式的翻转里把姿态挪走 2.13cm（H0）
+       /2.23cm（H4）。所以这里的存与读都先把模式** peek 回来再还原**，绝不在装配中途
+       写 `figureMode = false`（:2319 那条规则说的就是它）；
+     · 重新存图能当新基准：扰动 18.74cm 之后 load 刚存的那份，三列读数 6.8e-05（H4）
+       —— 这就是下面 self-test 每轮要复验的那件事。
+   `.bip` 那条路是死的：收 controller 报模式错、收节点报类型错（H5），别再来试。
+
+   开关：MMD2MAX_ROLLBACK（mmd2max/targets.py 的 ROLLBACK）。默认 false，且关掉时
+   本节一段代码都不跑 —— 它改的是「写坏了剩什么」而不是某个目标值，所以必须能整段
+   自证几何中性。 */
+
+fn mmd2maxFigPath tag =
+(
+    /* 基准落在 OBJ 同一个目录（一轮一个目录），文件名纯 ASCII。
+       为什么不放系统临时目录：放那里就成了跨轮共享的状态，上一轮的 .fig 给这一轮
+       盖章正是 #21 那类事故的形状（判据读到了不属于本轮的产物）。
+       try/catch 一律语句形式 + 显式失败值（契约 rule 10：`local x = try (...)` 编译期
+       就死，探针里跑出过读数也不值得拿一整轮实跑去赌边界）。 */
+    local dir = undefined
+    try ( dir = getFilenamePath MMD2MAX_OBJ ) catch ( dir = undefined )
+    if dir == undefined or dir == "" do return undefined
+    dir + "mmd2max_rb_" + (tag as string) + ".fig"
+)
+
+fn mmd2maxFigCtrl bipRoot =
+(
+    local ctrl = undefined
+    try ( ctrl = bipRoot.controller ) catch ( ctrl = undefined )
+    ctrl
+)
+
+fn mmd2maxFigOp bipRoot figPath modeFlag =
+(
+    /* 存（true）或读（false）一份 .fig，并且**把调用方的 Figure 模式状态原样还回去**。
+       返回 #(成功?, 调用方原来在不在 Figure 模式里)；controller 拿不到时返回 #(false, false)。 */
+    local ctrl = mmd2maxFigCtrl bipRoot
+    if ctrl == undefined do return #(false, false)
+    local was = false
+    try ( was = ctrl.figureMode ) catch ( was = false )
+    local did = false
+    mmd2maxFigureMode ctrl true
+    if modeFlag then
+        did = try ( biped.saveFigFile ctrl figPath; true ) catch ( false )
+    else
+        did = try ( biped.loadFigFile ctrl figPath; true ) catch ( false )
+    mmd2maxFigureMode ctrl was
+    #(did, was)
+)
+
+fn mmd2maxMarkNode bipRoot targetName =
+(
+    /* limbs 表里是 "Bip001 L Foot" 这种导出骨名，场景里的节点名是 root.name 加上
+       去掉前七个字符的那一段。这串拼接在脚本里已有十几处一模一样的写法（每处都被
+       实跑验证过），这里只服务回滚这条新链路，不去改动老代码。 */
+    if bipRoot == undefined or targetName == undefined do return undefined
+    local found = undefined
+    try ( found = getNodeByName (bipRoot.name + (substring targetName 7 -1)) exact:true ) \
+        catch ( found = undefined )
+    found
+)
+
+fn mmd2maxMarkList bipRoot limbs =
+(
+    /* 给一组 Biped 骨拍「世界位置 + 本地包围盒三根轴的跨度 + #scale 三根轴 + 三根局部轴
+       的世界朝向」的标记。
+       回滚到底回干净没有，就比这四样 —— .fig 声称同时带姿态与骨盒（H2），所以验回滚
+       也必须两样一起验：只比 #pos 会看不见「姿态回来了、骨头还粗着」。
+       不比四元数：探针量到 q 与 -q 表示同一个朝向，逐分量差能把一次完美还原读成 3.99。
+       第 4 样（轴朝向）是第 27 轮补的：那一轮位置/盒/scale 三列全部回零（5.1e-05 /
+       1.9e-06 / 9.5e-07），锁骨的世界长度轴却从 -162.237 度变成 -72.7144 度（差 89.5），
+       双臂落位误差因此从 0.955 涨到 1.957 —— 下游 结构向/转角/射线 吃的恰恰是这根轴，
+       只比位置/盒/scale 的尺会把它读成一次完美还原。
+       **但这一列自己也是读数**：第 27、28 轮它都量到 0.0，也就是说 load 的那一刻帧是
+       好的，坏在后面的 #scale 写刀上（延迟失效）。所以四列一起只担保「载体当场无损」，
+       不担保「这一轮没被回滚碰过」—— 后者由 placement 的 lock 行看着（targets.py 里
+       记了完整的两轮数字）。
+       骨名去重：limbs 每行都带父骨，一根骨会被列多次（父/子各一次）。 */
+    local marks = #()
+    local seen = #()
+    for item in limbs do
+    (
+        local nm = item[1]
+        if nm != undefined and (findItem seen nm) == 0 do
+        (
+            append seen nm
+            local node = mmd2maxMarkNode bipRoot nm
+            if node != undefined do
+            (
+                local sc = mmd2maxBipedScale node
+                append marks #(nm, node.transform.translationpart,
+                              #(mmd2maxLocalExtent node 1, mmd2maxLocalExtent node 2,
+                                mmd2maxLocalExtent node 3), #(sc.x, sc.y, sc.z),
+                              mmd2maxBipedAxes node)
+            )
+        )
+    )
+    marks
+)
+
+fn mmd2maxMarkGap markA markB =
+(
+    /* 两组标记的逐骨最大差：#(位置cm, 盒cm, scale, 轴朝向度)。
+       骨名一边有一边没有 ⇒ 不参与比较（不编一个 0 假装没事）；「骨头的集合变了」
+       这种事故由别的判据管，这里量的是同一根骨回没回来。
+       轴朝向那一列初值 -1，和 mmd2maxVecAngleDeg 的「没测到」约定同一个数：一根骨
+       都量不到时读数是 -1，不是 0。这个区别有代价也有必要 —— 第 4 列是第 27 轮为了
+       「三列全零而锁骨转了 89.5 度」补的，如果它自己也能在没量到时装成 0，就又把
+       同一类假绿换了一把尺子重新制造一遍。 */
+    local dPos = 0.0
+    local dBox = 0.0
+    local dScl = 0.0
+    local dAng = -1.0
+    for a in markA do
+    (
+        local other = undefined
+        for b in markB do if b[1] == a[1] do other = b
+        if other != undefined do
+        (
+            dPos = amax dPos (distance a[2] other[2])
+            for k = 1 to 3 do
+            (
+                dBox = amax dBox (abs (a[3][k] - other[3][k]))
+                dScl = amax dScl (abs (a[4][k] - other[4][k]))
+            )
+            if a[5] != undefined and other[5] != undefined do
+            (
+                for k = 1 to 3 do
+                (
+                    local deg = mmd2maxVecAngleDeg a[5][k] other[5][k]
+                    if deg >= 0.0 do dAng = amax dAng deg
+                )
+            )
+        )
+    )
+    #(dPos, dBox, dScl, dAng)
+)
+
+fn mmd2maxRollbackSelfTest bipRoot limbs =
+(
+    /* 每轮在**这一具真 Biped** 上把回滚载体跑通一次：拍基准 → 存图 → 把一根骨的骨盒
+       沿长度轴撑大 30% → 读图 → 三列差值必须回 0。
+       为什么不「探针跑过一次就够了」：这条路同时依赖 Max 版本、Figure 模式、以及
+       「这一轮的目录真能写出文件」（中文目录名从来没被证明过）。三样任何一样变了，
+       产品里的「回滚」就退化成一句注释 —— 而注释不会在跑坏的那一轮响。
+       1.3 是测试夹具不是判据，所以不进 CFG；它唯一的用处是让 perturb 那一列必须 > 0，
+       否则「回滚后差值为 0」只是根本没扰动过的假绿。
+       返回 #(存图?, 读图?, 扰动后位置差, 回滚后位置差, 回滚后盒差, 回滚后 scale 差,
+             裸存图自身的扰动, 被扰动那根骨的名字, 回滚后局部轴朝向差)。
+       最后一列是第 27 轮的实测教训加上的：那一轮前三列全部回零，同一轮锁骨事后却读出
+       89.5 度的长度轴偏移，代价由双臂落位误差付。第 28 轮带上这一列再跑，它自己读 0.0
+       —— 所以这一列量到的是「当场」，那条 89.5 度是延后结的账：自检通过 ≠ 这一轮没被碰。 */
+    local marks0 = mmd2maxMarkList bipRoot limbs
+    if marks0.count == 0 do return undefined
+    local figPath = mmd2maxFigPath "selftest"
+    if figPath == undefined do return undefined
+    local savedOp = mmd2maxFigOp bipRoot figPath true
+    /* 装配中途本来就在 Figure 模式里，所以这里没有模式翻转。这一行读数回答的是
+       「裸的一次 saveFigFile 动不动场景」—— 探针那次 2.13cm 到底算存图还是算翻转，
+       只有在这里能被拆开。 */
+    local cost = mmd2maxMarkGap marks0 (mmd2maxMarkList bipRoot limbs)
+    local pertName = ""
+    for m in marks0 do
+    (
+        if pertName == "" do
+        (
+            local node = mmd2maxMarkNode bipRoot m[1]
+            if node != undefined do
+            (
+                local lax = mmd2maxLengthAxisIndex node
+                if lax > 0 do
+                (
+                    mmd2maxScaleBoneAxis node lax 1.3
+                    pertName = m[1]
+                )
+            )
+        )
+    )
+    if pertName == "" do return undefined
+    local pert = mmd2maxMarkGap marks0 (mmd2maxMarkList bipRoot limbs)
+    local loadOp = mmd2maxFigOp bipRoot figPath false
+    local back = mmd2maxMarkGap marks0 (mmd2maxMarkList bipRoot limbs)
+    try ( deleteFile figPath ) catch () -- 允许失败：删不掉只多留一个文件，读数已经落盘
+    #(savedOp[1], loadOp[1], pert[1], back[1], back[2], back[3], cost[1], pertName,
+      back[4])
 )
 
 fn mmd2maxApplyScale node axis factor method =
@@ -3684,6 +3899,41 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         throw msg
     )
 
+    /* ===== 快照回滚自检（M4d）=====
+       排在肢段表读进来之后、第一次 #scale 之前：这一刻的场景是「刚建好、还没被任何
+       一刀写过」的 Biped，从这里拍基准最干净。它自己会扰动一根骨再退回来，所以
+       必须排在真正干活那一段之前 —— 而且扰动是**当场撤销**的（读的是自己刚存的图），
+       注册表里因此不给它声明作废任何读数：它留下的场景和进来时一样，
+       而「一样」这件事由 rollback/pos_cm、box_cm、scale_cm、angle_deg 四行数字负责证明。
+       注意第四行是第 27 轮之后才有的，而那一轮的教训恰恰是「前三行全绿不等于场景一样」：
+       锁骨事后读出 89.5 度的长度轴偏移，双臂落位误差 0.955 → 1.957。而第 28 轮证明连
+       第四行也拦不住它（它当场读 0.0）—— 这段自检扰动的是**真骨**，它对场景不是无害的，
+       而它自己报不出这份代价。开关打开的那一轮要靠 placement 的 lock 行来响。 */
+    if MMD2MAX_ROLLBACK do
+    (
+        local rb = mmd2maxRollbackSelfTest root limbs
+        if rb != undefined then
+        (
+            mmd2maxReport "rollback" "saved" "-" rb[1]
+            mmd2maxReport "rollback" "loaded" "-" rb[2]
+            mmd2maxReport "rollback" "perturb_cm" "-" rb[3]
+            mmd2maxReport "rollback" "pos_cm" "-" rb[4]
+            mmd2maxReport "rollback" "box_cm" "-" rb[5]
+            mmd2maxReport "rollback" "scale_cm" "-" rb[6]
+            mmd2maxReport "rollback" "snap_cost_cm" "-" rb[7]
+            mmd2maxReport "rollback" "perturbed_bone" "-" rb[8]
+            mmd2maxReport "rollback" "angle_deg" "-" rb[9]
+            local rbMsg = "回滚自检：" + (rb[8] as string) + " 撑大 30% 后位置差="
+            rbMsg = rbMsg + (rb[3] as string) + " 退回后 位置差=" + (rb[4] as string)
+            rbMsg = rbMsg + " 盒差=" + (rb[5] as string) + " scale 差=" + (rb[6] as string)
+            rbMsg = rbMsg + " 局部轴朝向差=" + (rb[9] as string)
+            rbMsg = rbMsg + "（存图动作自身的扰动=" + (rb[7] as string) + "）"
+            mmd2maxLog rbMsg
+        )
+        else mmd2maxLog "回滚自检：基准拍不出来（骨名或输出目录不可用），本轮没有回滚载体"
+        mmd2maxReport "pass" "ran" "rollback_selftest" 1
+    )
+
     /* 骨盘的子段（L/R Thigh、Spine）把目标长度改写成「离 COM 锚点的距离」。
        为什么必须改：骨盆 pivot 只跟 COM 走，闭环又把 COM 抬到**髋中点**（不是 PMX 腰）。
        肢段表里的 desired 是 PMX 腰→子骨的长度（腿根 9.03、脊柱 6.49），照它缩就把
@@ -4084,6 +4334,33 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        开关只有一个：MMD2MAX_FOOTREACH=false ⇒ 整段跳过，逐字退回第十六轮。 */
     if MMD2MAX_FOOTREACH do
     (
+        /* 接趾这一刀是「推骨盒远端」的写，而它唯一的失效方式是**推过了头或推歪**：
+           闭环把倍率限在 0.2~5，限幅本身就能把盒子一次推飞。所以这里在动手前拍一份
+           基准，动完手逐根比「盒远端到 PMX 脚掌的距离」有没有比动手之前更远
+           （mmd2maxFitBoneReach 第 6 列就是动手前那个数）。变远了就整段退回基准 ——
+           注意退回的是「接趾」这一段，前面的摆位、转角、扭转一概不动，因为基准就是
+           在它们全部做完、接趾还没开始的那一刻拍的。
+           判据阈值 MMD2MAX_RBTRIG 走 CFG（mmd2max/targets.py），不在这里写死字面量。 */
+        local rbFig = undefined
+        local rbMarks = undefined
+        local rbSaveOk = false
+        local rbBefore = 0.0
+        local rbAfter = 0.0
+        local rbWorse = 0
+        if MMD2MAX_ROLLBACK do
+        (
+            rbFig = mmd2maxFigPath "foot"
+            if rbFig != undefined do
+            (
+                rbMarks = mmd2maxMarkList root limbs
+                local rbSave = mmd2maxFigOp root rbFig true
+                /* 存图失败不关掉整个守卫：基准（rbMarks）还在内存里，那三列「比动手前
+                   更远没有」照样量得到，照样要报。只是**退回**这一步没法做（没有图可读），
+                   所以下面那个 if 多加一个 rbSaveOk。把守卫整段关掉的话，这一轮就变成
+                   「什么都没量」，而「什么都没量」在这个项目里从来不是失败的意思。 */
+                rbSaveOk = rbSave[1]
+            )
+        )
         for item in limbs do
         (
             if item.count >= 10 and item[5] == "foot" do
@@ -4115,6 +4392,14 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                                 if r[3] do rmsg = rmsg + "(长度对缩放没反应，已停)"
                                 mmd2maxLog rmsg
                                 mmd2maxLogLocalBox ("足盒拉后 " + frName) frNode
+                                if MMD2MAX_ROLLBACK and rbMarks != undefined do
+                                (
+                                    local rbGap0 = abs r[6]
+                                    local rbGap1 = abs r[1]
+                                    if rbGap1 > rbGap0 + MMD2MAX_RBTRIG do rbWorse += 1
+                                    rbBefore = amax rbBefore rbGap0
+                                    rbAfter = amax rbAfter rbGap1
+                                )
                             )
                         )
                     )
@@ -4123,6 +4408,59 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             )
         )
         mmd2maxReport "pass" "ran" "foot_reach" 1
+        /* ===== 接趾守卫（M4d）=====
+           接趾这一刀唯一的失效方式是**把盒子推过了头**：闭环的倍率限在 0.2~5，限幅
+           本身就能一次把骨盒推飞。上面逐根留了「动手前的盒隙」（mmd2maxFitBoneReach
+           的第 6 列），这里比一比：哪一根现在比动手之前还远，就把整段接趾退回动手前
+           拍的基准 —— 退的只有接趾，摆位/转角/扭转一概不动，因为基准就拍在它们全都
+           做完、接趾还没开始的那一刻。
+           排在复摆**之前**：退回之后趾骨的位置也一起回去了，复摆量的必须是退完的场景，
+           否则 `toe_snap/residual_after_reach_cm` 就成了「拿退回前量的数交付」。
+           读数全部排在 `ran foot_reach` 之后、`ran foot_reach_guard` 之前：归因规则
+           （audit_attribution）拿 ran 行切段，`rollback/foot_*` 这几行的作者登记在
+           foot_reach_guard 那一段里，写在前面会被判成「由 foot_reach 那一段量的」。 */
+        if MMD2MAX_ROLLBACK do
+        (
+            /* 基准拍不出来（OBJ 目录不可用）时这一段什么都量不到，但**收工边界必须照报**：
+               漏报 ran 会被归因规则当成「这一段根本不存在」，那几条 `always` 读数于是报出
+               「必须出现的读数没有报」——那是真的，可它被埋在一句时间轴噪音里。这里让缺的
+               只是读数行（红），边界行自己别红。拍不出基准就编一个 0 假装量过，是这个
+               项目反复死掉的那条路，不走。 */
+            if rbMarks != undefined then
+            (
+                mmd2maxReport "rollback" "guard_saved" "-" rbSaveOk
+                mmd2maxReport "rollback" "foot_before_cm" "-" rbBefore
+                mmd2maxReport "rollback" "foot_after_cm" "-" rbAfter
+                mmd2maxReport "rollback" "foot_worse_bones" "-" rbWorse
+                mmd2maxReport "rollback" "guard_fired" "-" (rbWorse > 0)
+                if rbWorse > 0 and rbSaveOk then
+                (
+                    local rbLoad = mmd2maxFigOp root rbFig false
+                    local rbBack = mmd2maxMarkGap rbMarks (mmd2maxMarkList root limbs)
+                    mmd2maxReport "rollback" "foot_restored" "-" rbLoad[1]
+                    mmd2maxReport "rollback" "foot_restore_pos_cm" "-" rbBack[1]
+                    mmd2maxReport "rollback" "foot_restore_box_cm" "-" rbBack[2]
+                    mmd2maxReport "rollback" "foot_restore_scale_cm" "-" rbBack[3]
+                    mmd2maxReport "rollback" "foot_restore_angle_deg" "-" rbBack[4]
+                    local rbMsg = "足盒接趾回滚：推过头 " + (rbWorse as string) + " 根，最差盒隙 "
+                    rbMsg = rbMsg + (rbBefore as string) + " -> " + (rbAfter as string)
+                    rbMsg = rbMsg + "，退回后与基准差 位置=" + (rbBack[1] as string)
+                    rbMsg = rbMsg + " 盒=" + (rbBack[2] as string) + " scale=" + (rbBack[3] as string)
+                    rbMsg = rbMsg + " 局部轴朝向=" + (rbBack[4] as string)
+                    mmd2maxLog rbMsg
+                )
+                else
+                (
+                    local rbOkMsg = "足盒接趾复核：没有一根比动手前更远（最差 "
+                    rbOkMsg = rbOkMsg + (rbBefore as string) + " -> " + (rbAfter as string)
+                    rbOkMsg = rbOkMsg + "），不回滚"
+                    mmd2maxLog rbOkMsg
+                )
+                try ( deleteFile rbFig ) catch () -- 允许失败：删不掉只多留一个文件，读数已经落盘
+            )
+            else mmd2maxLog "足盒接趾守卫：基准拍不出来（OBJ 目录不可用），这一轮没有退回这条路"
+            mmd2maxReport "pass" "ran" "foot_reach_guard" 1
+        )
         /* 上面每一刀 #scale 都把孩子沿轴推走一次，这里统一跟回 PMX 脚掌 */
         local toeSnapped2 = mmd2maxToeSnapBack root limbs "residual_after_reach_cm"
         if toeSnapped2 > 0 do

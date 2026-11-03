@@ -102,6 +102,18 @@ PASSES: tuple[Pass, ...] = (
     _pass("mesh_import", "导入 OBJ 网格", requires=("scene_prepare",)),
     _pass("biped_create", "建 Biped 并进入 Figure 模式",
           requires=("mesh_import",)),
+    # 回滚自检（M4d）：拍基准 → 存 .fig → 把一根骨的骨盒撑大 30% → 读图 → 三列差值回 0。
+    # 排在第一次真正的 #scale 之前：这一刻的 Biped 还没被任何一刀写过，基准最干净。
+    # 刻意**不**声明 moves —— 它扰动完就退回自己刚存的图，退不干净由 rollback/pos_cm、
+    # box_cm、scale_cm 三行 gate 判红（期望 0），而不是靠把后面所有读数作废来表达
+    # 「也许没退干净」。声明作废是给「留下的场景和进来时不一样」那种 pass 用的。
+    _pass("rollback_selftest", "回滚载体自检（.fig 存/读）",
+          requires=("biped_create",), writes=("rollback",), optional=True,
+          reads=(("rollback", "saved"), ("rollback", "loaded"),
+                 ("rollback", "perturb_cm"), ("rollback", "pos_cm"),
+                 ("rollback", "box_cm"), ("rollback", "scale_cm"),
+                 ("rollback", "snap_cost_cm"), ("rollback", "perturbed_bone"),
+                 ("rollback", "angle_deg"))),
     # 肢段闭环缩放：#scale 沿长度轴推走子节点，所以后面所有场景读数都得重测。
     _pass("fit_segments", "肢段长度闭环", requires=("biped_create",),
           writes=("fit",), moves=True),
@@ -135,6 +147,21 @@ PASSES: tuple[Pass, ...] = (
     # 足盒接趾（#41）：#scale 把 Toe0 沿轴推走 ⇒ 复摆必须跟在它后面重测。
     _pass("foot_reach", "足盒远端拉到 PMX 脚掌", requires=("toe_snap_roll",),
           moves=True, optional=True),
+    # 接趾守卫（M4d）：比「动手前的盒隙」和「动手后的盒隙」，推过头就把整段接趾退回
+    # 动手前拍的 .fig 基准。moves=True 的理由和 fit_segments 同类：退回的那一刻，
+    # 骨盒尺寸与趾骨的 pivot 一起被 load 改写，接趾之后量的任何场景读数都不再描述
+    # 最终场景 —— 而这里唯一重测它的人是紧跟其后的 toe_snap_reach，所以本 pass 必须
+    # 排在它前面（注册表顺序与脚本里的代码顺序是同一条声明，改一边就红）。
+    # 只在 MMD2MAX_ROLLBACK 且基准拍得出来时才跑，所以 optional。
+    _pass("foot_reach_guard", "接趾超差退回基准", requires=("foot_reach",),
+          writes=("rollback",), moves=True, optional=True,
+          reads=(("rollback", "guard_saved"), ("rollback", "foot_before_cm"),
+                 ("rollback", "foot_after_cm"), ("rollback", "foot_worse_bones"),
+                 ("rollback", "guard_fired"), ("rollback", "foot_restored"),
+                 ("rollback", "foot_restore_pos_cm"),
+                 ("rollback", "foot_restore_box_cm"),
+                 ("rollback", "foot_restore_scale_cm"),
+                 ("rollback", "foot_restore_angle_deg"))),
     _pass("toe_snap_reach", "接趾后脚趾复摆", requires=("foot_reach",),
           writes=("toe_snap",), moves=True, optional=True,
           reads=(("toe_snap", "residual_after_reach_cm"),)),

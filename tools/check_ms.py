@@ -35,7 +35,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # MAXScript 保留字（与变量命名冲突的那些；不追求完整，覆盖实际踩过的坑。
 # 新增只认实测：`shape` 是 M4 探针第一次跑被「Cannot assign to read-only variable: shape」
-# 打死之后加进来的，不是照抄文档 —— 抄一份来路不明的名单只会让人以为查得全。
+# 打死之后加进来的，`snapshot` 是 M4g 探针同一句死法（probes/figfile_m4g.txt 第一行
+# 「Cannot assign to read-only variable: snapshot」）—— 不是照抄文档，
+# 抄一份来路不明的名单只会让人以为查得全。
 RESERVED = {
     "on", "off", "in", "of", "to", "by", "do", "then", "else", "if", "for",
     "while", "break", "continue", "return", "exit", "with", "try", "catch",
@@ -43,7 +45,12 @@ RESERVED = {
     "not", "true", "false", "undefined", "ok", "mapped", "build", "at", "time",
     "coordsys", "about", "animate", "redraw", "undo", "print", "format", "case",
     "default", "struct", "macroScript", "utility", "rollout", "plugin", "tool",
-    "rcmenu", "silent", "quiet", "none", "all", "as", "of", "shape",
+    "rcmenu", "silent", "quiet", "none", "all", "as", "of", "shape", "snapshot",
+    # `box` 是 M4g v2 实测：`local box = try ( Box name:"M4GBox" ... )` 里的 `Box`
+    # 被解析成**正在定义的那个 local**（此刻还没值）→「Call needs function or class,
+    # got: undefined」，而且不中止、只让 Box=false。改名 wbox 之后同一句就建出来了
+    # （probes/figfile_m4g.txt：Box=true 修改器=1）。这一类比 shape 更阴：不报错，只给假读数。
+    "box",
 }
 
 
@@ -240,6 +247,8 @@ def _paren_delta(code: str) -> int:
 
 
 IF_HEAD_DO = re.compile(r"\bif\b.*\bdo\b\s*\(?\s*$")
+# 整条 if...do 连体都写完在同一行的形状（do 后面还有内容）。行尾版（上面那条）看不到它。
+IF_DO_INLINE = re.compile(r"\bif\b.*\bdo\b\s+\S")
 
 
 def _next_code(lines, start):
@@ -288,6 +297,20 @@ def check_if_do_else(src: str) -> list[str]:
         if re.search(r"\bif\b.*\bdo\b.*\belse\b", stripped):
             problems.append(f"行 {index + 1}: if...do 不允许接 else，请把 do 改成 then。")
         if not IF_HEAD_DO.search(stripped):
+            if not IF_DO_INLINE.search(stripped) or _paren_delta(stripped) != 0 \
+                    or stripped.endswith("\\"):
+                index += 1
+                continue
+            # 整条 if...do 在这一行就写完了（体也在同一行、括号配平）：MAXScript 的
+            # 块体到此结束，下一行若是 else 就是「do 接 else」那个 Syntax error。
+            # 这一支是补的漏：探针 figfile_m4h 第一发就是死在这个形状上
+            # （`if n == undefined do ( say (...) )` 换行 `else`），而当时的规则
+            # 只认行尾的 do（IF_HEAD_DO），整行写完的形状一律不进判断。
+            after, _ = _next_code(lines, index + 1)
+            if after.startswith("else"):
+                problems.append(
+                    f"行 {index + 1}: if...do 在这一行已经写完，下一行的 else 接不上"
+                    f"（MAXScript 要 if...then），请把 do 改成 then。")
             index += 1
             continue
         start_depth = depths[index]

@@ -53,6 +53,8 @@ from mmd2max.targets import (
     DIR_TOL_DEG,
     GAP_TOL_CM,
     TOE_TOL_CM,
+    ROLLBACK_TOL_CM,
+    ROLLBACK_TOL_DEG,
     WEIGHT_ERR_TOL,
     WEIGHT_SUM_TOL,
     box_tol_cm,
@@ -457,7 +459,7 @@ def _priced(model: str, table: dict, key):
 def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                skin_expect: SkinExpectation, widths: list[dict[str, str]],
                morph_count: int, skin: bool = True,
-               foot_reach: bool = True) -> list[tuple[str, ...]]:
+               foot_reach: bool = True, rollback: bool = False) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
 
     输入全部来自**导出结果**（weights 行数、limbs.tsv 的行、meta 的计数）与
@@ -477,6 +479,11 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     `widths` 同样是**必填**的（可以是空表）：骨盒回读那一组（M4c）的尺来自这张表与
     limbs 的脚段。传空表 = 这具模型没有手部粗细表，Max 那边也读不到 widths.tsv，
     两边同时没有那些行；传了表却不给 Max（或反过来）由 `box_rb/nodes_measured` 判红。
+
+    `rollback` 是快照回滚（M4d）的开关，值来自 `targets.ROLLBACK` → CFG 同一条路。
+    它决定的是「有没有这条退路」，所以开与关之间规格表**整段**不同：关掉时那些行退成
+    `if_present`（Max 一段都不跑，读数当然没有），打开时 `rollback/saved` 与三列差值
+    必须出现 —— 「开关打开却什么都没报」正是「退路只是句注释」的样子，必须红。
     """
     rows: list[tuple[str, ...]] = []
     foot_rows = [x for x in limbs if x.get("mode") == "foot"]
@@ -564,6 +571,59 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("toe_snap", "residual_after_reach_cm", subject, 0,
                         TOE_TOL_CM, "gate",
                         when="always" if foot_reach else "if_present"))
+
+    # ── 快照回滚（M4d）：载体本身每轮验一次，守卫只在开关打开时判 ──
+    # 这一组和上面所有行的区别：它判的不是「几何对不对」，而是「写坏了有没有退路」。
+    # 所以它的期望值全来自**探针实测**（probes/figfile_m4h.txt）而不是导出文件 ——
+    # 导出侧没有任何一列能告诉你 `.fig` 在这台 Max 上能不能存下来。
+    #
+    # 自检那三列（pos/box/scale）期望 0：扰动 30% 之后 load 回来，位置、骨盒跨度、
+    # #scale 三样都该回到基准（探针 H2 量到盒差 5.7e-06、scale 差 4.8e-07，
+    # H4 量到「load 刚存的那份」位置差 6.8e-05 —— 都在 ROLLBACK_TOL_CM 下面两个数量级）。
+    # `perturb_cm` 故意只当 report：它是「这次扰动真的动了」的证据，非要它等于几没有意义，
+    # 但没有它，上面三个 0 就可能是「压根没扰动」的假绿。
+    # `snap_cost_cm` 同样是 report：它量的是「一次裸存图动不动场景」——探针里那 2.13cm
+    # 到底算 saveFigFile 还是算进出 Figure 模式的翻转，只有产品里这条能拆开回答。
+    # `angle_deg` 是第 27 轮之后补的第四维：那一轮上面三列全绿，事后锁骨的世界长度轴却
+    # 转了 89.5 度，双臂落位误差跟着从 0.955 涨到 1.957。尺在 targets.ROLLBACK_TOL_DEG。
+    # **它自己的读数同样是证据**：第 27、28 两轮它都读 0.0 —— load 那一刻帧是好的，坏账
+    # 由后面的 #scale 写刀结。所以这四行合起来只证明「载体当场无损」，不证明「这一轮没被
+    # 回滚改动过」；后者靠 placement 的 lock 行，开关一开它就红给你看。
+    when_rb = "always" if rollback else "if_present"
+    for check in ("saved", "loaded"):
+        rows.append(row("rollback", check, GLOBAL, "true", 0, "gate", when=when_rb))
+    for check in ("perturb_cm", "snap_cost_cm", "perturbed_bone"):
+        rows.append(row("rollback", check, GLOBAL, None, None, "report", when=when_rb))
+    for check in ("pos_cm", "box_cm", "scale_cm"):
+        rows.append(row("rollback", check, GLOBAL, 0, ROLLBACK_TOL_CM, "gate",
+                        when=when_rb))
+    rows.append(row("rollback", "angle_deg", GLOBAL, 0, ROLLBACK_TOL_DEG, "gate",
+                    when=when_rb))
+    # 守卫：`foot_worse_bones` 就是触发器本身，期望 0 —— 也就是说「回滚发生了」这一条
+    # 一定把这一轮判红。这不是苛刻，是 M4d 的全部意义：退路只在它被走过的那一轮必须
+    # 大声响，否则它会以「静默救场」的样子把一个真缺陷藏成一次成功交付。
+    # 退回之后的几列（restore_*）比的是「和基准差多少」，所以厘米那三列同样是
+    # 0 ± ROLLBACK_TOL_CM；朝向那一列用 ROLLBACK_TOL_DEG —— 守卫退的正是接趾那些
+    # #scale 写刀，而第 27 轮量到「位置/盒/scale/轴朝向当场全回来、事后锁骨仍转了
+    # 89.5 度」：这四列是「当下」的尺，判「退回合格」用它，别拿它当「这一轮没被回滚
+    # 碰过」的证明（那一件事由 placement 的 lock 行管）。
+    # 它们只有真退回时才存在 → if_present。
+    when_guard = "always" if (rollback and foot_reach) else "if_present"
+    rows.append(row("rollback", "guard_saved", GLOBAL, "true", 0, "gate",
+                    when=when_guard))
+    for check in ("foot_before_cm", "foot_after_cm", "guard_fired"):
+        rows.append(row("rollback", check, GLOBAL, None, None, "report",
+                        when=when_guard))
+    rows.append(row("rollback", "foot_worse_bones", GLOBAL, 0, 0, "gate",
+                    when=when_guard))
+    rows.append(row("rollback", "foot_restored", GLOBAL, "true", 0, "gate",
+                    when="if_present"))
+    for check, tol in (("foot_restore_pos_cm", ROLLBACK_TOL_CM),
+                       ("foot_restore_box_cm", ROLLBACK_TOL_CM),
+                       ("foot_restore_scale_cm", ROLLBACK_TOL_CM),
+                       ("foot_restore_angle_deg", ROLLBACK_TOL_DEG)):
+        rows.append(row("rollback", check, GLOBAL, 0, tol, "gate",
+                        when="if_present"))
 
     # ── 脚链：偏航（#26）、骨轴连续（#40）、盒隙（#41）────────────
     # 偏航比的是 mmd2maxBoxWantDir 给的目标，而那个目标就是写进去的方向（同源，
@@ -725,6 +785,12 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         "skin_verify": "always" if skin else "if_present",
         "foot_reach": "always" if foot_reach else "if_present",
         "toe_snap_reach": "always" if foot_reach else "if_present",
+        # 回滚开关打开 ⇒ 自检**必须**跑到（没跑就是「退路只是句注释」）。守卫那一遍
+        # 只有「开关开 + 接趾这一刀真跑了 + 基准拍得出来」三样都成立才会出现，前两条
+        # 在这里能判，第三条（目录写不出文件）只有实跑知道 —— 它由 `rollback/guard_saved`
+        # 那行 always 的 gate 负责响，而不是靠把这一行也提成 always。
+        "rollback_selftest": "always" if rollback else "if_present",
+        "foot_reach_guard": "always" if (rollback and foot_reach) else "if_present",
         "morpher_build": "always" if morph_count > 0 else "if_present",
     }))
 
@@ -828,5 +894,6 @@ CHANNELS: frozenset[tuple[str, str]] = frozenset(
                {"parent_target": "Bip001 Spine", "child_target": "Bip001 Spine1",
                 "desired_len": "8.325677", "mode": "link"}],
         skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True,
+        rollback=True,
         widths=parse_table(FIXTURE_WIDTHS)[1])
 )

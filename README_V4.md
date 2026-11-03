@@ -231,12 +231,56 @@ round24 round26` ⇒ **exit 0**（420→437 行，多出的 17 行全是骨盒�
 `tests/test_passes.py` 的 `FROZEN_REPORT` 已从 round23 换到 **round26**，那条「唯一允许多出
 `box_verify` 缺 ran」的豁免**删掉了** —— 从现在起注册表里声明的每一段，实跑报告少一行就判红。
 
+### M4d：快照回滚 —— 量出来是一个**净亏损**，所以开关保持关（默认 `ROLLBACK = False`）
+
+`.fig` 载体本身能用（`probes/figfile_m4h.txt`：`biped.saveFigFile` / `loadFigFile` 收
+**controller**、必须在 Figure 模式内；一份 `.fig` 连骨盒一起还原，盒差 5.72205e-06、
+#scale 差 4.76837e-07）。但真在香菱上开两轮（第 27、28 轮，证据留在
+`baselines/round27_MMD2MAX.REPORT`、`baselines/round27_香菱_objrun.log`、
+`baselines/round2{7,8}_driver.log`），量到的是三条谁都没预料到的事：
+
+1. **守卫两轮都没触发** —— `rollback/foot_worse_bones` 实测 **0**、`guard_fired=false`：
+   接趾闭环自己就收敛，不需要退路。这一批判据行于是只在「写坏了更远」的那一轮才存在
+   （`when=if_present`）。
+2. **自检三把尺全绿，可它担保不了载体** —— 自检把锁骨沿最长轴撑大 30%（`perturb_cm=3.40543`）
+   再 load 回来，位置 / 盒 / #scale 分别回 5.08705e-05 / 1.90735e-06 / 9.53674e-07，
+   第四把尺 `angle_deg`（局部轴朝向，为这一轮新加，尺 0.1 度）在 load 那一刻读 **0.0**。
+   可是同一轮的收尾读数里，`Bip001 L Clavicle` 的世界长度轴倾角从第 17~26/29 轮一直量的
+   **-162.237 度**（`baselines/round26_objrun.log:260`）变成 **-72.7144 度**
+   （`baselines/round27_香菱_objrun.log:262`，差 89.5），双臂落位误差因此从
+   0.955353 / 1.01505 / 0.143507 涨到 **1.95714 / 1.8437 / 1.71972 厘米**
+   （左链；右链 1.94884 / 1.83903 / 1.71614）。
+   两轮这八行逐位相同 ⇒ 这是**确定性失效**，而且是**延迟失效**：损伤不在 load 那一刻，
+   在 load 之后的某一遍里显形。⇒ 载体自检永远测不出它，真正把它接住的是 placement 的
+   `lock` 行（那 8 行手臂链判据当场判红，退出码 7）。
+3. 于是结论不是「把第四把尺加上去就安全了」，而是**这条路的收益为 0、代价是 1~1.6cm 的手臂精度**。
+   代码、判据行、`ROLLBACK_TOL_CM/DEG` 两把尺与全部证据留下（默认关），下次接趾真把趾骨推过头时
+   再拿它做对照实验 —— 那一次的基线就是这两轮。
+
+几何中性已证：第 29 轮拿 `ROLLBACK = False` 重跑，`diff_round.py --allow "^配置" --allow "^收敛闸门"
+--allow "^回读进度" --allow "^蒙皮回读" --allow "^骨盒回读" --allow "^回滚"` 对 `baselines/round26_objrun.log`
+⇒ **无实质差异**（437 行 vs 437 行，只剩时间/耗时/路径），`CHECK` 213 PASS / 0 FAIL / 22 未跑
+（21 行是回滚自己的：19 条 `rollback` + 2 条 `pass/ran`；剩下那行还是 `physics_build`，
+本轮没给 physics 文件）；第 30 轮把「Max 从哪个路径启动」改成自动发现之后再跑一遍，
+对 `baselines/round29_香菱_objrun.log` 同样**无实质差异**（`baselines/round30_*`）。
+行数账：规格 214→**235**（+19 条 `rollback` +2 条 `pass/ran`，其中 4 条 restore 尺与 1 条
+`angle_deg` 是这两轮补的第四维），通道 94→**96**。
+
 ## 5. 顺手从网上捡到的两条（v3 完全没用上）
 
-- **PMX 自带 roll/扭转轴**：骨记录里有「轴固定化 Fixed Axis」和「局部轴 Local Axis /
-  SDef C·R·W」两组数据，是源文件给的官方骨向。v3 的 `meta.tsv` 里 `has_sdef`/`has_qdef`
-  恒为 0（要么没解析要么写死），等于把现成的**独立真值**丢了，只能靠网格射线反推方向 ——
-  而反推的函数又被验收层复用，这就是 #26/#40 反复的根。见任务 #57。
+- **PMX 自带 roll/扭转轴 —— 审计做完了，结论是「这条路在香菱这类模型上没有数据」**（任务 #57 关闭）：
+  骨记录里确实有「轴固定化 Fixed Axis(0x0400)」和「局部轴 Local Axis(0x0800，存 X·Z，Y=Z×X)」两组
+  作者手填的数据，v4 的解析器也已经读到（`mmd2max/pmx.py:406`，向量含 NaN/Inf 直接 abort）。
+  但**读到 ≠ 有**：`tools/axis_audit.py` 实测香菱 356 根骨 ⇒ 局部轴 **0** 条、轴固定化 **4** 条，
+  而这 4 条全在 `左腕捩 / 左手捩 / 右腕捩 / 右手捩` 上 —— 扭转骨属 extended 类，压根不进
+  `bones.tsv`（321 行里 0 行含「捩」）。所以「拿作者填的轴向当每根 Biped 骨的 roll 独立真值」
+  这个设想**不成立**，v3 那句「恒为 0 = 把现成真值丢了」也说过头了：`has_sdef`/`has_qdef` 是
+  **顶点**的变形类型（SDEF/QDEF 蒙皮），跟骨的轴向是两回事，香菱本来就是 0。
+  - 唯一量到的一条副产品是真的：那 4 根捩骨的作者轴向与我们**从 pivot→tail 反推**的骨向
+    分别差 **0.10° / 0.00° / 0.22° / 0.00°**（转轴是线不是射线，比对时取 `min(θ, 180−θ)`）。
+    两个来源没有任何共同计算，对上就是真对上 —— 这是「反推骨向」这条链在**手臂**上的一次独立背书。
+  - 下次遇到有局部轴的模型（MMD 官方骨架、带 `ローカル軸` 的改模）再把它接进 roll 判据；
+    现在接等于给一条永远不执行的分支写判据 —— 正是 M1b 删掉的那个 DQ 分支的死法。
 - **`3dsmaxbatch.exe` 官方无头模式：本环境实测不可用**（见 `probes/batch_probe_record.txt`）。
   连三行的 `createFile` 平凡脚本都不执行，三次跑分别卡到 300/240/150 秒超时，子进程连窗口
   都不出现；而同一台机器 `3dsmax.exe -U MAXScript` 是能跑完的。⇒ 驱动层继续用
@@ -258,4 +302,29 @@ Max 2022 的 skinOps **143 个成员里没有 forceUpdate**，这句从来没生
 v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 一行带 `getCurrentException()`
 的日志）。`tools/check_ms.py` 加一条规则：`catch ()` 与 `catch ( )` 直接报错。
 这条和规则 I~IV 一样，是工具能自动判的，不靠注释。
+
+## 7. 换一台机器要动的东西：零（两处路径都改成发现了）
+
+用户会问的两件事，都不该以「改源码」作答：
+
+- **Python 版本**：要的是 **3.8+**，不是「只能 3.12」。实测（不是推断）：21 个 `.py` 全部过
+  `ast.parse(feature_version=(3, 8))`，无 `match`、无 3.9+ API，最新的一条语法是海象 `:=`
+  （`tools/diff_round.py:60`、`mmd2max/semantic.py:510`），第三方库为零。`启动GUI.bat`
+  按 `py -3` → `python` → 开发机私有路径 的顺序探，每个候选先验 `version_info >= (3, 8)`
+  再执行 —— 顺序不能反，Windows 的 `python` 可能是应用商店的占位别名，跑它会弹商店而不是报错；
+  三个都不行时打印安装提示并 `pause`，不让窗口一闪而过。本机实测走的是第三条（这台机
+  `py` / `python` 都不在 PATH），双击后 GUI 正常起窗。
+- **3ds Max 装在哪**：`tools/obj_run.py:find_max_exe()` 按 环境变量 `MMD2MAX_MAX_EXE` →
+  注册表 `HKLM/HKCU\SOFTWARE\Autodesk\3dsMax\<内部版本>\Installdir`（24.0 = 2022，年份 = 主版本 + 1998）
+  → 各盘 `Program Files` / `Program Files (x86)` / `Programs` / `Software` 下的 `Autodesk\3ds Max *`
+  的顺序发现，**只收 exe 真在盘上的**那条（这台机注册表里还躺着 23.0=2021，目录早删了，
+  照它启动就是拿陈旧记录去撞不存在的文件）。优先 2022，因为全部探针与判据只在这个版本上量过；
+  选中别的年份会在日志里打警告而不是默默跑。启动目录（清理旧版自启动脚本用）同样按发现的
+  版本年去扫 `<LOCALAPPDATA>\Autodesk\3dsMax\<年> - 64bit\<语言>\scripts\startup`，
+  不再假设 `ENU`。找不到时退出码 2，并把三条发现路径念进日志（脚本、CFG、规格表那时都已落盘，
+  只差启动）。本机实测：注册表与逐盘 glob 两条路都指向 `C:\Program Files\Autodesk\3ds Max 2022`，
+  第 30 轮用发现结果启动，判据与日志相对第 29 轮**无实质差异**。
+  契约测试 `tests/test_obj_run_guard.py:MaxDiscoveryTests`（7 条）钉住：源码里不许再出现装目录
+  字面量、两条启动路径只许吃发现结果、环境变量优先但指错不许回退到「猜一台」、非 2022 不许赢、
+  启动目录必须跟着版本与语言走。
 

@@ -1,0 +1,66 @@
+# probes/figfile_m4g.ms 的存证。三段来自同一个探针的三次实跑，标清楚各是哪一发：
+#
+# [v1] 编译期/运行期死法（逐字抄自当时的 wrapper 输出，那一发的正文被 v2 覆盖了）：
+#     ABORTED: -- Cannot assign to read-only variable: snapshot
+#     ⇒ `fn snapshot sn = (...)` 撞内建，tools/check_ms.py 的 RESERVED 因此收了 snapshot。
+# [v2] 不报错、只给假读数的那一类（同一发里改名为 wbox 之后就正常了）：
+#     G0 ... Box=false 修改器=-      ← `local box = try ( Box name:"M4GBox" ... )`
+#        里的 `Box` 被解析成正在定义的那个 local（MAXScript 标识符大小写不敏感），
+#        于是报「Call needs function or class, got: undefined」并把旁证对象判成没建出来。
+#     ⇒ RESERVED 因此收了 box；探针里凡是与内建只差大小写的名字一律换掉。
+#     同还死过：`deleteAllObjects 抛 ... got: undefined`（Max 2022 没这个 API，
+#        m4d:156 的空 catch 把它藏了一整轮）与 G4 的 `doesNodeExist`（不是内建）。
+#
+# [v3] 下面正文 = 修完上述坑之后的完整一次跑通读数（K1 的 #scale 写在**非 Figure 模式**
+#      下做，所以那一发没答上「.fig 管不管骨盒」，见 figfile_m4h.ms 文件头）。
+#
+===== wrapper: fileIn C:/Users/Administrator/AppData/Local/Temp/mmd2max_probe/figfile_m4g.ms =====
+===== M4g rollback probe v3 =====
+G0 起手对象数=0（-U MAXScript 起来本来就是空场景）
+G0 根=Bip001 ctrl=Vertical_Horizontal_Turn 节点=bipCount() 快照=26 对象数=33 Box=true 修改器=1 Bone=true
+  G0 基线（四个差都该是 0） 盒=0.0 pos=0.0 世界=0.0 #scale=0.0 .scale=0.0 @ -
+G0 存原始图 进=true 调用=true 出=false size=10939L
+  K1 写完 #scale 盒=2.38419e-07 pos=2.12658 世界=2.11595 #scale=0.0 .scale=0.0 @ Bip001 R Clavicle
+  K1 load=true | K1 回滚后 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  K1 redraw 之后 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  K2 起点 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  扰动 node.scale 抛 Bip001 -- Unknown property: "scale" in $Biped_Object:Bip001 @ [0.000000,0.000000,-72.096725]
+  扰动 node.scale 抛 Bip001 Footsteps -- Unknown property: "scale" in $Biped_Object:Bip001 Footsteps @ [0.000000,0.000000,-163.036835]
+  扰动 node.scale 抛 Bip001 Pelvis -- Unknown property: "scale" in $Biped_Object:Bip001 Pelvis @ [0.000000,0.000000,-72.096725]
+  扰动 node.scale 抛 Bip001 Spine -- Unknown property: "scale" in $Biped_Object:Bip001 Spine @ [-0.011308,0.000003,-62.675034]
+  扰动 node.scale 抛 Bip001 Spine1 -- Unknown property: "scale" in $Biped_Object:Bip001 Spine1 @ [-0.011308,0.000002,-48.474228]
+  扰动 node.scale 抛 Bip001 Spine2 -- Unknown property: "scale" in $Biped_Object:Bip001 Spine2 @ [-0.011308,0.000001,-34.273426]
+  扰动 node.scale 抛 Bip001 Neck -- Unknown property: "scale" in $Biped_Object:Bip001 Neck @ [-0.004893,0.000001,-20.072626]
+  扰动 node.scale 抛 Bip001 Head -- Unknown property: "scale" in $Biped_Object:Bip001 Head @ [0.000000,0.000001,-13.928050]
+  扰动 node.scale 抛 Bip001 L Clavicle -- Unknown property: "scale" in $Biped_Object:Bip001 L Clavicle @ [0.000000,2.867471,-20.072628]
+  扰动 node.scale 抛 Bip001 L UpperArm -- Unknown property: "scale" in $Biped_Object:Bip001 L UpperArm @ [0.000000,13.305770,-22.188576]
+  扰动 node.scale 抛 Bip001 L Forearm -- Unknown property: "scale" in $Biped_Object:Bip001 L Forearm @ [-2.441494,15.759522,-46.521919]
+  扰动 node.scale 抛 Bip001 L Hand -- Unknown property: "scale" in $Biped_Object:Bip001 L Hand @ [0.024238,18.164364,-70.857704]
+  扰动 node.scale 抛 Bip001 L Finger0 -- Unknown property: "scale" in $Biped_Object:Bip001 L Finger0 @ [1.044200,19.159136,-80.924316]
+  扰动 node.scale 抛 Bip001 R Clavicle -- Unknown property: "scale" in $Biped_Object:Bip001 R Clavicle @ [0.000000,-2.867469,-20.072628]
+  扰动 node.scale 抛 Bip001 R UpperArm -- Unknown property: "scale" in $Biped_Object:Bip001 R UpperArm @ [0.000000,-13.305768,-22.188576]
+  扰动 node.scale 抛 Bip001 R Forearm -- Unknown property: "scale" in $Biped_Object:Bip001 R Forearm @ [-2.441494,-15.759519,-46.521919]
+  扰动 node.scale 抛 Bip001 R Hand -- Unknown property: "scale" in $Biped_Object:Bip001 R Hand @ [0.024238,-18.164356,-70.857704]
+  扰动 node.scale 抛 Bip001 R Finger0 -- Unknown property: "scale" in $Biped_Object:Bip001 R Finger0 @ [1.044200,-19.159128,-80.924316]
+  扰动 node.scale 抛 Bip001 L Thigh -- Unknown property: "scale" in $Biped_Object:Bip001 L Thigh @ [0.000000,8.192774,-72.096725]
+  扰动 node.scale 抛 Bip001 L Calf -- Unknown property: "scale" in $Biped_Object:Bip001 L Calf @ [4.089551,8.192772,-112.855934]
+  扰动 node.scale 抛 Bip001 L Foot -- Unknown property: "scale" in $Biped_Object:Bip001 L Foot @ [-0.000015,8.192771,-153.615143]
+  扰动 node.scale 抛 Bip001 L Toe0 -- Unknown property: "scale" in $Biped_Object:Bip001 L Toe0 @ [12.125287,8.192771,-163.036835]
+  扰动 node.scale 抛 Bip001 R Thigh -- Unknown property: "scale" in $Biped_Object:Bip001 R Thigh @ [0.000000,-8.192768,-72.096725]
+  扰动 node.scale 抛 Bip001 R Calf -- Unknown property: "scale" in $Biped_Object:Bip001 R Calf @ [4.089551,-8.192770,-112.855934]
+  扰动 node.scale 抛 Bip001 R Foot -- Unknown property: "scale" in $Biped_Object:Bip001 R Foot @ [-0.000015,-8.192771,-153.615143]
+  扰动 node.scale 抛 Bip001 R Toe0 -- Unknown property: "scale" in $Biped_Object:Bip001 R Toe0 @ [12.125287,-8.192771,-163.036835]
+  K2 写完 node.scale 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  K2 load=true | K2 回滚后 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  K2 redraw 之后 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  K3 扰动 pos/rot 后 盒=3.8147e-06 pos=17.8815 世界=14.8708 #scale=4.76837e-07 .scale=0.0 @ Bip001 L Calf
+  K3 load=true | K3 回滚后 盒=5.72205e-06 pos=5.41143e-05 世界=4.11272e-05 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+G2 重新存图 进=true 调用=true 出=false size=10939L | 快照 26 条（新基准与原始基准的差见下行）
+  G2 新基准 vs 原始快照 盒=5.72205e-06 pos=2.12658 世界=2.11595 #scale=4.76837e-07 .scale=0.0 @ Bip001 R Forearm
+  G2 新基准扰动后 盒=7.62939e-06 pos=18.7419 世界=15.0546 #scale=0.0 .scale=0.0 @ Bip001 L Thigh
+  G2 load 新图=true | G2 回滚到新基准 盒=0.0 pos=0.0 世界=0.0 #scale=0.0 .scale=0.0 @ -
+  G2 redraw 之后 盒=0.0 pos=0.0 世界=0.0 #scale=0.0 .scale=0.0 @ -
+G4 对象数=33 Box 读回=$Editable_Mesh:M4GBox @ [0.000000,0.000000,0.000000] Box 位移=0.0 Box 修改器=1 Bone 读回=$Bone:M4GBone @ [0.000000,30.000000,0.000000] 节点=bipCount() 快照=26
+G4 骨名前 8 个=#("Bip001", "Bip001 Footsteps", "Bip001 Pelvis", "Bip001 Spine", "Bip001 Spine1", "Bip001 Spine2", "Bip001 Neck", "Bip00 [cut] | 最后一根骨盒=#([-3.27711,-3.27711,-3.27711], [3.27711,3.27711,3.27711])
+G9 即将 resetMaxFile #noPrompt（此行之后若再无读数，就证实这条坑）
+ABORT: -- Type error: Call needs function or class, got: StringStream:""

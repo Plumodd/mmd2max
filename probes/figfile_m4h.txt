@@ -1,0 +1,44 @@
+===== wrapper: fileIn C:/Users/Administrator/AppData/Local/Temp/mmd2max_probe/figfile_m4h.ms =====
+===== M4h box-roundtrip probe v4 =====
+H0 起手对象数=0
+  figureMode := true 返回=true 回读=true
+H0 根=Bip001 快照=26 对象数=31
+  H0 基线（各列都该是 0） 盒=0.0 pos=0.0 世界=0.0 #scale=0.0 @ -
+  H0 Bip001 L Thigh #scale=[40.9639,40.9639,40.9639] 盒=#([-2.66609,-4.08135,-3.82312], [40.8586,4.12379,3.17081]) Y跨度=8.20514
+  H0 Bip001 Head #scale=[19.253,19.253,17.8193] 盒=#([-0.469754,-8.39156,-5.66648], [18.3303,10.5279,5.66648]) Y跨度=18.9195
+  figSave 进=true 调用=true 出=false size=10939L
+  figureMode := true 返回=true 回读=true
+  H0 存图后 vs 存图前（>0 就是 figSave 自己的扰动） 盒=2.38419e-07 pos=2.12658 世界=2.11595 #scale=0.0 @ Bip001 R Clavicle
+  写 #scale 骨数=26/26
+  H1 写完 #scale x1.3（盒差为 0 就说明写不进） 盒=12.2576 pos=27.633 世界=27.282 #scale=12.2892 @ Bip001 L Thigh
+  H1 Bip001 L Thigh #scale=[53.253,53.253,53.253] 盒=#([-3.46592,-5.30576,-4.97005], [53.1162,5.36093,4.12205]) Y跨度=10.6667
+  figLoad 进=true 调用=true 出=false
+  H2 load 之后（盒差 ~0 ⇒ .fig 带骨盒；仍是 1.3 那个量 ⇒ 只管姿态） 盒=5.72205e-06 pos=2.12657 世界=2.11595 #scale=4.76837e-07 @ Bip001 R Forearm
+  H2 Bip001 L Thigh #scale=[40.9639,40.9639,40.9639] 盒=#([-2.66609,-4.08135,-3.82312], [40.8586,4.12379,3.17081]) Y跨度=8.20514
+H2 结论：.fig 连骨盒一起还原，回滚一份基准就够。
+  figureMode := false 返回=false 回读=false
+  H2b 退出 Figure 模式之后 盒=5.72205e-06 pos=2.12657 世界=2.11595 #scale=4.76837e-07 @ Bip001 R Forearm
+  figureMode := true 返回=true 回读=true
+  写 #scale 骨数=26/26
+  H3 再写一次 #scale x1.3 盒=12.2576 pos=27.633 世界=27.282 #scale=12.2892 @ Bip001 L Thigh
+  H3 逐骨写回 骨数=26 | 写回后 盒=5.72205e-06 pos=2.12657 世界=2.11595 #scale=4.76837e-07 @ Bip001 R Forearm
+H3 结论：逐骨把基准 #scale 写回去能复原骨盒 —— .fig 不管骨盒也有这条路。
+  figLoad 进=true 调用=true 出=false
+  figureMode := false 返回=false 回读=false
+  figureMode := true 返回=true 回读=true
+  figureMode := false 返回=false 回读=false
+  H4 扰动后重拍基线（各列该是 0） 盒=0.0 pos=0.0 世界=0.0 #scale=0.0 @ -
+  figSave 进=true 调用=true 出=false size=10974L
+  H4 只是存了个图（这行读数 = 存图的代价） 盒=1.90735e-06 pos=2.22658 世界=1.80134 #scale=0.0 @ Bip001 L Clavicle
+  figLoad 进=true 调用=true 出=false
+  H4 load 刚存的那份之后（0 ⇒ 存/读成对无损） 盒=3.8147e-06 pos=6.84079e-05 世界=6.62804e-05 #scale=0.0 @ Bip001 L Thigh
+  figureMode := true 返回=true 回读=true
+  写 #scale 骨数=26/26
+  H5 写 #scale x0.7 之后 盒=12.2576 pos=27.633 世界=27.2889 #scale=12.2892 @ Bip001 R Thigh
+  saveBipFile 两种接收者都抛：ctrl=EX:-- Runtime error: Cannot run the operation in this mode node=EX:-- Unable to convert: $Biped_Object:Bip001 @ [3.700000,-2.100000,-66.596725] to type: Controller
+  saveBipFile 接收者= 调用=false size=0L
+  写 #scale 骨数=26/26
+  H5 再写 #scale x1.5 盒=2.04293 pos=4.60549 世界=4.54814 #scale=2.04819 @ Bip001 L Thigh
+  loadBipFile 调用=false | H5 load .bip 之后（盒差 ~0 ⇒ .bip 带骨盒） 盒=2.04293 pos=4.60549 世界=4.54814 #scale=2.04819 @ Bip001 L Thigh
+H9 收尾前对象数=31（探针里不许 resetMaxFile，见文件头）
+===== M4h done =====
