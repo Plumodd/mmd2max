@@ -2549,6 +2549,24 @@ fn mmd2maxFitBoneExtent node axisIdx target =
     #(cur, iter, stalled)
 )
 
+fn mmd2maxWidthHeightAxes node lengthAxis =
+(
+    /* 「除长度轴之外，哪根是宽、哪根是高」—— 这条口径全脚本只有这一份（M4c）。
+       规则是第十九轮给 Toe0 定的：两根候选轴里谁更贴近世界 Z，谁是「高」；脚上的骨
+       都是平躺的，竖直那根才是厚度方向。旧写法是「谁现在更粗谁是宽」，宽高接近时靠运气。
+       为什么必须收成一份：写入用 mmd2maxFitCrossSection，回读用 mmd2maxBoxDims，两边
+       以前各刻了一遍这条判据。两份一旦分叉，回读报的「宽」量的其实是「高」，gate 会
+       红在尺子上而不是几何上 —— 而读者只会去改几何。
+       读不到局部轴时返回 undefined：退回默认顺序（写侧）还是算没量到（读侧）是**策略**，
+       可以不同；口径本身只有一个。 */
+    local other = #()
+    for k = 1 to 3 do ( if k != lengthAxis do append other k )
+    local axes = mmd2maxBipedAxes node
+    if axes == undefined do return undefined
+    if (abs (axes[other[1]].z)) > (abs (axes[other[2]].z)) do return #(other[2], other[1])
+    other
+)
+
 fn mmd2maxFitCrossSection node dir targetW targetH =
 (
     /* 把「除长度轴之外」的两根轴收到 targetW / targetH（厘米），长度轴一根手指都不碰
@@ -2568,13 +2586,10 @@ fn mmd2maxFitCrossSection node dir targetW targetH =
     local oB = other[2]
     local eA = mmd2maxLocalExtent node oA
     local eB = mmd2maxLocalExtent node oB
-    local axes = mmd2maxBipedAxes node
+    local wh = mmd2maxWidthHeightAxes node ai
     local wIdx = oA
     local hIdx = oB
-    if axes != undefined do
-    (
-        if (abs (axes[oA].z)) > (abs (axes[oB].z)) do (wIdx = oB; hIdx = oA)
-    )
+    if wh != undefined do (wIdx = wh[1]; hIdx = wh[2])
     local rW = mmd2maxFitBoneExtent node wIdx targetW
     local rH = mmd2maxFitBoneExtent node hIdx targetH
     #(rW[1], rH[1], wIdx, hIdx, eA, eB, ai, rW[2], rH[2], rW[3], rH[3])
@@ -2661,6 +2676,162 @@ fn mmd2maxApplyWidths root widths =
         )
     )
     adjusted
+)
+
+fn mmd2maxBoxDims node dir =
+(
+    /* 只读不写：量骨盒在长度轴 / 宽 / 高三根局部轴上的本地跨度（厘米），M4c 的尺。
+       轴的定义直接调用写入那一份（mmd2maxWidthHeightAxes）：长度轴 = 与 dir 最贴近的
+       那根，另两根谁更贴近世界 Z 谁是「高」。不另写一遍的理由见那个函数的注释头。
+       返回 #(宽, 高, 长, 长度轴号)；读不到返回 undefined，绝不猜一根轴去量。
+       第 4 个返回值不是装饰：第二十轮实测脚链两根骨的长度轴不同（Foot=2、Toe0=1），
+       一旦回读挑到的轴和写入时不一样，前三行报的就全是别的轴的数 —— 只有这一行能揭穿。 */
+    local info = mmd2maxBipedAxis node dir
+    if info == undefined do return undefined
+    local ai = info[1]
+    local wh = mmd2maxWidthHeightAxes node ai
+    if wh == undefined do return undefined
+    local wid = mmd2maxLocalExtent node wh[1]
+    local hei = mmd2maxLocalExtent node wh[2]
+    local lng = mmd2maxLocalExtent node ai
+    /* 三根里任何一根量到 0 都是「没量到」，不是「这根骨薄成了一张纸」：nodeGetBoundingBox
+       失败时 mmd2maxLocalExtent 退回 node.min/max，而那两个属性在 Biped_Object 上退化成
+       一个点（第十二轮实测），所以 0 只可能是读不到。宁可报「没量到」也不报 0 —— 后者
+       会被拼表当成「这根骨的截面真的是 0」判红，把测量故障说成几何故障。 */
+    if (wid <= 0.0001) or (hei <= 0.0001) or (lng <= 0.0001) do return undefined
+    #(wid, hei, lng, ai)
+)
+
+fn mmd2maxReportBoxDims subject node dir =
+(
+    /* 一根骨：量 + 落四行读数 + 一行日志。返回 1=量到 / 0=没量到，调用方只负责数数。
+       这边**一个判定都不写**（规则 II）：宽高等待不等于几厘米由 MMD2MAX.VERDICTS 说，
+       Max 只把量到的数交出去。 */
+    local d = mmd2maxBoxDims node dir
+    if d == undefined do return 0
+    mmd2maxReport "box_rb" "width_cm" subject d[1]
+    mmd2maxReport "box_rb" "height_cm" subject d[2]
+    mmd2maxReport "box_rb" "length_cm" subject d[3]
+    mmd2maxReport "box_rb" "len_axis" subject d[4]
+    mmd2maxLog ("  骨盒回读 " + subject + " 宽=" + (d[1] as string) \
+        + " 高=" + (d[2] as string) + " 长=" + (d[3] as string) \
+        + " 长度轴=" + (d[4] as string))
+    1
+)
+
+fn mmd2maxVerifyBoxes root limbs widths =
+(
+    /* ===== 骨盒回读（M4c）：最终场景里把骨盒的粗细与长度再量一遍 =====
+       为什么前面那三段日志不算验收：`足背 … -> 宽=3.71424 高=8.65601`、
+       `脚趾 … -> 5.31702/1.86092`、`手部粗细 … -> (8.63193, 3.6286, 3.6286)` 全是
+       **写入那一刻**的自述。写完这根骨盒之后还有收尾转角（它会把「哪根轴离世界 Z 最近」
+       重新排一次）与足盒接趾（一次 #scale，第二十轮实测把 Y 从 10.30 拉到 12.64）。
+       #37/#41 反复的形状就是「缩完又被谁改了 / 缩错了轴」，所以尺必须在最后量。
+       期望值一个都不来自写入侧：脚链那四根的宽高来自 limbs.tsv 脚段第 15~18 列
+       （Python 沿骨轴量网格得到的截面），趾长来自第 11 列；手掌手指来自 widths.tsv。
+       两把尺分开报的理由见 mmd2max/verdicts.box_targets 的注释（脚链读包围盒跨度，
+       手部 gate 读 #scale、跨度只要求出现）。
+       参考方向与写入同一条：足背 = 实测踝 pivot → PMX 脚掌，脚趾 = PMX 脚掌 → 鞋尖。
+       返回 #(量到的节点数, 读不到的节点数)：读不到的也算一条失败读数，因为「没量」
+       和「量了没问题」在报告里长得一样这件事，v3 已经吃过 40 轮。 */
+    local measured = 0
+    local failed = 0
+    for item in limbs do
+    (
+        if item.count >= 12 and item[5] == "foot" do
+        (
+            local fName = item[1]
+            local cName = item[2]
+            local ballPos = item[4]
+            local tipPos = item[8]
+            local fnode = getNodeByName (root.name + (substring fName 7 -1)) exact:true
+            local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+            if fnode != undefined and ballPos != undefined then
+            (
+                local fp = fnode.transform.translationpart
+                local fv = ballPos - fp
+                local fl = length fv
+                if fl > 0.5 then
+                (
+                    local okF = mmd2maxReportBoxDims fName fnode (fv / fl)
+                    if okF == 1 then measured += 1
+                    else failed += 1
+                )
+                else
+                (
+                    failed += 1
+                    mmd2maxLog ("  骨盒回读 " + fName + " 跳过：踝→脚掌只有 " + (fl as string))
+                )
+            )
+            else
+            (
+                failed += 1
+                mmd2maxLog ("  骨盒回读 " + fName + " 节点或 PMX 脚掌目标读不到")
+            )
+            if cnode != undefined and ballPos != undefined and tipPos != undefined then
+            (
+                local tv = tipPos - ballPos
+                local tl = length tv
+                if tl > 0.5 then
+                (
+                    local okC = mmd2maxReportBoxDims cName cnode (tv / tl)
+                    if okC == 1 then measured += 1
+                    else failed += 1
+                )
+                else
+                (
+                    failed += 1
+                    mmd2maxLog ("  骨盒回读 " + cName + " 跳过：脚掌→鞋尖只有 " + (tl as string))
+                )
+            )
+            else
+            (
+                failed += 1
+                mmd2maxLog ("  骨盒回读 " + cName + " 节点或脚掌/鞋尖目标读不到")
+            )
+        )
+    )
+
+    /* 手掌与手指：gate 落在 #scale 的两个非长度分量上（写入侧就是这两格），
+       同一根骨的包围盒跨度另报一行。长度轴用 mmd2maxLengthAxisIndex（= 写入侧那一个），
+       不重新按 dir 挑：手指链的子关节才是它的长度方向，这里没有第二个参考方向可读。 */
+    for item in widths do
+    (
+        local name = item[1]
+        local node = getNodeByName (root.name + (substring name 7 -1)) exact:true
+        local lax = 0
+        if node != undefined do lax = mmd2maxLengthAxisIndex node
+        if node == undefined or lax <= 0 then
+        (
+            failed += 1
+            mmd2maxLog ("  骨盒回读 " + name + " 节点或长度轴读不到")
+        )
+        else
+        (
+            local others = #()
+            for ai = 1 to 3 do if ai != lax do append others ai
+            local s = mmd2maxBipedScale node
+            local comps = #(s.x, s.y, s.z)
+            local scaleMean = (comps[others[1]] + comps[others[2]]) / 2.0
+            local eA = mmd2maxLocalExtent node others[1]
+            local eB = mmd2maxLocalExtent node others[2]
+            if (eA <= 0.0001) or (eB <= 0.0001) then
+            (
+                failed += 1
+                mmd2maxLog ("  骨盒回读 " + name + " 包围盒跨度读到 0")
+            )
+            else
+            (
+                local boxMean = (eA + eB) / 2.0
+                mmd2maxReport "box_rb" "hand_scale_cm" name scaleMean
+                mmd2maxReport "box_rb" "hand_box_cm" name boxMean
+                mmd2maxLog ("  骨盒回读 " + name + " scale 截面=" + (scaleMean as string) \
+                    + " 盒跨度截面=" + (boxMean as string) + " 长度轴=" + (lax as string))
+                measured += 1
+            )
+        )
+    )
+    #(measured, failed)
 )
 
 fn mmd2maxApplyScale node axis factor method =
@@ -4246,6 +4417,19 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     mmd2maxReport "struct_dir" "over_tol" "-" structBad
     mmd2maxReport "struct_dir" "short_skipped" "-" structStub
     mmd2maxReport "pass" "ran" "struct_dir_check" 1
+    /* ===== 骨盒回读（M4c）：四道终局复核之后，最后量一次骨盒自己 =====
+       这一段只读不写（一个 setTransform 都没有），所以它不改任何几何：日志里多出来的
+       只有 `骨盒回读 …` 那些行。放在这里的两个前提是注册表写的：box_verify
+       requires struct_dir_check，而 accessory_build 声明自己不动 Biped 的 #scale ——
+       哪天附属骨那段开始改骨盒，这一组读数就得跟着往后挪，否则 STALE 会把它抓出来。
+       ran 行排在两条聚合读数之后：ran 是收工不是开工（M3）。 */
+    local boxRb = mmd2maxVerifyBoxes root limbs widths
+    mmd2maxReport "box_rb" "nodes_measured" "-" boxRb[1]
+    mmd2maxReport "box_rb" "read_fail" "-" boxRb[2]
+    mmd2maxLog ("骨盒回读：量到=" + (boxRb[1] as string) \
+        + " 读不到=" + (boxRb[2] as string) \
+        + "（期望来自 limbs 脚段与 widths 表，判定在 Python 侧）")
+    mmd2maxReport "pass" "ran" "box_verify" 1
 
     /* 把 Biped 节点写回 boneNodes 的对应位置 */
     for k = 1 to targetNames.count do

@@ -53,8 +53,13 @@ CONVERGE_MAX_ITERS = 3
 # toe_snap 进这张表的理由：#scale 把 Toe0 沿轴推走（#41 实测子节点位移 == 盒远端位移），
 # 所以「扭转后复摆」那两条残差在「接趾」之后就已经不是最终场景的读数了 —— 接趾后面
 # 必须再复测一次，否则残留的旧读数会被当成复摆通过。
-POSE_FACTS = ("foot_chain", "foot_yaw", "placement", "segment", "struct_dir",
-              "toe_snap")
+# box_rb（M4c）进这张表有两重理由：① 它量的是骨盒在**长度轴之外**两根轴上的跨度，
+# 而哪两根算宽/高是由「这根骨的轴现在离世界 Z 多近」决定的 —— 转角一次，判定就能对调，
+# 对调之后报出去的「宽」其实是人家的高；② #scale 本身也会挪动骨盒。
+# 于是任何一次挪动/缩放都必须在它之后重量一遍，否则「写入那一刻达成的截面」会被
+# 当成「最终场景的截面」，那正是 #37/#41 反复的形状。
+POSE_FACTS = ("box_rb", "foot_chain", "foot_yaw", "placement", "segment",
+              "struct_dir", "toe_snap")
 
 
 class Pass(NamedTuple):
@@ -137,7 +142,7 @@ PASSES: tuple[Pass, ...] = (
     # 所以这里刻意**不**声明作废任何读数 —— 声明了就是把「几何中性的退出」写成了
     # 一次移动，下一轮谁把这段往前挪都会被抓成 STALE 的假警报。
     _pass("figure_exit", "退出 Figure 模式", requires=("toe_snap_reach",)),
-    # 以下三道是终局复核：它们只读不写，所以 invalidates 全空，但要排在
+    # 以下五道是终局复核：它们只读不写，所以 invalidates 全空，但要排在
     # figure_exit 之后（骨盒朝向在 Figure 模式内读出来是另一套数）。
     _pass("foot_chain_check", "脚骨偏航 / 链向 / 盒隙复核",
           requires=("figure_exit",), writes=("foot_chain", "foot_yaw")),
@@ -147,6 +152,13 @@ PASSES: tuple[Pass, ...] = (
           requires=("segment_check",), writes=("placement",)),
     _pass("struct_dir_check", "结构向复核",
           requires=("placement_check",), writes=("struct_dir",)),
+    # 骨盒回读（M4c）：读的是**最终场景**的本地包围盒跨度与 #scale，期望值来自
+    # limbs.tsv 脚段第 10~18 列与 widths.tsv（Python 在这边算），所以它不是
+    # 「足背 / 脚趾 / 手部粗细」那三行日志的复读 —— 那三行量的是写入那一刻。
+    # 排在四道终局复核之后、附属骨之前：附属骨 pass 只新建 BoneGeometry，不动 Biped
+    # 的 #scale，所以这里量完就是保存下来的样子（这条前提记在 accessory_build 那里）。
+    _pass("box_verify", "骨盒回读复核（横截面/长度）",
+          requires=("struct_dir_check",), writes=("box_rb",)),
     # 附属骨 pass 只新建 BoneGeometry 并按 max_parent 改挂**自己那些**骨，
     # 不碰 Biped 的 pivot/朝向 —— 这是「段校验排在它前面仍然有效」的唯一理由。
     # 哪天这段开始挪 Biped（例如为了对齐衣服挂点），必须把 moves=True 加上，

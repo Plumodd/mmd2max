@@ -293,15 +293,29 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
         raise SystemExit(f"权重表 {len(weights_rows)} 行，CFG 的 MMD2MAX_VERTS 是 {vertex_count}："
                          "权重按顶点序号写入，行数与顶点数不符就是整表错位（#13 那一类）")
     skin_expect = skin_expectation(bones, weights_rows)
-    rows = build_spec(
-        model=stem,
-        vertex_count=vertex_count,
-        limbs=limbs,
-        skin_expect=skin_expect,
-        morph_count=int(meta["morph_count"]),
-        skin=cfg["MMD2MAX_SKIN"] == "true",
-        foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
-    )
+    # 骨盒回读（M4c）的第二把尺：手部粗细表。路径同样取自 CFG，所以 Max 打开的那份
+    # 和这边解析的是同一个文件。空串/文件不在 = 这一轮没有粗细表，Max 那边按同一条
+    # 规则跳过（mmd2maxReadWidths），两边的行数一起归零 —— 不许这边有行那边没行。
+    widths_path = Path(cfg["MMD2MAX_WIDTHS"])
+    widths = []
+    if widths_path.is_file():
+        _, widths = parse_table(widths_path.read_text(encoding="utf-8"))
+    try:
+        rows = build_spec(
+            model=stem,
+            vertex_count=vertex_count,
+            limbs=limbs,
+            skin_expect=skin_expect,
+            widths=widths,
+            morph_count=int(meta["morph_count"]),
+            skin=cfg["MMD2MAX_SKIN"] == "true",
+            foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
+        )
+    except ValueError as error:
+        # 导出表少列、值不是数字、截面目标非正 —— 这些都在「尺」这一侧。换成 SystemExit
+        # 是为了让重跑导出的人看到「哪个目录 + 缺哪一列」，而不是 traceback 里孤零零一句
+        # ValueError；中止本身两边一致：宁可这一轮不跑，也不装一套没有来历的判据。
+        raise SystemExit(f"装配判据规格表失败（{base}）：{error}")
     return spec_text(rows)
 
 

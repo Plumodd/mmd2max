@@ -55,6 +55,7 @@ from mmd2max.targets import (
     TOE_TOL_CM,
     WEIGHT_ERR_TOL,
     WEIGHT_SUM_TOL,
+    box_tol_cm,
 )
 
 # 两张表的名字（与 tools/obj_run.py 共用；改了这边不改那边 = 报告永远拼不上）
@@ -312,6 +313,110 @@ def skin_expectation(bones: list[dict[str, str]],
                            bones_skinned=skin_id, links_by_bone=by_bone)
 
 
+# ---------------------------------------------------------------------------
+# 骨盒回读的期望值（M4c）：从 limbs.tsv 脚段 + widths.tsv 算，一个数都不来自 Max
+# ---------------------------------------------------------------------------
+#
+# 治的是哪一类谎：`足背 … -> 宽=3.71424 高=8.65601`、`脚趾 … -> 5.31702/1.86092`、
+# `手部粗细 … -> (8.63193, 3.6286, 3.6286)` 这些行**看起来**就是验收，实际是写入那一刻
+# 的自述：它们量完之后就再没人管过这根骨，而后面还有收尾转角（可能把「哪根轴离世界 Z
+# 最近」翻过去）与足盒接趾（一次 #scale）。#37/#41 反复的正是「缩完又被谁改了 / 缩错了
+# 轴」。现在把同一件事改成两方：Max 在最终场景里再量一次跨度，这边从**输入文件**拿着
+# 网格量出来的截面要求它对撞。
+#
+# 两把尺分开报，因为写入侧本来就用的两把：
+#  - 脚链四根：`mmd2maxFitCrossSection` 收的是**本地包围盒跨度** ⇒ 回读也用跨度，gate。
+#  - 手掌/手指：`mmd2maxApplyWidths` 收的是 **#scale 的两个非长度分量** ⇒ gate 读 #scale。
+#    同一根骨再报一份包围盒跨度（`hand_box_cm`，只要求出现）：`widths.tsv` 那个数是按
+#    「网格里的世界直径」量的，Max 那边把它当成 scale 分量写进去，而 scale ≠ 跨度
+#    （Taper、盒子不对称都会让它偏）。这一轮第一次真去量这个关系，所以先让它说话 ——
+#    拿没证实的等式装闸 = 第二十一轮「骨盆那条 gate 永远过不去」的同一个错。
+FOOT_WIDTH_KEYS = ("foot_w", "foot_h")
+TOE_WIDTH_KEYS = ("toe_w", "toe_h")
+
+
+class FootBox(NamedTuple):
+    """脚链一根骨的骨盒期望：宽/高来自网格截面，长度只有趾骨有（见 build_spec 注释）。"""
+
+    node: str
+    width: float
+    height: float
+    length: float | None
+    # 谁规定的：进日志/报错用，也决定 `length_cm` 是 gate 还是 report。
+    source: str
+
+
+class HandBox(NamedTuple):
+    node: str
+    section: float
+
+
+def _box_float(limb: dict[str, str], key: str, row_label: str,
+               minimum: float = 0.02) -> float:
+    """把 limbs 的一列读成正厘米数；读不到/读成非正数一律抛。
+
+    「这根骨没有截面目标」和「截面目标是 0」在判据表里都该是**没有这一行**，
+    但脚段是导出侧必写的（export_obj 的脚段 9 列），所以缺列 = 两份产物分叉，
+    静跳过会让整条脚链的骨盒验收凭空消失而日志全绿。
+    """
+    raw = limb.get(key)
+    if raw is None or not str(raw).strip():
+        raise ValueError(f"肢段表 {row_label} 的 {key} 列缺失：骨盒回读没有尺。"
+                         "脚段的 10~18 列由导出侧必写，缺了就是 limbs.tsv 与判据分叉")
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"肢段表 {row_label} 的 {key} 不是数字：{raw!r}") from None
+    if value <= minimum:
+        raise ValueError(f"肢段表 {row_label} 的 {key} = {raw}，不是正厘米数："
+                         "截面目标非正 = 网格那一段没量到东西，拿它当尺会要求骨头缩成 0")
+    return value
+
+
+def box_targets(limbs: list[dict[str, str]],
+                widths: list[dict[str, str]]) -> tuple[list[FootBox], list[HandBox]]:
+    """骨盒回读的期望值：脚链四根（含每根的宽/高/长度）+ 手掌手指各一根的粗细。
+
+    脚链的顺序是「先足背后脚趾」，与 Max 那一段的写法一致，报告读起来才对得上日志。
+    """
+    foot: list[FootBox] = []
+    for limb in limbs:
+        if limb.get("mode") != "foot":
+            continue
+        label = f"{limb.get('parent_target')} -> {limb.get('child_target')}"
+        parent = limb.get("parent_target")
+        child = limb.get("child_target")
+        if not parent or not child:
+            raise ValueError(f"肢段表脚段 {label!r} 缺 target 名：回读要有节点名当主体")
+        foot.append(FootBox(parent,
+                            _box_float(limb, FOOT_WIDTH_KEYS[0], label),
+                            _box_float(limb, FOOT_WIDTH_KEYS[1], label),
+                            None, "limbs 的 foot_w/foot_h（踝处足背截面）"))
+        foot.append(FootBox(child,
+                            _box_float(limb, TOE_WIDTH_KEYS[0], label),
+                            _box_float(limb, TOE_WIDTH_KEYS[1], label),
+                            _box_float(limb, "toe_len", label),
+                            "limbs 的 toe_w/toe_h/toe_len（脚尖处截面与趾长）"))
+
+    hands: list[HandBox] = []
+    for item in widths:
+        name = item.get("biped_target")
+        raw = item.get("width")
+        if not name or raw is None or not str(raw).strip():
+            raise ValueError(f"粗细表有一行缺 biped_target/width：{item}")
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError(f"粗细表 {name} 的 width 不是数字：{raw!r}") from None
+        if value <= 0.02:
+            raise ValueError(f"粗细表 {name} 的 width = {raw}，不是正厘米数："
+                             "截面目标非正 = 网格那一段没量到东西。"
+                             ".ms 的 mmd2maxReadWidths 只收 > 0.001 的行，所以这边必须在它"
+                             "之前拦住：否则规格表会多出一条永远没人报的尺")
+        hands.append(HandBox(name, value))
+    return foot, hands
+
+
 def row(phase: str, check: str, subject: str, expected, tol,
         kind: str, when: str = "always") -> tuple[str, str, str, str, str, str, str]:
     """规格行 → 七个**字符串**字段（wire format 只搬文本，判定时再 float()）。
@@ -350,8 +455,9 @@ def _priced(model: str, table: dict, key):
 
 
 def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
-               skin_expect: SkinExpectation, morph_count: int,
-               skin: bool = True, foot_reach: bool = True) -> list[tuple[str, ...]]:
+               skin_expect: SkinExpectation, widths: list[dict[str, str]],
+               morph_count: int, skin: bool = True,
+               foot_reach: bool = True) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
 
     输入全部来自**导出结果**（weights 行数、limbs.tsv 的行、meta 的计数）与
@@ -367,6 +473,10 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     而 `skin/bones` 报的是 `skinOps.GetNumberBones` —— 只有「每一根骨都参与蒙皮」的模型
     才碰巧相等（香菱正好如此，所以 23 轮都是绿的）；换一具有 skin_flag=0 的模型，
     那条 gate 会判红而错的是尺。现在两件事各归各位。
+
+    `widths` 同样是**必填**的（可以是空表）：骨盒回读那一组（M4c）的尺来自这张表与
+    limbs 的脚段。传空表 = 这具模型没有手部粗细表，Max 那边也读不到 widths.tsv，
+    两边同时没有那些行；传了表却不给 Max（或反过来）由 `box_rb/nodes_measured` 判红。
     """
     rows: list[tuple[str, ...]] = []
     foot_rows = [x for x in limbs if x.get("mode") == "foot"]
@@ -507,6 +617,37 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                       0, model))
     for check in ("measurable", "short_skipped"):
         rows.append(row("struct_dir", check, GLOBAL, None, None, "report"))
+
+    # ── 骨盒回读（M4c）：期望值全部来自 limbs 脚段与 widths 表 ────
+    # 上面 `足背 / 脚趾 / 手部粗细` 那三行日志是**写入那一刻**的自述；这一组读的是
+    # 最终场景（四道终局复核之后、附属骨之前）。尺的来源见 `box_targets` 的注释。
+    # 容差不许写成绝对常数：`mmd2maxFitBoneExtent` 的退出条件就是 2% 相对误差，
+    # 尺比承诺更严会每轮红在分辨率上（`targets.box_tol_cm`）。
+    foot_boxes, hand_boxes = box_targets(limbs, widths)
+    for box in foot_boxes:
+        rows.append(row("box_rb", "width_cm", box.node, f"{box.width:.6f}",
+                        box_tol_cm(box.width), "gate"))
+        rows.append(row("box_rb", "height_cm", box.node, f"{box.height:.6f}",
+                        box_tol_cm(box.height), "gate"))
+        # 足背那根骨的长度不由任何输入列规定：接趾把盒远端拉到「PMX 脚掌沿压平轴的
+        # 投影」（第二十轮实测 9.73629），既不是 desired_len（11.228，两 pivot 的间距，
+        # 由 segment/len_cm 管）也不是 foot_len（14.097，踝→鞋尖）。所以它是 report。
+        if box.length is None:
+            rows.append(row("box_rb", "length_cm", box.node, None, None, "report"))
+        else:
+            rows.append(row("box_rb", "length_cm", box.node, f"{box.length:.6f}",
+                            box_tol_cm(box.length), "gate"))
+        # 这根骨最终用哪根局部轴当长度轴（1/2/3）。期望值不在输入文件里，但它决定
+        # 上面三行报的是哪三根轴：宽/高对调的时候，这一行是唯一的现场证据。
+        rows.append(row("box_rb", "len_axis", box.node, None, None, "report"))
+    for box in hand_boxes:
+        # gate 读的是 #scale（写入侧的那把尺），report 读的是包围盒跨度（用户看得见的那把）。
+        rows.append(row("box_rb", "hand_scale_cm", box.node, f"{box.section:.6f}",
+                        box_tol_cm(box.section), "gate"))
+        rows.append(row("box_rb", "hand_box_cm", box.node, None, None, "report"))
+    rows.append(row("box_rb", "nodes_measured", GLOBAL,
+                    len(foot_boxes) + len(hand_boxes), 0, "gate"))
+    rows.append(row("box_rb", "read_fail", GLOBAL, 0, 0, "gate"))
 
     # ── 附属骨父级 ────────────────────────────────────────────────
     rows.append(row("accessory", "no_parent", GLOBAL, 0, 0, "gate"))
@@ -664,16 +805,28 @@ FIXTURE_WEIGHTS = "vertex_index\tbone_weight_pairs\n" + "\n".join((
 FIXTURE_SKIN_EXPECT = skin_expectation(parse_table(FIXTURE_BONES)[1],
                                        parse_weights(FIXTURE_WEIGHTS))
 
+# 脚段那 9 个附加列 fixture 必须带齐（至少是 box_targets 会查的那 5 列 + toe_len）：
+# 少了任何一列，CHANNELS 就少一类通道，而契约测试只会看见「.ms 多报了没人判的行」。
+# 数字取自香菱的真导出（同一具模型、同一把尺），改它们要连着看 M4c 的金标准。
+FIXTURE_WIDTHS = "\t".join(("biped_target", "width")) + "\n" + "\n".join((
+    "Bip001 L Hand\t3.6286",
+    "Bip001 R Hand\t3.6953",
+)) + "\n"
+
 CHANNELS: frozenset[tuple[str, str]] = frozenset(
     (r[0], r[1]) for r in build_spec(
         model=PRICED_MODEL, vertex_count=1,
         limbs=[{"parent_target": "Bip001 L Foot", "child_target": "Bip001 L Toe0",
-                "desired_len": "11.228109", "mode": "foot"},
+                "desired_len": "11.228109", "mode": "foot",
+                "foot_len": "14.097240", "toe_len": "3.569191",
+                "toe_w": "5.317024", "toe_h": "1.860916",
+                "foot_w": "3.714245", "foot_h": "8.656011"},
                {"parent_target": "Bip001 L Thigh", "child_target": "Bip001 L Calf",
                 "desired_len": "36.382676", "mode": "leg"},
                {"parent_target": "Bip001 L Finger0", "child_target": "Bip001 L Finger01",
                 "desired_len": "2.344292", "mode": "link"},
                {"parent_target": "Bip001 Spine", "child_target": "Bip001 Spine1",
                 "desired_len": "8.325677", "mode": "link"}],
-        skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True)
+        skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True,
+        widths=parse_table(FIXTURE_WIDTHS)[1])
 )
