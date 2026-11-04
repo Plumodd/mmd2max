@@ -44,7 +44,7 @@ RAN_CHECK = "ran"
 # 现在数值住在这里，经 MMD2MAX.CFG 下发（tools/obj_run.py），Max 只读不写。
 CONVERGE_MAX_ITERS = 3
 
-# 会被「挪动 Biped 节点」影响的读数种类：段长、落位、结构向、脚骨朝向、脚链连续与盒隙，
+# 会被「挪动 Biped 节点」影响的读数种类：段长、落位、结构向、脚链连续与盒隙，
 # 以及脚趾复摆的残差。
 # 这些都是**在场景里量出来的**，任何一次 setTransform / #scale 都会让它们失效；
 # 而 fit / pose / converge / thigh_roll 那些是 pass 自己的自述（干了几件事），
@@ -62,7 +62,7 @@ CONVERGE_MAX_ITERS = 3
 # 方向当然是对的（createBone 直接吃 head/tail），可它挂在一个**会被转动的父级**下面 ——
 # 父级一次 setTransform，子骨的世界变换就跟着走（改挂那段正是靠「先记 worldTM、链接后
 # 写回去」才没飞散）。所以任何一次挪动 Biped 都必须在它之后重量附属骨方向。
-POSE_FACTS = ("bone_rb", "box_rb", "foot_chain", "foot_yaw", "placement",
+POSE_FACTS = ("bone_rb", "box_rb", "foot_chain", "placement",
               "segment", "struct_dir", "toe_snap")
 
 
@@ -189,8 +189,8 @@ PASSES: tuple[Pass, ...] = (
     _pass("figure_exit", "退出 Figure 模式", requires=("toe_box_final",)),
     # 以下五道是终局复核：它们只读不写，所以 invalidates 全空，但要排在
     # figure_exit 之后（骨盒朝向在 Figure 模式内读出来是另一套数）。
-    _pass("foot_chain_check", "脚骨偏航 / 链向 / 盒隙复核",
-          requires=("figure_exit",), writes=("foot_chain", "foot_yaw")),
+    _pass("foot_chain_check", "脚链向 / 盒隙复核（偏航只记日志）",
+          requires=("figure_exit",), writes=("foot_chain",)),
     _pass("segment_check", "段校验（两 pivot 实距）",
           requires=("foot_chain_check",), writes=("segment",)),
     _pass("placement_check", "关键关节落位复核",

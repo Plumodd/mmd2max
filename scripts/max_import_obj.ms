@@ -5345,13 +5345,14 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             if fnode != undefined and cnode != undefined and toeTgt != undefined \
                and ankleTgt != undefined do
             (
-                /* 判据与转角 pass 逐字同源：两根脚骨都比同一个 mmd2maxBoxWantDir 给的
-                   方向（Foot = 踝->球、Toe0 = 球->网格鞋尖），压不压平全看
-                   MMD2MAX_FOOTBOXFLAT（true = 压成水平轴，与导出侧 FOOT_BOX_FLAT 同真同假）。
+                /* 这两个数与转角 pass 逐字同源（比的就是 mmd2maxBoxWantDir 写进骨轴的
+                   方向），所以它**只记日志、不报 verdict** —— 恒等式当成 gate 就是假验收：
+                   MMD2MAX_FOOTBOXFLAT（true = 压成水平轴，与导出侧 FOOT_BOX_FLAT 同真同假）
                    #28 那版在这里压平是为了让「刚修平的脚」读出 0 度，代价是盒子被钉成
                    水平的板、前端离趾骨盒还差 5.6cm 高（第十二轮藏网格特写拍到）。
                    地面保护统一收在 mmd2maxBoxWantDir 的 45 度斜度上限里；Toe0 这一行
-                   也必须走同一个函数，否则翻回滚开关时「写」变了、「读」没变。 */
+                   也必须走同一个函数，否则翻回滚开关时「写」变了、「读」没变 —— 读侧
+                   留成日志正是为了翻开关时这一行还能和截图对时序。 */
                 local yawF = mmd2maxLogBoneDir fName (mmd2maxBipedAxes fnode) \
                     (mmd2maxBoxWantDir fName ankleTgt toeTgt tipPos)
                 local yawT = mmd2maxLogBoneDir cName (mmd2maxBipedAxes cnode) \
@@ -5359,8 +5360,6 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 /* 一行结论，方便和用户的截图对齐：正负号 = 朝哪边偏 */
                 mmd2maxLog ("  脚骨偏航结论 " + fName + " 骨=" + (yawF as string) \
                     + "度 趾=" + (yawT as string) + "度")
-                mmd2maxReport "foot_yaw" "bone_yaw_deg" fName yawF
-                mmd2maxReport "foot_yaw" "toe_yaw_deg" fName yawT
                 /* #40 的护栏：**骨轴 vs 自己的子关节**。
                    上面两行比的是 mmd2maxBoxWantDir 给的目标，而那个目标就是写进去的
                    方向 —— 同源即恒等式，第十五轮压平之后它照样读 骨=0.0 趾=0.0 全绿，
