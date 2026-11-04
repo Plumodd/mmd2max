@@ -1528,9 +1528,13 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       取景族「有没有人看着」也核了，结论是**别把它当数值守护**：非 tight 那 13 行的门槛是 `min 0.0`，
       但它不是死闸 —— `.ms` 投不出时报 **-1.0**，0 这条线正好卡在「投不出」与「任何真填充」之间，
       守的是存在不是多少（`SHOT_MIN_FILL_FLOOR` 的注释写着「给全身图定一个该占多少没有物理理由」）。
-    - **证据冻结**：`baselines/round77_香菱_{objrun.log,CHECK,REPORT,VERDICTS,driver.log}` +
+    - **证据冻结**：`baselines/round77_香菱_{objrun.log,CHECK,VERDICTS,driver.log}` +
       `round77_MMD2MAX.{CFG,REPORT}` 共 6 份，复制后逐份 `cmp` 核对（`driver.log` = `obj_run` 的 stdout，
-      `判据汇总` 那行只在那里，Max 侧日志没有）。**开口记在这**：第 40 条那轮交付件（round76，512 PASS）
+      `判据汇总` 那行只在那里，Max 侧日志没有）。**报告只冻一份**，名字走 `round77_MMD2MAX.REPORT`：
+      它与 `test_runs/香菱/MMD2MAX.REPORT` 逐字节相同（`cmp` 过），而这个名字是 `tests/test_passes.py`
+      的时间轴对撞件必读的路径 —— 第 74/75 轮那套 `roundNN_模型_REPORT` 是纯人读的副本，这轮同一份
+      字节同时充当两个角色。再复制一份 `round77_香菱_REPORT` 不会多任何证据，只会造出一对可以被
+      单独更新的孪生件，而那正是本条下面要说的那种「看起来正常」的形状。**开口记在这**：第 40 条那轮交付件（round76，512 PASS）
       的日志**不在本工作树** —— 这里 `test_runs/香菱/香菱_objrun.log` 装的是更早的 11-04 16:15 那份，
       所以「512 / 0 / 22」这组数在本树不可复核，要复现得回 Desktop 源树或重跑一次 `--drop-guides`。
     - **包内自检抓到一条新的血缘缺口：冻结的顺序错了，而当时看不出来**。按 §8 自检（解包 → 用包里的代码
@@ -1569,6 +1573,25 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       双击走的是**第一条**，旧说法会让人误以为三级探测的后两级在本机被验证过；§7「21 个 `.py`」与 §8
       「64 个文件 = 13+36+2+14 + 4」—— 后者自己就和 64 对不上，实测 `mmd2max/` 11 + `probes/` 35 +
       `scripts/` 1 + `tools/` 13 + 根 4 件 = **64**，两处都改成给现取的命令；`verdicts.py:877` 这个死行号 → 961。
+    - **死引用的第二批（收尾自查抓到，形状和上面同一类：引用还在，指的东西已经不对了）**：
+      ① `tools/check_ms.py` 的 `ORACLE_EXEMPT` 注释三处全死 —— 行号 `mmd2maxRotatePass:2918` 落在
+      `mmd2maxConvergeGate`（2905~2919）头上，转角 pass 从 **2920** 才开始；引的那句话在 .ms 里查无，而且它把 M3
+      **已经换掉**的旧闸门当现行契约写着（`verdicts.py:822-828` 同理，实际在 `CONVERGE_LOCKS` + `_lock`）。
+      例外表是「谁可以自己判自己」的唯一账，注释指错地方等于下一轮没人查得清这条例外还该不该留。
+      ② `README_V4` §M5 两条读数：`export_obj.py:1628-1634` 与 `:944-957 / :282 / :368` 都漂了，
+      其中第一条还是条 `file:///C:/Users/.../Desktop/mmd2max_v4_src_2026-11-03/...` 的链接 —— 指向
+      **另一棵树**的包外文档，读的人点进去量的不是本树这份代码。三处一律换成符号锚（函数名 + 常量名）。
+      ③ `README_V4:344` 的 `pmx.py:406` 现在落在本轮新加的材质颜色 `_all_finite` 上，与「骨轴向已读到」
+      无关 ⇒ 改成 `fixed_axis` / `local_x` / `local_z` 三个字段名。
+      ④ §M5 那句「有一支**常驻变异针**钉住 pos_min 漏乘 scale」说法不准：真正常驻的是
+      `tests/test_metamorphic.py` 把 `joint_pos_min/max_x/y/z` 列进 `physics#JOINT` 的 `length` 列，
+      变异针本身在 `test_runs/probe_m5_mutate.py`（gitignore，不进交付包），它报的两个字节偏移只是当轮读数。
+      已按这个口径改写 —— 判据与「证明判据咬得住的那次实验」不许写成同一件事。
+      ⑤ 上面「证据冻结」那条清单多写了 `round77_香菱_REPORT`：这份文件不存在，报告只冻在
+      `round77_MMD2MAX.REPORT` 一个名字下（它与 `test_runs/香菱/MMD2MAX.REPORT` 逐字节相同，`cmp` 过）。
+      台账里各轮写的行号是**当时**的读数，不改写历史；活性文档（README_V4、代码注释）里的引用一律改成
+      不随编辑漂移的锚。`tests/` 不进版本控制 ⇒ `test_metamorphic.py` 模块 docstring 那处死行号
+      （「README_V4 第 93 行」）只活在本工作树里，交付包里本来就没有它。
     - **重打包与包内自检（第 40 条那套流程复跑，`mmd2max_v4_test_2026-11-05.zip`）**：`git archive` 出来
       **64 个内容件**（`mmd2max/` 11 含 configs 3 + `probes/` 35 + `scripts/` 1 + `tools/` 13 + 根 4；
       zip 条目 69 里有 5 条是目录项，别把两者混成一个数）。解压到临时目录 → **只用包里的代码**
