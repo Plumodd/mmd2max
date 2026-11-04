@@ -3686,13 +3686,51 @@ fn mmd2maxFitOnePair pnode cnode desired axis method =
     #((abs (after - desired)), axis)
 )
 
+fn mmd2maxCoupledAxis pnode cnode method =
+(
+    /* 长度轴 = 缩同样 5% 之后，把子关节推得最远的那根轴。这是**探针**，不是「试到收敛」：
+       海灯节 `肢段 L Foot -> L Toe0 轴=1` 那行是 scale.x 8.86744->9.82177（+10.8%）只换来
+       父→子距离 +4.2%，误差 0.0475 刚好压过 0.05 门槛就被收下；香菱同一段是 `轴=2`
+       （默认轴 1 不收敛、重试才找到 2）。同一句话在两具模型上给出两个轴，说明「收敛」
+       不是长度轴的判据 —— 弱耦合的宽轴在初始长度本来就接近目标时会蒙过门槛。
+       蒙错之后 #75 那笔盒账把错轴传给 足背 / 接趾 / 回读，海灯节的 Foot 骨盒于是把
+       带 23:77 脚跟不对称的长边（axis2，缩前 14.82cm）转成了竖直边：盒子沿踝上方伸
+       6.74cm 进小腿、只向下 2.01cm，而脚掌 pivot 在踝下方 4.58cm（由 连线长 15.1039 与
+       子沿轴 14.3926 反推，纯世界 −Z 分量）—— `端面覆盖=false` 那两行量的就是这件事，
+       截图 香菱-海灯节_bone_foot_side.png 里那只朝上指的鳍也是它。
+       返回 #(轴号, 最大增益, 轴1增益, 轴2增益, 轴3增益)；三根都推不动（缩放被锁）时
+       轴号=0，调用方退回默认轴。增益就是「缩 5% 之后距离动了 5% 的百分之几」，
+       长度轴应当接近 0.05，宽/高轴接近 0。 */
+    local base = mmd2maxSegLen pnode cnode
+    if base < 0.0001 do return #(0, 0.0, 0.0, 0.0, 0.0)
+    local s0 = mmd2maxBipedScale pnode
+    local gains = #(0.0, 0.0, 0.0)
+    for ax = 1 to 3 do
+    (
+        if mmd2maxApplyScale pnode ax 1.05 method do
+        (
+            gains[ax] = abs ((mmd2maxSegLen pnode cnode) - base) / base
+            mmd2maxSetScale pnode s0 method
+        )
+    )
+    local best = 0
+    local bestGain = 0.0
+    for ax = 1 to 3 do
+    (
+        if gains[ax] > bestGain do ( bestGain = gains[ax]; best = ax )
+    )
+    #(best, bestGain, gains[1], gains[2], gains[3])
+)
+
 fn mmd2maxFitSegments root limbs axis method =
 (
     /* 闭环 + 逐段找轴。
        为什么要逐段找轴：Biped 的 #scale 三个分量对不同节点含义不同——
        肢骨通常 X = link 长度；但 **Pelvis 的 X 是 link 长度、横向髋宽在 Y/Z 上**，
        拿 X 去缩骨盆，髋关节的横向距离根本不变（上一轮髋差 1.45 就是这个原因）。
-       所以：默认轴先试；不收敛就恢复原值、换轴重试，取第一个收敛的轴。
+       所以：先用**探针**量出「缩哪根轴最能改掉父→子距离」（#77，见 mmd2maxCoupledAxis），
+       拿那根轴做闭环；探针读不到或那根轴不收敛，才恢复原值、逐轴重试（含「三轴等比例」），
+       取第一个收敛的。
        **顺手记长度轴账**（`MMD2MAX_LENAXIS_MAP`）：这一段跑在任何摆位之前，父→子的
        方向还是 Biped 自己解出来的原样，「缩这根轴能改掉父→子距离」就是长度轴的实测
        定义。转角判据从此用这个数，不再现场挑「目前最顺的轴」（见 mmd2maxLenAxisOf）。
@@ -3728,15 +3766,21 @@ fn mmd2maxFitSegments root limbs axis method =
                 guardNode = getNodeByName (root.name + " Head") exact:true
                 if guardNode != undefined do guardBefore = mmd2maxSegLen pnode guardNode
             )
-            local best = mmd2maxFitOnePair pnode cnode desired axis method
+            /* #77：首试轴改用探针实测的耦合轴（见 mmd2maxCoupledAxis）——
+               「默认轴试到收敛」在初始长度本来就接近目标时会收下宽轴。
+               探针读不到（三轴都推不动）才退回原来的默认轴；探针自己会把 scale 复原，
+               所以上面那行 默认= 仍是没被碰过的长度。 */
+            local probe = mmd2maxCoupledAxis pnode cnode method
             local usedAxis = axis
+            if probe[1] > 0 do usedAxis = probe[1]
+            local best = mmd2maxFitOnePair pnode cnode desired usedAxis method
             if best[1] > 0.05 do
             (
-                /* 默认轴没收敛：恢复，再逐轴试（含「三轴等比例」），取第一个收敛的 */
+                /* 探针轴没收敛：恢复，再逐轴试（含「三轴等比例」），取第一个收敛的 */
                 mmd2maxSetScale pnode s0 method
                 for ax = 1 to 4 do
                 (
-                    if best[1] > 0.05 and ax != axis do
+                    if best[1] > 0.05 and ax != usedAxis do
                     (
                         local r2 = mmd2maxFitOnePair pnode cnode desired ax method
                         if r2[1] <= 0.05 then
@@ -3785,6 +3829,11 @@ fn mmd2maxFitSegments root limbs axis method =
             msg = msg + " 缩放后=" + (after as string)
             msg = msg + " 轴=" + (usedAxis as string)
             msg = msg + " 误差=" + (err as string)
+            /* 探针三根轴各自的增益（缩 5% 后距离变化占原距离的比例）：
+               这一行是「轴=1 到底是长度轴还是被蒙过去的宽轴」唯一的现场证据。 */
+            msg = msg + " 探针=" + (probe[1] as string) + " 增益=" + (probe[2] as string)
+            msg = msg + "(" + (probe[3] as string) + "/" + (probe[4] as string) \
+                + "/" + (probe[5] as string) + ")"
             /* 附上父骨的 scale 前后值：区分「link 长度」与「比例缩放」两种语义，
                同时能看出骨盆被缩放时是否把整副骨架带偏 */
             msg = msg + " scale: " + (s0 as string) + " -> " + ((mmd2maxBipedScale pnode) as string)
@@ -3794,6 +3843,8 @@ fn mmd2maxFitSegments root limbs axis method =
                2) usedAxis 是 1/2/3 —— 4 是「三轴等比例」，那没指出长度在哪根轴上；
                3) 父骨**只有这一个子关节** —— Pelvis 有三个（Spine + 两腿）、Hand 有五个，
                   它们的「长度方向」不是一个方向，记进去会把躯干/骨盆一起带跑。
+               #77 之后 usedAxis 来自探针（耦合最强的轴），条件 1 只是「缩到位」的账，
+               不再承担「认轴」的职责 —— 第 44 轮它承担过，于是海灯节的脚盒朝上长。
                键用 Max 节点名（不是 PMX 骨名）：场景里已有同名 Biped 时节点会被改名，
                两边都用 node.name 才对得上。分两层 if 不赌 and 短路：children 会抛。 */
             if err <= 0.05 do
