@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import string
@@ -550,6 +551,17 @@ def build_script(base: Path, stem: str, vertex_count: int,
     cfg, cfg_path = build_cfg(base, stem, vertex_count, skin=skin, suffix=suffix,
                               shot=shot, physics=physics, interactive=interactive)
     cfg_path.write_text(cfg_text(cfg), encoding="utf-8")
+    # 指纹算的是**落盘字节**，不是内存里那份正文：`write_text` 在 Windows 上把 `\n`
+    # 译成 `\r\n`，两者 sha256 不同，而事后拿 sha256sum/certutil 复核的人手里的就是盘上
+    # 这份。报一个别人算不出来的数，等于没报。
+    # 为什么必须有这一行：第 77 轮的 `MMD2MAX.CFG` 在实跑**之后**被一次 gen-only 复跑
+    # 覆盖（`--gen-only` 会把 INTERACTIVE 打成 true、去掉 `_phys` 后缀），冻结件因此
+    # 是「这一轮读过的配置的上一代」。日志里 `配置来自 …（43 项）` 只回声 12 个值，
+    # 认不出整份文件 —— 现在拿任何一份候选 CFG 算一次 sha256，对上才是这一轮的。
+    # 指纹不进 CFG 文件本身：那是 Max 逐键读的数据，加一条非键值的行等于给它加一条
+    # 读法规则（规则 IV 的「只有一个来源」也包括格式）。
+    digest = hashlib.sha256(cfg_path.read_bytes()).hexdigest()[:12]
+    log(f"配置指纹 sha256[:12]={digest} 键数={len(cfg)} 路径={cfg_path}")
     # 规格表紧跟 CFG 落盘，路径取自 CFG 自己：两边指向不同文件的话，Max 读的那张表
     # 就不是 Python 用来判的那张，拼表时全靠运气。
     spec_path = Path(cfg["MMD2MAX_VERDICTS"])
