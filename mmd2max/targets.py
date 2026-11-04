@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import math
+
 # 方向容差（度）。MAXScript 侧三处消费同一个数（转角尝试门控 / 收敛「方向超标」计数 /
 # 退出 Figure 模式后的「结构向 复核」），所以它必须是一个值而不是三份写死的字面量。
 # 5.0 → 3.0 的定价依据：4.618 度的脚骨偏航落在旧门控下面永远不被尝试；再往下（1~2 度）
@@ -113,6 +115,27 @@ def box_tol_cm(target_cm: float) -> float:
     这种浮点尾巴会让两轮的行比对看起来像判据变了。
     """
     return round(max(BOX_TOL_REL * float(target_cm), BOX_TOL_MIN_CM), 6)
+
+
+def span_tol_cm(length_cm: float, width_cm: float, height_cm: float) -> float:
+    """`box_rb/span_want_cm` 的允许偏差（厘米）：写入承诺 + 转角余量带来的**投影溢量**。
+
+    #79 那把尺量的是「骨盒八个角点投到骨指向方向上的世界跨度」。盒子是长方体，
+    只要它的长度轴与指向方向**不完全重合**，另外两根边就会往这个方向里掺一份：
+    精确式是 `span = Σ 边长_i × |cos(轴_i, 方向)|`，所以长度轴偏 θ 度时
+        span ∈ [ L·cosθ,  L·cosθ + √(W²+H²)·sinθ ]
+    （另两根边的横向分量按 Cauchy–Schwarz 合并，取 √(W²+H²) 是上界）。
+    θ 的上界不是新造的数：它就是转角那道闸承诺的 `DIR_TOL_DEG`（3 度）—— 超过它
+    `struct_dir/over_tol` 那一行先红，所以这里不必为更大的角预留。
+    以趾骨为例（L=3.569 / W=5.317 / H=1.861，香菱第 52 轮读数）：3 度的溢量是
+    0.295cm = 8.3%，而**薄边朝前**那种缺陷（报 1.86 或 0.572）离期望差 48~84%。
+    不掺这一份，尺比承诺更严，每轮红在转角余量上（与上面 2% 那条同一个道理）；
+    掺了它，仍然拦得住全部四种已知错法。
+    """
+    theta = math.radians(DIR_TOL_DEG)
+    bleed = math.hypot(float(width_cm), float(height_cm)) * math.sin(theta)
+    shrink = float(length_cm) * (1.0 - math.cos(theta))
+    return round(box_tol_cm(length_cm) + bleed + shrink, 6)
 
 # MAXScript 全局名 = CFG 键名（M1b 约定：一个词两边同名）。值类型跟着一起声明，
 # obj_run 落盘与 Max 侧校验都读这张表，省掉「加一个键要改四处」。

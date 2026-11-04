@@ -3202,6 +3202,50 @@ fn mmd2maxApplyWidths root widths =
     adjusted
 )
 
+fn mmd2maxWorldSpanAlong node dir =
+(
+    /* #79：把骨盒的八个角点投到 dir 上，量**世界**跨度 —— 唯一不看「盒轴记录」的尺。
+       mmd2maxBoxDims 那三行（宽/高/长）都按 #75 那笔盒账挑轴，所以「薄的那根边有没有
+       沿着这根骨指向的方向」在它里面根本问不出来：把 3.4674 报成「长」也是自洽的，
+       而 #78 就是这件事（趾长 0.5722 写在竖直轴上、3.4674 顺着趾方向戳出鞋尖，
+       box_rb 全绿）。这里绕开轴号，直接量角点，所以记录说谎它照量。
+       坐标系与单位：本地角点来自 `nodeGetBoundingBox node node.transform`，这一句在
+       本项目里已经被当成「以 pivot 为原点、**已经乘过 #scale** 的厘米本地盒」用了
+       几十轮（mmd2maxLocalExtent 与 mmd2maxBoxFarEnd 都靠它，报出的 长/宽/高 直接与
+       limbs 的厘米期望对得上；第 44 轮起还打印过 本地 min/max，脚链的 y 就是 9.73629
+       那个接趾投影值）。所以要把它搬到世界只许乘**旋转**，不许整块乘 node.transform：
+       后者的行向量里还带着一份 #scale（脚骨读到 [8.87, 14.27, 7.33] 这种厘米数），
+       再乘一遍等于把尺寸缩两次，跨度会变成几百。这里用转角那边一直在用的
+       mmd2maxBipedAxes（行向量 normalize 后的三根单位世界轴）；世界 pivot 是平移项，
+       在 hi-lo 里自动抵消，所以不必加。
+       写法：八个角点投影后取 max−min，对「棱与自身局部轴平行」的盒子就等于
+       `Σ 棱长_i × |cos(轴_i, dir)|`（每个角点在各轴上的贡献独立取极值），所以这里
+       直接写这个闭式 —— 少三层循环，也少一处跨行嵌套 for 的 MAXScript 解析风险。
+       dir 在这里**自己 normalize**，不要求调用方给单位向量：调用方传的是
+       mmd2maxBoxWantDir，而它三条返回路径**没有一条是单位向量**（压平那条乘的是
+       `length raw / horiz`，另两条直接给 tail-head 或 shoeTip-head 原差）。拿非单位
+       向量做投影，量出来是「跨度 × |dir|」—— 趾骨那根的 |dir| 就是鞋尖到脚掌的距离，
+       这个数会绿在尺子外面、且每具模型错的比例还不一样。dir 长度近零、轴读不到或
+       包围盒读不到都返回 undefined，绝不猜。 */
+    local bb = undefined
+    try ( bb = nodeGetBoundingBox node node.transform ) catch ( bb = undefined )
+    if bb == undefined do return undefined
+    local len = (length dir)
+    if len < 0.0001 do return undefined
+    local u = dir / len
+    local axes = mmd2maxBipedAxes node
+    if axes == undefined do return undefined
+    local mn = bb[1]
+    local mx = bb[2]
+    local a1 = dot axes[1] u
+    local a2 = dot axes[2] u
+    local a3 = dot axes[3] u
+    /* 每根棱长与它的 |cos| 各自成一项，`(...)` 是必需的：MAXScript 在表达式里把函数
+       调用之后的整段都当参数吞（`abs a1 * e1 + …` 会被读成 `abs (a1*e1 + …)`），
+       那样符号能互相抵掉，量出来的就不再是跨度。 */
+    (abs a1) * (mx.x - mn.x) + (abs a2) * (mx.y - mn.y) + (abs a3) * (mx.z - mn.z)
+)
+
 fn mmd2maxBoxDims node dir =
 (
     /* 只读不写：量骨盒在长度轴 / 宽 / 高三根局部轴上的本地跨度（厘米），M4c 的尺。
@@ -3233,18 +3277,24 @@ fn mmd2maxBoxDims node dir =
 
 fn mmd2maxReportBoxDims subject node dir =
 (
-    /* 一根骨：量 + 落四行读数 + 一行日志。返回 1=量到 / 0=没量到，调用方只负责数数。
+    /* 一根骨：量 + 落五行读数 + 一行日志。返回 1=量到 / 0=没量到，调用方只负责数数。
        这边**一个判定都不写**（规则 II）：宽高等待不等于几厘米由 MMD2MAX.VERDICTS 说，
-       Max 只把量到的数交出去。 */
+       Max 只把量到的数交出去。
+       第五行 `span_want_cm` 是 #79：前三行按盒账挑轴，所以「长」报的是**哪根边的长度**
+       由记录说了算；这一行把盒角点投到参考方向上直接量，绕开记录。两者相等才说明
+       「沿着骨指向的那根边就是报出去的长」。 */
     local d = mmd2maxBoxDims node dir
     if d == undefined do return 0
+    local span = mmd2maxWorldSpanAlong node dir
     mmd2maxReport "box_rb" "width_cm" subject d[1]
     mmd2maxReport "box_rb" "height_cm" subject d[2]
     mmd2maxReport "box_rb" "length_cm" subject d[3]
     mmd2maxReport "box_rb" "len_axis" subject d[4]
+    if span != undefined do mmd2maxReport "box_rb" "span_want_cm" subject span
     mmd2maxLog ("  骨盒回读 " + subject + " 宽=" + (d[1] as string) \
         + " 高=" + (d[2] as string) + " 长=" + (d[3] as string) \
-        + " 长度轴=" + (d[4] as string))
+        + " 长度轴=" + (d[4] as string) \
+        + " 沿指向=" + ((if span != undefined then span else -1.0) as string))
     1
 )
 

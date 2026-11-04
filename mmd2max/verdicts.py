@@ -65,6 +65,7 @@ from mmd2max.targets import (
     WEIGHT_ERR_TOL,
     WEIGHT_SUM_TOL,
     box_tol_cm,
+    span_tol_cm,
 )
 
 # 两张表的名字（与 tools/obj_run.py 共用；改了这边不改那边 = 报告永远拼不上）
@@ -949,6 +950,25 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         # 这根骨最终用哪根局部轴当长度轴（1/2/3）。期望值不在输入文件里，但它决定
         # 上面三行报的是哪三根轴：宽/高对调的时候，这一行是唯一的现场证据。
         rows.append(row("box_rb", "len_axis", box.node, None, None, "report"))
+        # #79：把盒角点投到「这根骨指向的方向」上直接量世界跨度，**不碰盒轴记录**。
+        # 上面三行都按 #75 那笔记录挑轴，所以「长」报的到底是哪根边的长度由记录说了算
+        # —— #78 之前那版海灯节把趾长 0.5722 收在**竖直**轴上（现场三维的 `鞋尖−脚掌`
+        # 在这只鞋上几乎竖直），而 3.4674 那根边顺着趾方向戳出去；宽/高/长三行按记录
+        # 各自对得上自己的尺，整组读数自洽地绿。这一行不问记录，谁朝着骨的指向就量谁：
+        # 对不上期望的趾长就只有「薄边没朝前」一种解释（55 轮实测两具模型都是 0 溢量：
+        # 香菱 3.56919 == 长 3.56919，海灯节 0.572203 == 长 0.572202）。
+        # 足背仍然只能 report：它的盒长由接趾投影决定，两边都没有独立的尺（理由见上面
+        # length_cm 那段），拿 Max 自己的读数当期望就是规则 II 禁的那种恒等式。
+        # 容差比上面三行宽：投影跨度会把转角余量算进去（长度轴偏 3 度时，5.32cm 的宽边
+        # 就往这个方向多掺 0.29cm），公式与定价见 `targets.span_tol_cm`。
+        # 足背那两行的实跑读数顺便记下，免得下一轮被当成缺陷：它的参考方向是**三维**的
+        # 「实测踝 pivot → PMX 脚掌」，而骨盒按压平轴写，两者之间那道俯仰全进了跨度 ——
+        # 香菱 长=12.6445 / 沿指向=15.2758，海灯节 18.6818 / 20.6234。
+        if box.length is None:
+            rows.append(row("box_rb", "span_want_cm", box.node, None, None, "report"))
+        else:
+            rows.append(row("box_rb", "span_want_cm", box.node, f"{box.length:.6f}",
+                            span_tol_cm(box.length, box.width, box.height), "gate"))
     for box in hand_boxes:
         # gate 读的是 #scale（写入侧的那把尺），report 读的是包围盒跨度（用户看得见的那把）。
         rows.append(row("box_rb", "hand_scale_cm", box.node, f"{box.section:.6f}",
