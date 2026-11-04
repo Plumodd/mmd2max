@@ -24,11 +24,13 @@ v3 的验收长成这样：Max 侧自己数 `成功=39 失败=0`、自己判断�
 - `lock` **已定价的缺陷**，钉住当前读数防止再退（例：`落位最大=5.6995`、`链向 断开=2 根`、
   Pelvis 落位偏差）。这类行不许被读成「达标」——它只保证「没变得更差」。
 - `report` 只要求「这一行必须出现」，不卡数值（例：可测骨数，随模型变）。
-- `min` 单向门槛：读数**至少**要到 expected 才算过（例：特写截图的取景填充率）。
-  为什么现有三种装不下它：gate 比的是 `abs(实报 - 期望) <= tol`，是**双向**的，
-  把填充率写成 gate + 大容差就等于没写（越大越能漂），写成 gate + 小容差又要求它
-  不许超过某个数 —— 而「拍得更近」从来不是缺陷。expected 之下才是缺陷。tol 对
-  `min` 行没有意义，固定写 0。
+- `min` 单向门槛：读数**至少**要到 expected 才算过（例：特写截图的取景填充率、
+  取景带的上沿必须高过胸骨）。为什么现有三种装不下它：gate 比的是
+  `abs(实报 - 期望) <= tol`，是**双向**的，把填充率写成 gate + 大容差就等于没写
+  （越大越能漂），写成 gate + 小容差又要求它不许超过某个数 —— 而「拍得更近」从来不是
+  缺陷。expected 之下才是缺陷。tol 对 `min` 行没有意义，固定写 0。
+- `max` `min` 的镜像：读数**最多**只能到 expected（例：取景带的下沿必须低过胸骨）。
+  同样是单向 —— 带框得比要求的更宽不是缺陷，只是那张图更空。tol 固定写 0。
 
 `when=if_present` 的行（例：收尾重摆——没有任何骨被拽走时那一遍根本不该跑）缺失不算
 失败，但如果报了，仍然按 expected/tol 判。
@@ -72,7 +74,7 @@ REPORT_NAME = "MMD2MAX.REPORT"
 SPEC_HEADER = ("phase", "check", "subject", "expected", "tol", "kind", "when")
 REPORT_HEADER = ("phase", "check", "subject", "actual")
 
-KINDS = ("gate", "lock", "report", "min")
+KINDS = ("gate", "lock", "report", "min", "max")
 WHENS = ("always", "if_present")
 
 # 全模型范围的行为 "-"，Max 那边也写 "-"（两边同一个词，拼表才不需要映射）。
@@ -514,10 +516,10 @@ SHOT_TAGS: tuple[str, ...] = (
 )
 
 # tight = 取景前按视口宽高比把框的**水平**跨度收到与纵向同比例（.ms 的 mmd2maxAspectBox）。
-# 只有「按包围盒高度比例定义」的两组带该紧：颈部与胸部 —— 它们的水平跨度是 ±10cm 的
+# 只有「纵向自己定、横向只是余量」的两组带该紧：颈部与胸部 —— 它们的水平跨度是 ±10cm 的
 # 余量 + 被张开的手臂撑出来的 119cm，跟要判的东西（那一截带里的高矮）没关系。
 # 按节点算出来的框（脚/手）不紧：那种框的水平跨度就是内容本身，收紧会裁掉内容。
-# 这份名单必须与 .ms 调用点里 `tight:true` 那几个逐字相同（契约测试对撞）。
+# 这份名单必须与 .ms 调用点里用 mmd2maxShotOneTight 的那几个逐字相同（契约测试对撞）。
 SHOT_TIGHT_TAGS: tuple[str, ...] = (
     "bone_chest_front", "bone_chest_side",
     "chest_front", "chest_side",
@@ -538,13 +540,26 @@ SHOT_MIN_FILL_PCT = 45.0
 # 「该占多少」没有物理理由，拿它当尺就是装饰。
 SHOT_MIN_FILL_FLOOR = 0.0
 
+# 取景框的三根轴（与导出侧的 mmd2max.export_obj.CHEST_AXES、tools/obj_run.CHEST_AXES 同一套词）。
+CHEST_AXES = ("x", "y", "z")
 
-def shot_fill_rows() -> list[tuple[str, ...]]:
-    """截图取景的规格行：每张图一行填充率 + 两条聚合计数。
+# 每张 tight 截图的**水平**世界轴：.ms 的 mmd2maxAspectBox 收的就是这一根
+# （正视→x、左视→y）。键集必须与 SHOT_TIGHT_TAGS 相同（测试对撞），轴选错则判据会拿
+# y 的极值去要求 x 的读数 —— 那是一条永远绿、也永远看不见的错。
+SHOT_H_AXIS: dict[str, str] = {
+    "bone_chest_front": "x", "chest_front": "x", "neck_front": "x",
+    "bone_chest_side": "y", "chest_side": "y", "neck_side": "y",
+}
+
+
+def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
+    """截图取景的规格行：每张图一行填充率 + 两条聚合计数 + 胸部框的罩得住判据。
 
     `when` 全是 `if_present`：截图段只在 `MMD2MAX_SHOT` 打开时跑，而且它排在保存与成功
     标记之后 —— 那段坏了不该把已经落盘的 .max 判成失败，但它一旦跑了，行数与填充率
     就必须按上面这两份名单对账（少一张图 = 少一行读数，靠 `tags` 那条 gate 响）。
+
+    `chest_bone` 是导出侧量出来的胸骨端点极值 `((x,y,z)min, (x,y,z)max)`，None = 认不出胸骨。
     """
     rows: list[tuple[str, ...]] = []
     for tag in SHOT_TAGS:
@@ -555,6 +570,49 @@ def shot_fill_rows() -> list[tuple[str, ...]]:
                     when="if_present"))
     rows.append(row("shot_rb", "projection_fail", GLOBAL, 0, 0, "gate",
                     when="if_present"))
+    rows.extend(chest_box_rows(chest_bone))
+    rows.extend(tight_box_rows(chest_bone))
+    return rows
+
+
+def chest_box_rows(chest_bone: tuple[tuple, tuple] | None) -> list[tuple[str, ...]]:
+    """胸部特写：Max 这一轮**实际用的**取景框必须罩住量出来的胸骨极值，三轴各一对（#70）。
+
+    两把尺分得很清：读数是 Max 拿去 zoom 的框角，期望是导出侧从骨坐标量出来的 subject。
+    方向各用一种单向 kind —— 框比要求的更宽不是缺陷（图只是更空），更窄、把骨裁在框外才是。
+    第 35 轮的形状是「带低 4cm + 全绿」：当时唯一的尺是填充率，而填充率量的是框自己，
+    框里一根骨都没有也照样 63%。第 36 轮补了 z 却漏了 x/y，于是换成侧视把骨裁在框的
+    **前后**方向之外，照样全绿 —— 一根轴一根轴查，才不给「只缺一轴」留位置。
+    认不出胸骨的模型（`chest_bone=None`）六行退成 `report`：仍然要求 Max 报它用的框
+    （否则「取景段没跑」和「跑了但框是空的」在报告里长得一样），只是没有尺。
+    """
+    rows: list[tuple[str, ...]] = []
+    for i, axis in enumerate(CHEST_AXES):
+        for check, pick, kind in (("chest_box_lo", 0, "max"), ("chest_box_hi", 1, "min")):
+            expected = None if chest_bone is None else chest_bone[pick][i]
+            rows.append(row("shot_rb", check, axis, expected, 0,
+                            kind if expected is not None else "report", when="if_present"))
+    return rows
+
+
+def tight_box_rows(chest_bone: tuple[tuple, tuple] | None) -> list[tuple[str, ...]]:
+    """每张 tight 截图**收完之后真正拿去 zoom 的那条水平跨度**必须罩得住骨（#70 的另一半）。
+
+    为什么上面那六行不够：#69 的收框是在 zoom 之前**朝框中心**砍水平跨度的，那六行读的是
+    砍之前的框。第 36 轮就坏在这儿 —— 框中心被身后的裙摆拽到 y=+9.8，砍完只剩
+    y -0.4..20.0，而骨在 -11.75..-7.24：砍之前的框明明罩得住，图里却没有骨。
+    这一对读的是砍之后的那条边，正好是「画面上有没有」的边界。
+    颈部那两张没有导出的尺（要等 #71 去量），只要求读数出现：report。
+    """
+    rows: list[tuple[str, ...]] = []
+    for tag in SHOT_TIGHT_TAGS:
+        i = CHEST_AXES.index(SHOT_H_AXIS[tag])
+        for check, pick, kind in (("tight_h_lo", 0, "max"), ("tight_h_hi", 1, "min")):
+            expected = None
+            if chest_bone is not None and "chest" in tag:
+                expected = chest_bone[pick][i]
+            rows.append(row("shot_rb", check, tag, expected, 0,
+                            kind if expected is not None else "report", when="if_present"))
     return rows
 
 
@@ -599,7 +657,8 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                skin_expect: SkinExpectation, widths: list[dict[str, str]],
                bones: list[dict[str, str]], biped_map: list[dict[str, str]],
                morph_count: int, skin: bool = True,
-               foot_reach: bool = True, rollback: bool = False) -> list[tuple[str, ...]]:
+               foot_reach: bool = True, rollback: bool = False,
+               chest_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
 
     输入全部来自**导出结果**（weights 行数、limbs.tsv 的行、meta 的计数）与
@@ -629,6 +688,10 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     它决定的是「有没有这条退路」，所以开与关之间规格表**整段**不同：关掉时那些行退成
     `if_present`（Max 一段都不跑，读数当然没有），打开时 `rollback/saved` 与三列差值
     必须出现 —— 「开关打开却什么都没报」正是「退路只是句注释」的样子，必须红。
+
+    `chest_bone`（#70）是导出侧量的胸骨端点极值 `((x,y,z)min, (x,y,z)max)`，None = 这具
+    模型认不出叫「胸 / bust」的骨。它是胸部特写那 18 行的尺：Max 只许报它用的框，
+    框里到底有没有那两根骨得由这边问 —— 认不出时那 18 行退成 `report`（必须出现、不卡数）。
     """
     rows: list[tuple[str, ...]] = []
     foot_rows = [x for x in limbs if x.get("mode") == "foot"]
@@ -879,7 +942,7 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("bone_rb", check, GLOBAL, None, None, "report"))
 
     # ── 截图取景（#69）：特写够不够特写 ───────────────────────────
-    rows.extend(shot_fill_rows())
+    rows.extend(shot_fill_rows(chest_bone))
 
     # ── 蒙皮（--no-skin 时整段跳过）──────────────────────────────
     when = "always" if skin else "if_present"

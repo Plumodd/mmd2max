@@ -40,6 +40,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 from mmd2max import passes  # noqa: E402
 from mmd2max.passes import PASS_PHASE  # noqa: E402
+# 名单只从 verdicts 一处取（`from ... import` 会漏掉新加的判定，第 36 轮就是这么栽的）。
+from mmd2max import verdicts  # noqa: E402
 from mmd2max.verdicts import (  # noqa: E402
     GLOBAL,
     REPORT_HEADER,
@@ -64,8 +66,9 @@ def is_bool_text(text: str) -> bool:
 def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
     """一行判据 + Max 的读数 → (状态, 说明)。
 
-    数值比对用 `abs(actual - expected) <= tol`；`min` 行是单向的（`actual >= expected`，
-    超出没有代价）；容许的「读数不是数字」只有一种：布尔行（`端面覆盖=true`）。
+    数值比对用 `abs(actual - expected) <= tol`；`min`/`max` 行是单向的
+    （分别要求 `actual >= expected` / `actual <= expected`，超出没有代价）；
+    容许的「读数不是数字」只有一种：布尔行（`端面覆盖=true`）。
     除此之外读不成数字就是 FAIL —— 让空串或 `-` 通过等于把那一行变成装饰。
     """
     kind = row["kind"]
@@ -85,6 +88,17 @@ def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
         if got >= limit:
             return PASS, f"{got} ≥ 门槛 {limit}"
         return FAIL, f"{got} < 门槛 {limit}：这一行的读数比要求的还低"
+    if kind == "max":
+        # `min` 的镜像：高于 expected 才是缺陷（例：取景带的下沿必须低过胸骨，
+        # 带框得更宽不是缺陷）。同样不许退化成 abs()。
+        try:
+            limit = float(row["expected"])
+            got = float(actual)
+        except ValueError:
+            return FAIL, f"上限 {row['expected']}，但读数不是数字：{actual!r}"
+        if got <= limit:
+            return PASS, f"{got} ≤ 上限 {limit}"
+        return FAIL, f"{got} > 上限 {limit}：这一行的读数比要求的还高"
     if is_bool_text(row["expected"]):
         if actual.strip().lower() == row["expected"].strip().lower():
             return PASS, f"= {row['expected']}"
@@ -130,9 +144,12 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
         return [], {}, [], problems
 
     for row in spec_rows:
-        if row["kind"] not in ("gate", "lock", "report", "min"):
+        # 名单只有 verdicts.KINDS/WHENS 一处：这两行以前各写一份字面量元组，#70 加 `max`
+        # 时源码侧改了、这里没跟上，于是规格表里两条合法的行被判成「未知 kind」而整轮
+        # 拒收 —— 同一件事写两处，其中一处必然滞后。
+        if row["kind"] not in verdicts.KINDS:
             problems.append(f"规格表有未知 kind：{row['kind']}（{row['phase']}/{row['check']}）")
-        if row["when"] not in ("always", "if_present"):
+        if row["when"] not in verdicts.WHENS:
             problems.append(f"规格表有未知 when：{row['when']}（{row['phase']}/{row['check']}）")
 
     # 陈旧检查：报告必须比规格表**新**。obj_run 每轮开头删报告，所以正常跑不会命中；
@@ -228,13 +245,17 @@ def check(base: Path, *, spec_path: Path | None = None,
         lines.append(f"  [{status}] {phase}/{check_name} {subject} "
                      f"({kind}) 期望={expected or '—'} 实报={actual or '—'} —— {note}")
 
-    gate_lock = (by_kind.get(("gate", FAIL), 0) + by_kind.get(("lock", FAIL), 0)
-                 + by_kind.get(("min", FAIL), 0)
-                 + by_kind.get(("orphan", FAIL), 0)
-                 + by_kind.get(("timeline", FAIL), 0))
+    # 参与「硬失败」计数的判定种类。写成一个列表而不是把名字嵌进那句话里：#70 加 `max`
+    # 时那句话还写着 gate/lock/min，读数已经按新种类在算了，账面上却看不见 —— 名单与
+    # 文案各抄一份，必然有一份滞后。
+    counted = ("gate", "lock", "min", "max")
+    gate_lock = sum(by_kind.get((kind, FAIL), 0) for kind in counted)
+    gate_lock += (by_kind.get(("orphan", FAIL), 0)
+                  + by_kind.get(("timeline", FAIL), 0))
     lines.append(
         f"判据汇总：通过 {counts[PASS]}，失败 {counts[FAIL]}，未跑 {counts[SKIP]} "
-        f"（gate/lock/min 失败 {gate_lock}）；报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
+        f"（{'/'.join(counted)} 失败 {gate_lock}）；"
+        f"报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
     # 时间轴问题单独说一句：它不是「某个数超差」，是「这一轮读数不描述最终场景」。
     # 混在 gate 里说，读的人会用「改一下容差」去处理一个顺序 bug。
     if by_kind.get(("timeline", FAIL), 0):

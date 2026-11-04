@@ -40,6 +40,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from mmd2max.pmx import PMXError, load_pmx
 from mmd2max import semantic
@@ -696,6 +697,92 @@ def _sub(a, b):
 
 def _dot(a, b):
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+# 胸部特写的取景框（#70）。余量是**模型实测高度**的比例，不是厘米：heads/tails 与
+# 网格坐标都是「已乘 scale 的导出单位」，写死厘米数换一具模型（或 GUI 里改身高）就废，
+# 同一类事故见上面 TOE_SPLIT_BAND 的注释。
+# 为什么这只框必须由导出侧量：上一版把它写成「场景包围盒高度 × 0.58~0.72」，那两个比例
+# 是对着 PMX 标称身高 160 定的，而 .ms 里的 h 是场景实测高度 140.513 —— 分母一换，整只带
+# 低了 4cm：第 35 轮的 chest_front / bone_chest_front 里一根胸骨都没有（胸骨实测
+# z 105.23~105.73，带的上沿只到 101.17），而 shot_rb 的 fill_pct 报 63%、全绿 ——
+# 「框里到底有没有那个东西」这件事，填充率在结构上就看不见。现在框跟着量出来的骨走：
+# 任何一具模型，只要认得出胸骨，框就一定框得住它。
+# 0.06 的账（香菱实测网格高 H=144.33、骨 z 跨度 0.51）：带高 17.9cm，经 #69 按视口宽高比
+# 收过之后横向 30.9cm；4.66cm 的胸骨在 820x474 的视口里横向约 124px ——
+# 「指着乳头」在像素上读得出来，框里又还留得下肩与颈根，骨不至于孤零零地飘着。
+CHEST_BAND_PAD = 0.06
+# 宽与深的余量单独给（第 36 轮的账）：那轮 z 已经是量出来的，x/y 却还拿「场景包围盒 ±10cm」
+# 凑，于是框的前后中心被身后的裙摆与长发拽到 y=+9.8，#69 按宽高比收水平跨度时是**朝框中心**
+# 收的 —— 收到的 y -0.41..20.01 把站在 -11.75..-7.24 的两根胸骨整个裁到框外，
+# bone_chest_side 里只剩半张脸。0.10 的账（H=144.33 → 14.4cm）：胸骨前后跨度 4.5cm，
+# 框深 33.3cm，装得下整个胸腔的前后（胸前缘 -12.8 / 背后缘 +3.1）还留 15cm 余量 ——
+# 特写里看得见胸的轮廓，而不是两根骨悬在空白里。横向同理给 14.4cm（收框后 30.9 > 27.2，
+# 不再被 x 绑架，#69 那一段也就不用改）。
+CHEST_BOX_PAD = 0.10
+
+CHEST_AXES = ("x", "y", "z")
+
+
+class ChestBand(NamedTuple):
+    """胸部特写的取景依据，两组端点都是导出单位的 **(x, y, z)** 三元组。
+
+    `b_min` / `b_max` 是量出来的胸骨端点极值（要看的东西），`lo` / `hi` 是框。
+    分成两组数是判据的需要：Max 只许用框，而 Python 拿 subject 去问「Max 这一轮实际用的
+    框罩住骨了没有」—— 用框去验框（把 lo/hi 原样比回来）只能证明 CFG 没丢，证明不了框里
+    有东西，而后者才是第 35 轮真正坏掉的那件事。
+    三个轴都量（只量 z 是第 36 轮的半成品：z 对了，y 仍然把骨裁在框外）。
+    """
+    lo: tuple
+    hi: tuple
+    b_min: tuple
+    b_max: tuple
+
+
+def _chest_band(bone_names, bone_names_en, heads, tails, positions, scale):
+    """胸部特写该框的那块空间（导出单位的绝对坐标），量不出来返回 None。
+
+    认骨用 `_is_breast_bone`，和 `_aim_breast_bones` 同一条命名规则 —— 所以「被改成指向
+    乳头的那两根骨」与「取景框框住的那两根骨」不可能分叉。
+    head 与 tail 都进极值：tail 是量出来的乳头点（没改动的则是 PMX 默认尾），两者都在胸上。
+    返回 None（模型里没有叫「胸 / bust」的骨）时 meta 那 12 条写空串，Max 退回旧的场景
+    包围盒带：认不出胸骨的模型至少还有特写可看，而不是整段截图被跳过。
+    """
+    pts = []
+    for i, name in enumerate(bone_names):
+        name_en = bone_names_en[i] if i < len(bone_names_en) else ""
+        if _is_breast_bone(name, name_en):
+            pts.append(heads[i])
+            pts.append(tails[i])
+    if not pts or not positions:
+        return None
+    heights = [convert_vec(p, scale)[2] for p in positions]
+    mesh_h = max(heights) - min(heights)
+    b_min = tuple(min(p[a] for p in pts) for a in range(3))
+    b_max = tuple(max(p[a] for p in pts) for a in range(3))
+    pads = (CHEST_BOX_PAD * mesh_h, CHEST_BOX_PAD * mesh_h, CHEST_BAND_PAD * mesh_h)
+    lo = tuple(b_min[a] - pads[a] for a in range(3))
+    hi = tuple(b_max[a] + pads[a] for a in range(3))
+    return ChestBand(lo=lo, hi=hi, b_min=b_min, b_max=b_max)
+
+
+def chest_meta_pairs(band):
+    """取景框 + 胸骨极值 → meta 的 12 行 `键<TAB>值`；band=None 时 12 行的值都是空串。
+
+    框的 6 行进 CFG（Max 只读数、不许自己算），极值的 6 行只给判据表当尺 ——
+    两边的键名分别由 tools/obj_run.META_TO_CFG 与 META_FOR_CHECK 钉住。
+    每行写成「同一轴的两端挨着」，obj_run._chest_ruler 的切片靠的就是这个顺序。
+    """
+    lines = []
+    for i, axis in enumerate(CHEST_AXES):
+        for key, value in ((f"chest_box_{axis}_lo", None if band is None else band.lo[i]),
+                           (f"chest_box_{axis}_hi", None if band is None else band.hi[i])):
+            lines.append(f"{key}\t{'' if value is None else fmt(value)}")
+    for i, axis in enumerate(CHEST_AXES):
+        for key, value in ((f"chest_bone_{axis}_min", None if band is None else band.b_min[i]),
+                           (f"chest_bone_{axis}_max", None if band is None else band.b_max[i])):
+            lines.append(f"{key}\t{'' if value is None else fmt(value)}")
+    return lines
 
 
 def _dist(a, b):
@@ -1593,6 +1680,8 @@ class Plan:
     max_parent_col: list = field(default_factory=list)
     reparented: int = 0
     neck_shift: float = 0.0
+    # 胸部特写取景带（ChestBand），None = 认不出胸骨（meta 那四条写空串）
+    chest_band: ChestBand | None = None
 
     # ---- Biped 映射 ----
     biped_mapping: dict = field(default_factory=dict)
@@ -1723,11 +1812,21 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     # 眼部 tip 骨（目先/瞳）的 tail 在 MMD 里指得很远，画出来像长箭头；压短它
     _clamp_tip_bone_lengths(bone_names, parents, heads, tails)
     # 胸部骨：PMX 给的是一根竖直牙签，改成指向网格里量出来的乳头
+    kept_names_en = [model.bones[old].name_en for old in kept]
     breast_notes = _aim_breast_bones(
-        bone_names, [model.bones[old].name_en for old in kept],
-        parents, deform, positions, scale, heads, tails)
+        bone_names, kept_names_en, parents, deform, positions, scale, heads, tails)
     for note in breast_notes:
         plan.notes.append(f"  胸部骨指向乳头：{note}")
+    # 胸部特写的取景框：跟着量出来的胸骨走，不再按「身高 × 猜的比例」（#70）
+    chest_band = _chest_band(bone_names, kept_names_en, heads, tails, positions, scale)
+    if chest_band:
+        plan.notes.append(
+            "  胸部特写取景框："
+            + " ".join(f"{a} {chest_band.lo[i]:.2f}..{chest_band.hi[i]:.2f}"
+                       for i, a in enumerate(CHEST_AXES))
+            + f"（胸骨实测 {'/'.join(f'{v:.2f}' for v in chest_band.b_min)}"
+            + f"..{'/'.join(f'{v:.2f}' for v in chest_band.b_max)}，"
+            + f"高度外扩 {CHEST_BAND_PAD:.0%}、宽深外扩 {CHEST_BOX_PAD:.0%} 的网格高）")
     # 颈部：把 首 挪到「颈部网格实测中线」（MMD 的躯干骨在体腔中心、颈骨在颈轴，
     # 两者不同线；按上下骨取中点会把脖子拽到喉咙前面，见 _center_neck 文档）
     neck_shift = _center_neck(heads, biped_mapping, old_to_new, positions, scale)
@@ -1831,6 +1930,10 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         # MMD2MAX.CFG，MAXScript 按 bool 读，一条链上没有任何取反（M1b 之前
         # FOOT_BOX_FLAT→foot_pitch→FOOTPITCH→`if not` 连反三次，翻开关的人数不清自己翻到哪儿了）。
         f"foot_box_flat\t{'true' if FOOT_BOX_FLAT else 'false'}",
+        # #70：胸部特写的取景框 + 胸骨极值，共 12 条（导出单位的绝对坐标）。空串 = 这具
+        # 模型认不出胸骨，Max 那侧退回旧的场景包围盒带。写成 12 个键而不是三个「x y z」串：
+        # CFG 的每个值都是单个数，Max 用 mmd2maxCfgNumOpt 直接验数，不在脚本里拆字符串。
+        *chest_meta_pairs(chest_band),
     ]
 
     plan.positions = positions
@@ -1854,6 +1957,7 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     plan.max_parent_col = max_parent_col
     plan.reparented = reparented
     plan.neck_shift = neck_shift
+    plan.chest_band = chest_band
     plan.biped_mapping = biped_mapping
     plan.biped_missing = biped_missing
     plan.biped_conflicts = biped_conflicts

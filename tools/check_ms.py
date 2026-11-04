@@ -676,11 +676,41 @@ def check_v4_debt(src: str) -> list[str]:
     """规则 V + 规则 I 的违规清单（v3 继承债，M1b~M4 期间会一路变少）。"""
     return check_empty_catch(src) + check_oracle_independence(src)
 
+def check_bare_fn_reference(src: str) -> list[str]:
+    """零参 `fn` 的名字单独出现（后面没跟 `(`）= 拿到的是**函数对象**，不是它的返回值。
+
+    MAXScript 不像 Python：`f` 是值，`f()` 才是调用。所以 `if (f) then (...)` 编译得过、
+    运行时报 `-- Type error: if-test requires BooleanClass, got: f()` —— 第 37 轮就是这句，
+    整轮在读 CFG 那一步就炸，一句读数都没写。这一类错误静态上极好认，所以拦住。
+    （真要传函数本身的地方 —— `map f list`、回调注册 —— 本文件里没有：Max 的回调走
+    `installUI`/事件表，不靠把 `fn` 当值传。）
+    """
+    # 注释与字符串都要剥掉：这两处出现函数名是人话（「mmd2maxLoadCfg 必须排在……」），
+    # 不是引用。
+    code = "\n".join(_blank_strings(strip_comments(src).split("\n")))
+    # 只认「零参」定义：`fn name =` 或 `fn name() =`；带参数的名字被裸引用是另一回事
+    # （那本来就是语法错误，Max 会在编译期直接报，不需要这条规则）。
+    zero_arg = {m.group(1)
+                for m in re.finditer(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(\s*\))?\s*=", code)
+                if m.group(2) is None or m.group(2).strip("() \t") == ""}
+    problems = []
+    for name in sorted(zero_arg):
+        for m in re.finditer(r"\b" + re.escape(name) + r"\b", code):
+            after = code[m.end():]
+            if after.lstrip().startswith("("):
+                continue                      # 正常调用
+            if re.match(r"\s*=", after):
+                continue                      # 定义那一行本身（`fn name =`）
+            line = code[:m.start()].count("\n") + 1
+            problems.append(f"行 {line}: 裸引用零参函数 `{name}` —— 这里是函数对象而不是"
+                            f"返回值，要写 `{name}()`")
+    return problems
+
 
 def check_source(src: str, strict: bool = False) -> list[str]:
     """全部规则跑一遍，返回问题列表（obj_run 生成脚本后直接调它）。
 
-    strict=False（默认）只跑 13 条「编译期会炸」的老规则；规则 V/I 是 v4 新加的
+    strict=False（默认）只跑 14 条「编译期会炸」的老规则；规则 V/I 是 v4 新加的
     结构性约束，v3 继承下来的违规还有 60+ 条，一次性拦会把每一轮实跑都卡住。
     所以先记账不拦路，main() 会把债的条数打出来；清完那天把 strict 打开（M4 的验收
     项之一）。**注意**：不拦路不等于不重要 —— 空 catch 把 skinOps.forceUpdate 这个
@@ -691,7 +721,8 @@ def check_source(src: str, strict: bool = False) -> list[str]:
                 + check_continuation(src) + check_fn_depth(src)
                 + check_empty_fn_params(src) + check_chained_call_property(src)
                 + check_bare_min_max(src) + check_comma_call(src)
-                + check_optional_params(src) + check_forward_reference(src))
+                + check_optional_params(src) + check_forward_reference(src)
+                + check_bare_fn_reference(src))
     if strict:
         problems = problems + check_v4_debt(src)
     return problems

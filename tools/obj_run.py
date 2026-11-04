@@ -229,6 +229,14 @@ CFG_NAME = "MMD2MAX.CFG"
 # 「只有监听器里有证据、上层报超时」。
 CFG_ERROR_NAME = "mmd2max_cfg.error.txt"
 
+# 胸部取景的两组 meta 键 + 对应的 CFG 键（#70）：框的六条进 CFG，极值的六条只给判据表当尺。
+# 顺序固定成「同一轴的两端挨着」，_chest_ruler 与 mmd2max.verdicts 的切片都靠这个顺序。
+CHEST_AXES = ("x", "y", "z")
+CHEST_BOX_KEYS = tuple(f"chest_box_{axis}_{edge}"
+                       for axis in CHEST_AXES for edge in ("lo", "hi"))
+CHEST_CFG_KEYS = tuple(f"MMD2MAX_CHEST_{axis}_{edge}"
+                       for axis in ("X", "Y", "Z") for edge in ("LO", "HI"))
+
 # 装配侧要求的全部键，顺序即 CFG 落盘顺序。MAXScript 的 mmd2maxLoadCfg 逐键取数、
 # 缺键即抛；build_cfg 结尾拿这份名单自查，两边键集分叉时在 Python 侧就报出来。
 CFG_KEYS = (
@@ -241,6 +249,12 @@ CFG_KEYS = (
     "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
     "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
     "MMD2MAX_FOOTBOXFLAT",
+    # 胸部特写的取景框：以前这里是 .ms 里的「场景包围盒 ±10cm 与 高度 × 猜的比例」——
+    # 第 35 轮那条 z 带比胸骨低 4cm（特写里一根骨都没有而填充率 63% 全绿），第 36 轮 z 修好
+    # 了、x/y 仍按场景包围盒凑，框的前后中心被身后的裙摆拽到 y=+9.8，按宽高比收完只剩
+    # y -0.4..20.0，站在 -11.75..-7.24 的两根骨照样被裁出框外。
+    # 三个轴都由导出侧量，账见 mmd2max/export_obj._chest_band。
+    *CHEST_CFG_KEYS,
     # 收敛循环的遍数上限（M3）：数值住在 mmd2max/passes.py 的注册表，Max 侧只读。
     # 以前它是 .ms 里的字面量 `for passNo = 1 to 3`，Python 只能靠契约测试去钉一个
     # 自己看不见的数；现在 audit_gate 拿同一个数核对 Max 报回来的 iters。
@@ -255,18 +269,32 @@ CFG_KEYS = (
 # 允许是空串（= 该阶段整段跳过）的键；其余键为空一律在本函数里就拦掉。
 # LIMBS 不在名单里：没有肢段表就没有闭环缩放，Biped 会退回默认人体比例。
 # 这份名单必须和 MAXScript 侧 mmd2maxLoadCfg 的空路径校验一致。
-CFG_EMPTY_OK = ("MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_WIDTHS")
+# CHEST_* 六条是「允许空的数值键」：模型里没有叫「胸 / bust」的骨时导出量不出框，
+# Max 那侧退回旧的场景包围盒带（mmd2maxCfgNumOpt 空串 → undefined）。
+CFG_EMPTY_OK = ("MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_WIDTHS",
+                *CHEST_CFG_KEYS)
 
 # meta 里装配侧必须拿到的键 -> CFG 里的键（键名 = MAXScript 全局名，两边同一套词）。
 # 缺任何一个键 = 中止。以前缺键退回这里硬编码的默认值，于是「一份没有 spine_links 的
 # 旧 meta」会静默按 3 节脊柱建 Biped：日志全绿、几何却是另一套，正是 v4 要根除的
 # 「配置有默认值」这一类。
+# 值是空串也算「键在」：取景框那六条就是（见上面的 CFG_EMPTY_OK）。
 META_TO_CFG = {
     "spine_links": "MMD2MAX_SPINE_LINKS",
     "fingers": "MMD2MAX_FINGERS",
     "finger_links": "MMD2MAX_FINGER_LINKS",
     "foot_box_flat": "MMD2MAX_FOOTBOXFLAT",
+    **dict(zip(CHEST_BOX_KEYS, CHEST_CFG_KEYS)),
 }
+
+# 只给判据表当尺、不进 CFG 的 meta 键（#70）：胸骨自己的 (x, y, z) 端点极值。
+# Max 拿它们是没用的（它不许按骨名找骨），Python 拿它们才判得出「特写里到底有没有那两根骨」：
+# 框必须罩住这六极，而这六极来自导出的骨坐标，与框是怎么算出来的无关 —— 所以这一条
+# 不是恒等式。第 35 轮缺的正是这把尺：当时只有填充率，框里没骨也照样全绿。
+# 三个轴都要（只量 z 是第 36 轮的半成品）：#69 的按视口宽高比收框收的就是水平轴，
+# 那一收把骨裁到框外，只有 y 的极值看得见这件事。
+META_FOR_CHECK = tuple(f"chest_bone_{axis}_{edge}"
+                       for axis in CHEST_AXES for edge in ("min", "max"))
 
 
 def read_meta(base: Path, stem: str) -> dict:
@@ -325,6 +353,13 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_FINGERS": meta["fingers"],
         "MMD2MAX_FINGER_LINKS": meta["finger_links"],
         "MMD2MAX_FOOTBOXFLAT": meta["foot_box_flat"],
+        # 胸部特写的取景框（#70）：六个数，空串 = 导出侧量不出胸骨，Max 退回场景包围盒带。
+        "MMD2MAX_CHEST_X_LO": meta["chest_box_x_lo"],
+        "MMD2MAX_CHEST_X_HI": meta["chest_box_x_hi"],
+        "MMD2MAX_CHEST_Y_LO": meta["chest_box_y_lo"],
+        "MMD2MAX_CHEST_Y_HI": meta["chest_box_y_hi"],
+        "MMD2MAX_CHEST_Z_LO": meta["chest_box_z_lo"],
+        "MMD2MAX_CHEST_Z_HI": meta["chest_box_z_hi"],
         "MMD2MAX_CONVERGE_MAX": str(passes.max_iters("converge")),
         "MMD2MAX_SKIN": "true" if skin else "false",
         "MMD2MAX_SHOT": "true" if shot else "false",
@@ -372,6 +407,39 @@ def cfg_text(cfg: dict) -> str:
 META_FOR_SPEC = ("kept_bones", "morph_count")
 
 
+def _chest_ruler(meta: dict, base: Path) -> tuple[tuple, tuple] | None:
+    """胸部特写的尺：导出侧量出来的胸骨端点极值 `((x,y,z)min, (x,y,z)max)`，没有就 None。
+
+    为什么不拿 CFG 里的那只框当期望值（`expected = 框`）：那等于「拿 Max 用的框去要求
+    Max 用的框」，框里到底有没有那两根骨还是没人管 —— 第 35 轮就是这一类。极值来自 meta
+    的 `chest_bone_*`（导出时按骨坐标量的），与框是怎么算的无关。
+    框和极值是同一段代码写出来的两组 meta：**只有一组在 = 两份导出产物分叉了**，中止。
+    两个方向都查（有极值没框 / 有框没极值）：后者会让这些行悄悄退成 report，而「悄悄
+    少一条判据」正是本项目最难被发现的那类事故。
+    """
+    box = [meta.get(k, "") for k in CHEST_BOX_KEYS]
+    ends = [meta.get(k, "") for k in META_FOR_CHECK]
+    if any(ends) != all(box):
+        raise SystemExit(f"{base}：meta 的胸骨极值（{'、'.join(META_FOR_CHECK)}）与取景框"
+                         f"（{'、'.join(CHEST_BOX_KEYS)}）不是同时存在的一组，两份导出产物分叉，"
+                         "重跑 tools/run_model.py")
+    if not any(ends):
+        return None                   # 认不出胸骨的模型：这些行退成 report
+    try:
+        nums = [float(v) for v in ends]
+    except ValueError as error:
+        raise SystemExit(f"{base}：meta 的胸骨极值读不出数（{error}），"
+                         "重跑 tools/run_model.py")
+    b_min = tuple(nums[0::2])         # META_FOR_CHECK 是 (x min, x max, y min, ...) 成对排的
+    b_max = tuple(nums[1::2])
+    bad = [a for a, lo, hi in zip(CHEST_AXES, b_min, b_max) if lo > hi]
+    if bad:
+        raise SystemExit(
+            f"{base}：meta 的胸骨极值在 {'/'.join(bad)} 轴上 min 大于 max，"
+            "导出侧的量已经不自洽，重跑 tools/run_model.py")
+    return b_min, b_max
+
+
 def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
     """按 CFG 装配判据规格表（MMD2MAX.VERDICTS 正文）。
 
@@ -415,6 +483,7 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
     # 附属骨方向回读（#66）的第二份输入：biped_map 说明哪些行被 Biped 节点接管。
     # 路径同样取自 CFG，所以 Max 建骨时用的那张映射表就是这边剔行用的那张。
     _, biped_map = parse_table(Path(cfg["MMD2MAX_MAP"]).read_text(encoding="utf-8"))
+    chest_bone = _chest_ruler(meta, base)
     try:
         rows = build_spec(
             model=stem,
@@ -428,6 +497,7 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
             skin=cfg["MMD2MAX_SKIN"] == "true",
             foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
             rollback=cfg["MMD2MAX_ROLLBACK"] == "true",
+            chest_bone=chest_bone,
         )
     except ValueError as error:
         # 导出表少列、值不是数字、截面目标非正 —— 这些都在「尺」这一侧。换成 SystemExit
