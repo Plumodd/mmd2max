@@ -134,12 +134,44 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
     if problems:
         return [], {}, [], problems
 
-    spec_head, spec_rows = parse_table(spec_path.read_text(encoding="utf-8"))
+    try:
+        spec_head, spec_rows = parse_table(spec_path.read_text(encoding="utf-8"))
+        report_head, report_rows = parse_table(report_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as error:
+        # `UnicodeDecodeError` 是 `ValueError` 的子类，所以半路被截断的字节流也走这里。
+        # Max 被超时兜底强杀时，报告最后那一行就是写了一半 —— 这种轮次必须落在
+        # 「表没法用」那一只退出码上（obj_run 转 8），而不是一条裸 traceback 顶成 1，
+        # 因为 1 号在日志里的意思是「判了、没过」，而这里根本没判。
+        return [], {}, [], [f"两张表读不出（写到一半断了？）：{error}"]
+
     if spec_head != SPEC_HEADER:
         problems.append(f"规格表列名不是 {SPEC_HEADER}，而是 {spec_head}")
-    report_head, report_rows = parse_table(report_path.read_text(encoding="utf-8"))
     if report_head != REPORT_HEADER:
         problems.append(f"报告表列名不是 {REPORT_HEADER}，而是 {report_head}")
+    if problems:
+        return [], {}, [], problems
+
+    # 表在、列名对、**一行内容都没有** —— 这就是 M2c 立约时要治的那个形状：
+    # 「产物齐、日志全绿、判据没人读过」。以前这两张空表会一路走到汇总，
+    # 循环零次、extras 空、时间轴不参与，最后 `counts[FAIL]` 为 0 ⇒ 退出码 0。
+    # 文档在文件头承诺过「表是空的 ⇒ 2」，那一句以前只是承诺。
+    if not spec_rows:
+        problems.append(f"规格表只有列名行、一行判据都没有：{spec_path}"
+                        f" —— 没有任何东西被判过，这一轮不许算通过")
+    if not report_rows:
+        problems.append(f"报告表只有列名行、一行读数都没有：{report_path}"
+                        f" —— Max 什么都没量回来（死在 mmd2maxReportInit 之后、"
+                        f"第一段读数之前？），这一轮不许算通过")
+
+    # 这两张表的列名是定死的，所以「行比列名短」不是合法形态（limbs.tsv 那种变长行
+    # 才合法）：少一列意味着后面每个键都不在 dict 里，取它会抛一条没有归属的 KeyError。
+    for rows, header, label in ((spec_rows, SPEC_HEADER, "规格表"),
+                                (report_rows, REPORT_HEADER, "报告表")):
+        for row in rows:
+            missing = [field for field in header if field not in row]
+            if missing:
+                problems.append(f"{label}有一行少了 {missing} 列：{row}")
+                break
     if problems:
         return [], {}, [], problems
 
@@ -171,7 +203,8 @@ def check(base: Path, *, spec_path: Path | None = None,
           report_path: Path | None = None) -> tuple[int, list[str]]:
     """跑完一轮后的判据汇总。返回 (退出码, 要打的日志行)。
 
-    退出码：0 全过 / 1 有 FAIL / 2 两张表没法用（缺文件、列名分叉、陈旧）。
+    退出码：0 全过 / 1 有 FAIL / 2 两张表没法用（缺文件、列名分叉、陈旧、只剩列名行、
+    半行被截断、字节流读不成）。
 
     除了逐行拼表，这里还跑一遍 M3 的**时间轴审计**（`mmd2max.passes.audit`）：
     读数对不对是一回事，读数**是在什么时候量的**是另一回事。撞上限退出被当成收敛、
