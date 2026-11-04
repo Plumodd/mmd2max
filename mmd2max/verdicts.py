@@ -509,7 +509,7 @@ SHOT_TAGS: tuple[str, ...] = (
     "bone_front", "bone_side",
     "bone_foot_side", "bone_foot_front", "bone_foot_top",
     "bone_chest_front", "bone_chest_side", "bone_chest_top",
-    "chest_front", "chest_side",
+    "chest_front", "chest_side", "chest_top",
     "neck_side", "neck_front",
     "foot_side", "foot_front", "foot_top",
     "hand_front", "hand_side",
@@ -522,7 +522,7 @@ SHOT_TAGS: tuple[str, ...] = (
 # 这份名单必须与 .ms 调用点里用 mmd2maxShotOneTight 的那几个逐字相同（契约测试对撞）。
 SHOT_TIGHT_TAGS: tuple[str, ...] = (
     "bone_chest_front", "bone_chest_side", "bone_chest_top",
-    "chest_front", "chest_side",
+    "chest_front", "chest_side", "chest_top",
     "neck_side", "neck_front",
 )
 
@@ -561,7 +561,8 @@ SHOT_H_AXIS: dict[str, str] = {
     "bone_chest_side": "y", "chest_side": "y", "neck_side": "y",
     # 顶视屏幕上横=世界 X、竖=世界 Y（与 .ms 的 mmd2maxHAxis / mmd2maxShotFill 同一口径），
     # 所以 bone_chest_top 收的是 x —— 与正视图同一根轴，不是 y。
-    "bone_chest_top": "x",
+    # #74 的 chest_top 与它同一只框、同一个视口，所以轴也一样：两张图的差别只有网格显不显。
+    "bone_chest_top": "x", "chest_top": "x",
 }
 
 

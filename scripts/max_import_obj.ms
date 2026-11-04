@@ -1011,6 +1011,10 @@ fn mmd2maxScreenshot =
            与上面 bone_chest_* 配对看 —— 只有一张时「骨在胸前」和「骨指着乳头」分不出来。 */
         try ( mmd2maxShotOneTight outDir baseName "chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("chest_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOneTight outDir baseName "chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("chest_side 截图异常：" + (getCurrentException() as string)) )
+        /* #74：bone_chest_top（#73）只证明了「那两根骨在 x 与 y 上同时张开」，张开的**终点**
+           是不是乳头点只有带网格的顶视能判 —— 俯视是唯一同时看得见「向左/右偏」与
+           「向前/后偏」两根分量的一张，而乳头在网格里恰好是这框里最靠前的两点。 */
+        try ( mmd2maxShotOneTight outDir baseName "chest_top" #view_top chestLo chestHi ) catch ( mmd2maxLog ("chest_top 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOneTight outDir baseName "neck_side" #view_left neckLo neckHi ) catch ( mmd2maxLog ("neck_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOneTight outDir baseName "neck_front" #view_front neckLo neckHi ) catch ( mmd2maxLog ("neck_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "foot_side" #view_left footLo footHi ) catch ( mmd2maxLog ("foot_side 截图异常：" + (getCurrentException() as string)) )
