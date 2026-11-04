@@ -1,11 +1,14 @@
 # mmd2max v4 · 架构契约
 
-v3 的完整缺陷史在 `README_HANDOVER.md`（23 条编号记录，一条都别丢）。这份文件只写 v4
-改了什么结构、为什么，以及**怎么判断这一轮又犯了老毛病**。
+v3 的完整缺陷史在 `README_HANDOVER.md`（第七节那条时间轴，条目只增不删，条数别抄在这里 ——
+去看文件）。这份文件只写 v4 改了什么结构、为什么，以及**怎么判断这一轮又犯了老毛病**。
 
-回滚开关：v3 目录 `C:\Users\Administrator\Desktop\mmd2max_v3_src_2026-11-01` 原样不动，
-`C:\Users\Administrator\Desktop\mmd2max_v3.zip` 与 `Plumodd/mmd2max` 是已交付的第十七轮
-成品。v4 任何一步做砸了，回到 v3 目录跑 `tools/obj_run.py` 即可，不需要在 v4 里修。
+回滚开关：v3 目录 `C:\Users\Administrator\Desktop\mmd2max_v3_src_2026-11-01` 仍是完整的源码 +
+`.git`（提交 `d4949f6` 已全部推到 `Plumodd/mmd2max`，工作树干净），`C:\Users\Administrator\Desktop\mmd2max_v3.zip`
+是同一份成品的压缩包。2026-11-04 清理时它的 `test_runs/` 产物（693MB）与 v1/v2 两棵树、三份 v2 zip
+一起进了 `C:\Users\Administrator\Desktop\_旧版本_待删_2026-11-04\`（**移动**，不是删除，随时能搬回来）。
+v4 任何一步做砸了，回到 v3 目录跑 `tools/obj_run.py` 即可，不需要在 v4 里修；产物缺失用
+`tools/run_model.py` 重生成，一条命令的事。
 
 ---
 
@@ -379,7 +382,30 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
   不再假设 `ENU`。找不到时退出码 2，并把三条发现路径念进日志（脚本、CFG、规格表那时都已落盘，
   只差启动）。本机实测：注册表与逐盘 glob 两条路都指向 `C:\Program Files\Autodesk\3ds Max 2022`，
   第 30 轮用发现结果启动，判据与日志相对第 29 轮**无实质差异**。
-  契约测试 `tests/test_obj_run_guard.py:MaxDiscoveryTests`（7 条）钉住：源码里不许再出现装目录
+  契约测试 `tests/test_obj_run_guard.py:MaxDiscoveryTests`（7 条）钉住：源码里不许再出现安装目录
   字面量、两条启动路径只许吃发现结果、环境变量优先但指错不许回退到「猜一台」、非 2022 不许赢、
   启动目录必须跟着版本与语言走。
+
+---
+
+## 8. 测试版打包：`git archive` + 一次独立导出自检
+
+一条命令，产物 581KB / 64 个文件：
+
+```
+git archive --format=zip -o ../mmd2max_v4_test_<日期>.zip HEAD
+```
+
+- **为什么不用手工挑文件**：`.gitignore` 已经把 `tests/ test_runs/ baselines/ outputs/` 全排除在外，
+  所以「HEAD 里有什么」== 「跑起来需要什么」。手工挑会漏，漏了的那份要到别人机器上才红。
+- **`probes/` 留在包里**：它不参与运行，但 `export_obj.py:649`、`targets.py:53`、`verdicts.py:877`、
+  `check_ms.py:38` 这些**注释里的证据**全指向它。删掉它，「这条数是谁量的」就变成死链 —— 而本项目
+  最贵的错误全是「拿注释当证据」。
+- **自检必须是「解压出来的那份代码」跑的，不是项目里这份**：解到临时目录 → 用它
+  `tools/run_model.py <某个 .pmx>` 重导一遍 → 与项目里的金标准逐字节对撞。第七十六轮实测
+  **19 个内容件全同**；对不上的只有 `MMD2MAX.CFG` 与 `mmd2max_run.ms`，而这两件的差全是
+  「根路径 + 那一轮的开关（`--physics` / 交互标志）」，归一路径后 CFG 只剩 5 行、每行都指得回开关。
+  **只看「有几个文件不同」不算自检**，那 5 行要是有一行归不了因，就是包里缺了东西。
+- **不上传 git**：v4 仓库没有 remote，提交只在本地。测试版靠 zip 交付。
+
 

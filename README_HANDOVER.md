@@ -1402,9 +1402,65 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
     - **十、仍然开着的（别当已经完）**：①这条性质**看不见**「某个量该不该随模型尺寸缩」—— 它只保证 PMX 单位
         与导出 scale 互相抵消；要不要再钉一条厘米绝对量是设计判断，归 M4 的回读 + 截图。
       ②`_WIDTH_MIN_CM` 乘 scale 与阈值乘 scale 两支变异实测 GREEN（第六、七节），看守它们的是三层闸而不是蜕变。
-      ③克雷薇的**Max 实跑**仍早于占位尾改动，这次只有导出级协变覆盖它（要补一轮 `run_model.py + obj_run.py`）。
+      ③克雷薇的**Max 实跑**仍早于占位尾改动，这次只有导出级协变覆盖它（要补一轮 `run_model.py + obj_run.py`）
+        —— 这句**已被第七十五轮推翻**，活已补上，读数见第 40 条。
       ④第 38 条第八节的四条（`.rotation` 画弧的内部原因、附属骨那对写的恒等性、`pivot ≠ 形心` 进 MassFX 之后、
         `rigids[]` 账本没人读）原样继续开着。⑤视觉验收（#12 / #27 / #29 / #35）仍等用户的眼睛。
+
+40. **#97 + 交付与打包：克雷薇 Max 实跑、香菱无辅助骨交付件、测试版 zip 与旧版本清理（2026-11-04
+    21:00~22:20 第七十五~七十六轮，退出码 0 / 0，无弹窗）**
+    - **第七十五轮 = 第二具模型的第一次 Max 实跑**（克雷薇 `--physics --shot`）：**634 PASS / 1 FAIL / 22 SKIP**
+      （报告 635 行，规格 657 行）。物理侧干净：`刚体代理 363 / 关节 700，失败 0`、`胶囊退圆柱=0`、
+      世界偏心最大 2.56627e-05；21 张截图 `投不出=0`，最小纵向填充 32.8958%（比香菱的 54.3342% 低，
+      是这具模型四肢占比大、特写框更贴脸，不是取景退化）。**唯一那条 FAIL** 是
+      `segment/len_cm Bip001 Spine1 -> Bip001 Neck 期望=20.350580 实报=20.4092 —— 差 0.0586 > 0.05`，
+      也就是 #76-B 那条**已定价的**脊柱-沿-父骨结构残余在第二具模型上的对应物（香菱差 0.0562、克雷薇差
+      0.0586，两个数各自独立，同一来历）⇒ 不是 M5 那两处单位修的回归，也不是新缺陷。**它的处置还开着**：
+      要么按第 36 条的做法给克雷薇单独定价成 `lock`（前提是先复现出同一个 20.4092），要么继续红着写清楚。
+    - **第七十六轮 = 交付件那一轮**（香菱 `--drop-guides --shot`，**故意不带 `--physics`**，给用户一个干净场景）：
+      **512 PASS / 0 FAIL / 22 SKIP**（规格 534 行），`已创建骨骼：271`（第 74 轮同一具模型是 321 根 ⇒ 辅助骨
+      确实没进场景，`.max` 里 `BoneGeometry` 类名字符串 0 命中），蒙皮回读 `链路 期望/回读=26742/26742、
+      零权重=0、缺失链路=0`，Morpher `61/61`，21 张截图全投得出。**交付位置**
+      `C:\Users\Administrator\Desktop\香菱_v4_无附属骨\`（`.max` 190MB + `shots/` 21 张 + `textures/` 7 张 +
+      `model.obj/mtl` + `MMD2MAX.CHECK/REPORT`）；复制件与源**逐字节相同**（`cmp` 过）。
+      源 PMX 临时放在 `Desktop\香菱_无附属骨\香菱_无附属骨.pmx` —— 换名是必须的，`run_model.py` 用
+      `outdir = test_runs/<pmx 名>`，不改名会覆盖金标准夹具 `test_runs/香菱`。
+    - **证据冻结补齐（第 39 条末尾那条教训的同一形状）**：`baselines/round74_香菱_{objrun.log,CHECK,REPORT,VERDICTS}`
+      与 `baselines/round75_克雷薇_{objrun.log,CHECK,REPORT,VERDICTS}` + `round75_克雷薇_driver.log`，
+      共 9 份，复制后逐份 `cmp` 核对。此前 `baselines/` 只到 round63，而第 39 条的基线换代背书写的就是
+      第 74 轮 —— 背书没有冻结件，等于第 57/58 轮那次「存下来的其实是别的轮」。
+    - **测试版打包（不上传 git，v4 仓库无 remote，只本地提交）**：
+      `git archive --format=zip -o ../mmd2max_v4_test_2026-11-04.zip HEAD` ⇒ **581KB / 64 个文件**
+      （`mmd2max/` 13 + `probes/` 36 + `scripts/` 2 + `tools/` 14 + 两份 README + `启动GUI.bat` + `.gitignore`）。
+      `tests/ test_runs/ baselines/ outputs/` 被 `.gitignore` 排除 ⇒ 天然不进包，不需要额外裁剪。
+      **依赖自查**：全仓第三方 import 只有 `tkinter`（标准库），所以 zip 解出来只要 Python 3.8+ 就能跑，
+      `启动GUI.bat` 自己按 `py -3 → python → %USERPROFILE%\.local\bin\python3.12.exe` 三级找解释器。
+      `probes/` 留在包里：它不参与运行，但 `export_obj.py:649`、`targets.py:53`、`check_ms.py:38` 等
+      **注释里的证据全指向它**，删掉就把「这条数是谁量的」变成死链。
+    - **包内自检（解压到临时目录，用包里的代码重导一遍，再与项目里的金标准对撞）**：
+      `19 个内容件逐字节相同`（`model.obj` / `model.mtl` / 7 张 `*.tsv` × 前缀与无前缀两套 / `MMD2MAX.VERDICTS`）。
+      对不上的 4 件**逐个查过来历，没有一个需要改代码**：① `MMD2MAX.CFG` 把根路径归一后只剩 5 行差，
+      且每行都是「夹具那轮是 `--physics` + 非交互驱动、这次是 gen-only + 交互默认」的必然
+      （`_phys.max` 后缀、`physics.tsv` 路径、`MMD2MAX_INTERACTIVE`）；② `mmd2max_run.ms` 夹具目录里根本没有
+      （它是 obj_run 生成的，夹具只留了数据件）；③ 夹具里多出的 `physics.tsv`（无前缀）是 obj_run
+      `mapping` 那次复制的产物，只在带 `--physics` 的轮次出现；④ 夹具里多出的 `香菱_materials.tsv`
+      （11-03 01:55）是 `materials.tsv` writer 在 #56 删掉之后**留下的上一代残留**，已删 —— 全仓无人读它。
+    - **清理（v4 内 1.1G → 74M）**：删 6 个 `.max` 轮次产物（990MB，一条命令可重生成，测试只用字符串夹具
+      与 tmp 目录、不读这些文件）、`test_runs/probe_klee_stub/`（对拍的临时输出，脚本留着）、
+      `香菱_materials.tsv`、全部 `__pycache__`。**没动**：`test_runs/*/*.tsv` 金标准夹具、`baselines/`、
+      `test_runs/probe*.py` 与 `mutate*.py`（`tests/` 与 README 直接引用它们）、`outputs/shots/`
+      （`obj_run.py:160` 的活路径）。清完复跑：**666 条 OK（skip 2）**、`check_ms [OK]`。
+    - **旧版本文件（桌面，1.4G+）走的是「移动隔离」不是删除**：`Desktop\_旧版本_待删_2026-11-04\`
+      里装了 `mmd2max\`（v1/v2 树 1.2G）、`mmd2max_v2_src_2026-11-01\`、三份 v2 zip、`香菱-海灯节.max`（263MB）
+      以及 v3 树的 `test_runs/` 四个模型目录（693MB）。**v3 源码树本身留在桌面原位**（现在只剩 2.3MB：
+      代码 + `.git`，那次推送的提交 `d4949f6` 已全部推上去、工作树干净），因为 `README_V4.md` 的回滚开关
+      写的就是它。整树搬不动的原因量清楚了：`Permission denied` 只落在 `test_runs` 这个**目录句柄**上，
+      它的子目录一个个都搬得动 ⇒ 是某个进程把它当工作目录（大概率是那台一直开着的 Max，pid 16684，没动它）。
+    - **文档里的两处死引用**：`tests/test_metamorphic.py:26` 原来写「见 `test_runs/probe_m5_dev.py`」，
+      而那个探针在第 39 条第七节已声明删除 ⇒ 改成「已删，理由见 README_HANDOVER 第七节末条」；
+      `README_V4.md` 的回滚段落按上面的实际状态改写。`README_HANDOVER.md` 里其余提到
+      `mmd2max/core.py`、`tools/check_ms_syntax.py`、`tools/spring_bake.ms` 的地方**不是死引用**，
+      它们在第 1.3 节的「已删路线」表里，是历史。
 
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
