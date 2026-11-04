@@ -67,6 +67,7 @@ from mmd2max.targets import (
     TOE_TOL_CM,
     ROLLBACK_TOL_CM,
     ROLLBACK_TOL_DEG,
+    STUB_CM,
     WEIGHT_ERR_TOL,
     WEIGHT_SUM_TOL,
     box_tol_cm,
@@ -561,10 +562,10 @@ def box_targets(limbs: list[dict[str, str]],
 
 # 附属骨（BoneGeometry）方向回读的短骨门限：|tail-head| 小于它的骨在 PMX 里只是显示
 # stub（香菱 右手首 0.38cm，而左手首 3.26cm），方向本身没意义，两侧一起不量。
-# **这个数在 .ms 里还有一份字面量**（mmd2maxVerifyAccessoryDirs 的 `length want < 1.0`）：
-# 两边不是同一条门限，规格表就会多出一条永远没人报的行（或反过来，报告里冒出没判的行），
-# 两种都是红的 —— 契约测试拿字面量对撞，改一边就报。
-ACCESSORY_STUB_CM = 1.0
+# 数值住在 `targets.STUB_CM`，经 `MMD2MAX.CFG` 的 `MMD2MAX_STUBCM` 下发给 Max（规则 IV：
+# 「应该是多少」只许有一个来源）。这里保留这个名字只作别名 —— 判据侧与 Max 侧从此读的
+# 是同一个数，规格表不可能多出一条永远没人报的行。
+ACCESSORY_STUB_CM = STUB_CM
 
 
 def _bone_point(bone: dict[str, str], prefix: str, index: int) -> tuple[float, float, float]:

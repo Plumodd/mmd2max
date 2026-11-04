@@ -99,6 +99,11 @@ global MMD2MAX_ROLLBACK
 /* 接趾守卫的触发阈值（厘米）：骨盒远端比动手前更远这么多才算「推过头」。
    它和 ROLLBACK 是两件事 —— ROLLBACK 决定「有没有这条退路」，这个数决定「什么时候走」。 */
 global MMD2MAX_RBTRIG
+/* 短骨门限（厘米）：|tail-head| 比它短的骨在 PMX 里只是画给 MMD 看的显示 stub
+   （香菱 右手首 0.38cm），方向没意义 —— 写侧不转它、回读不量它。以前这个数在本文件里
+   抄了三份、Python 另有一份，改一边要等一整轮才以「规格表多出一条没人报的行」的形式暴露。
+   现在数值住在 mmd2max/targets.py 的 STUB_CM，经 CFG 下发，三个消费点都读这一个全局。 */
+global MMD2MAX_STUBCM
 /* mmd2maxLoadCfg 算好的配置摘要，由 mmd2maxMain 在 mmd2maxInitLog **之后**打出来
    （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
 global MMD2MAX_CFGSUMMARY
@@ -1374,6 +1379,7 @@ fn mmd2maxLoadCfg =
     MMD2MAX_FOOTREACH = mmd2maxCfgBool "MMD2MAX_FOOTREACH"
     MMD2MAX_ROLLBACK = mmd2maxCfgBool "MMD2MAX_ROLLBACK"
     MMD2MAX_RBTRIG = mmd2maxCfgNum "MMD2MAX_RBTRIG" 0.0 50.0
+    MMD2MAX_STUBCM = mmd2maxCfgNum "MMD2MAX_STUBCM" 0.0 50.0
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
     MMD2MAX_INTERACTIVE = mmd2maxCfgBool "MMD2MAX_INTERACTIVE"
@@ -1400,6 +1406,7 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
     cfgMsg = cfgMsg + " 快照回滚=" + (MMD2MAX_ROLLBACK as string)
     cfgMsg = cfgMsg + " 回滚触发=" + (MMD2MAX_RBTRIG as string)
+    cfgMsg = cfgMsg + " 短骨门限=" + (MMD2MAX_STUBCM as string)
     cfgMsg = cfgMsg + " 收敛上限=" + (MMD2MAX_CONVERGE_MAX as string)
     /* 判据通道两个路径进摘要：日志里要能看出「这轮按哪张规格表验收、读数落在哪个文件」，
        否则事后只剩一份日志、拼不出任何判定。 */
@@ -1929,9 +1936,11 @@ fn mmd2maxLogStructDir label axes headPos want gotPos nodeNm =
     msg = msg + " 差倾=" + (dLean as string)
     msg = msg + " 差偏航=" + (dYaw as string)
     msg = msg + " 夹角=" + (bestAng as string)
-    /* tail 离 head 不到 1cm = 模型里的显示 stub（香菱 右手首 只有 0.38cm，而左手首 3.26cm），
-       方向本身没意义，标出来让调用方别计入超标。 */
-    if (length want) < 1.0 do msg = msg + " 短骨"
+    /* tail 离 head 不到 `MMD2MAX_STUBCM` = 模型里的显示 stub（香菱 右手首 只有 0.38cm，
+       而左手首 3.26cm），方向本身没意义，标出来让调用方别计入超标。数住在
+       mmd2max/targets.STUB_CM，Python 判据侧算期望行数用的是同一个（verdicts 里那个
+       ACCESSORY_STUB_CM 只是别名），所以这里再抄一份字面量就是两边分叉的起点。 */
+    if (length want) < MMD2MAX_STUBCM do msg = msg + " 短骨"
     if gotPos != undefined do
     (
         local pd = distance gotPos headPos
@@ -5574,7 +5583,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                             headPos want node.transform.translationpart node.name
                         if a >= 0.0 do
                         (
-                            local stubBone = (distance headPos tailPos) < 1.0
+                            local stubBone = (distance headPos tailPos) < MMD2MAX_STUBCM
                             if stubBone do structStub += 1
                             if (not stubBone) do
                             (
@@ -5652,9 +5661,10 @@ fn mmd2maxVerifyAccessoryDirs boneNodes =
        改挂（.parent 一设，Max 就把变换按父级重新解释，所以要写回 worldTM）、
        物理代理改父级、以及任何后来者「顺手」转一下附属骨。写入那一刻的方向不描述
        保存下来的场景 —— 和 M4b/M4c 把蒙皮与骨盒改成回读是同一件事。
-       短骨（|tail-head| < 1cm）不计：PMX 里那是显示 stub（香菱 右手首 0.38cm），
-       方向本身没意义。这个 1.0 与 结构向 复核同一条门限，Python 侧那份是
-       verdicts.ACCESSORY_STUB_CM —— 契约测试拿字面量对撞，改一边就红。
+       短骨（|tail-head| < MMD2MAX_STUBCM）不计：PMX 里那是显示 stub（香菱 右手首 0.38cm），
+       方向本身没意义。这条门限与 结构向 复核、与 Python 侧的
+       verdicts.ACCESSORY_STUB_CM 是**同一个数**（数值住在 targets.STUB_CM，经 CFG 下发），
+       不再两侧各抄一份字面量。
        subject 用「行号|骨名」而不是骨名：4893 行改名重名时 Max 会自动加后缀，
        那时 nodes[i].name 已经不是 bones.tsv 里那个词，两边就对不上账了；行号是
        表的位置，唯一、两边同源，日志里也还能看见名字。
@@ -5696,7 +5706,7 @@ fn mmd2maxVerifyAccessoryDirs boneNodes =
         local head = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
         local tail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
         local want = tail - head
-        if (length want) < 1.0 do
+        if (length want) < MMD2MAX_STUBCM do
         (
             stubs += 1
             continue
@@ -6007,8 +6017,12 @@ fn mmd2maxApplySkin meshes boneNodes =
         if skinFlags[i] == 1 do
         (
             local added = false
+            /* 一次失败只许计一次：旧写法 catch 里 `failedBones += 1` 之后，紧接着的
+               `if not added` 又加一次、名字再 append 一遍 —— 抛出去那行「有 N 根骨骼加入
+               Skin 失败」因此永远是真实数的一倍，名字表里每根出现两次。数字是错的，但
+               判据本身没错（>0 就 throw），所以线上没有任何东西会发现它。 */
             try ( skinOps.AddBone skinMod boneNodes[i] 0; added = true ) \
-                catch ( failedBones += 1; append failedBoneNames boneNodes[i].name )
+                catch ( mmd2maxLog ("  AddBone 异常：" + boneNodes[i].name) )
             if not added do ( failedBones += 1; append failedBoneNames boneNodes[i].name )
         )
         if (mod i 50) == 0.0 do mmd2maxLog ("已处理骨骼 " + (i as string) + "/" + (boneNodes.count as string))

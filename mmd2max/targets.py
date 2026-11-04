@@ -82,6 +82,16 @@ ROLLBACK_TOL_DEG = 0.1
 # 「本来就该有的 2% 残余」误触发，只会因为限幅 0.2~5 那一次真推飞而触发。
 RB_TRIG_CM = 0.05
 
+# 短骨门限（厘米）：|tail-head| 小于它的骨在 PMX 里只是画给 MMD 看的显示 stub（香菱
+# 右手首 0.38cm，而左手首 3.26cm），方向本身没意义 ⇒ 写侧不转它、判据侧不量它。
+# 1.0 的定价：已知 stub 全在 0.38 以下，最短的真骨（Toe0）是 3.569 —— 两个量级之间，
+# 所以这个数既不靠噪声地板也不靠上限勉强撑住。
+# 它同时进 CFG：Max 拿它决定哪些骨不报方向，Python 拿同一个数算期望行数
+# （`verdicts.ACCESSORY_STUB_CM` 现在只是这里的别名）。旧写法是两侧各抄一份字面量、
+# 靠契约测试对撞，改一边才红 —— 而红的症状是「规格表多出一条永远没人报的行」，报错位置
+# 离根因很远，正是规则 IV 要收掉的那类数。
+STUB_CM = 1.0
+
 # ── 蒙皮回读（M4b）的两条容差 ────────────────────────────────────────────────
 # 这两条**不进 TARGETS、不进 CFG**：Max 那边拿它们做不了任何门控（写权重时还不知道误差），
 # 它们只在 Python 判表时出场。放进 CFG 反而会把「尺」递到被量的一方手里，正是 v4 要避免的。
@@ -154,6 +164,7 @@ TARGETS: dict[str, tuple[float | bool, str, float, float]] = {
     "MMD2MAX_FOOTREACH":  (FOOT_REACH,   "bool", 0.0,    0.0),
     "MMD2MAX_ROLLBACK":   (ROLLBACK,     "bool", 0.0,    0.0),
     "MMD2MAX_RBTRIG":     (RB_TRIG_CM,   "cm",   0.0,   50.0),
+    "MMD2MAX_STUBCM":     (STUB_CM,      "cm",   0.0,   50.0),
 }
 
 
