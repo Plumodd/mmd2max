@@ -630,6 +630,30 @@ def wait_max_exit(proc, timeout: float = GRACEFUL_EXIT_SECONDS) -> bool:
     return proc.poll() is not None
 
 
+def kill_max_tree(pid: int) -> list[str]:
+    """超时兜底要执行的 argv —— 只杀**自己起的那一棵树**。
+
+    以前是 `taskkill /F /IM 3dsmax.exe`：镜像名匹配会把用户自己开着的 3ds Max
+    （未保存的场景）一起强杀，而且写死的镜像名绕过了 §7 的发现层，Max 装在别处
+    或换成别的年份时就杀不到本轮那个进程。argv 单独成函数是为了让这条能被单测核对。
+    """
+    return ["taskkill", "/F", "/T", "/PID", str(pid)]
+
+
+def clear_stale_round(paths: list[Path]) -> tuple[Path, OSError] | None:
+    """删掉上一轮留下的读数文件；删不掉就返回 (卡住的文件, 原因)，其余的照删。
+
+    调用方必须因此**不开跑**：带着上一轮的 REPORT/CHECK 跑这一轮，等于拿上一轮的
+    绿给这一轮盖章（#21 那一类，只是这次骗的是验收本身）。
+    """
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            return path, error
+    return None
+
+
 def main_window(require_idle: bool = True) -> dict | None:
     """找到 Max 主窗口。require_idle 为真时排除标题带「未响应」的窗口。"""
     for window in list_windows():
@@ -915,8 +939,17 @@ def main() -> int:
     # 校验器会把**上一轮**的绿读成这一轮的绿。这就是第二十一轮那个
     # 「doesFileExist 被上一轮同名旧图蒙过」（#21）的同一类，只是这次骗的是验收本身。
     cfg_error = base / CFG_ERROR_NAME
-    for stale in (marker, error_file, cfg_error, logfile, base / REPORT_NAME):
-        stale.unlink(missing_ok=True)
+    # CHECK 也要删：两张表不可用时 check_verdicts 在写它之前就返回了，上一轮那份
+    # 「213 PASS / 0 FAIL」会原样躺在目录里，下一个读目录的人拿到的是上一轮的验收。
+    from check_verdicts import CHECK_NAME
+    stuck = clear_stale_round([marker, error_file, cfg_error, logfile,
+                               base / REPORT_NAME, base / CHECK_NAME])
+    if stuck is not None:
+        path, error = stuck
+        log(f"没开跑：上一轮的 {path.name} 删不掉（{error}）—— 通常是被上一轮保留现场的 "
+            f"3ds Max 占着。留着它跑这一轮就是拿上一轮的读数给这一轮盖章；"
+            f"请关掉还开着的 3ds Max 再重跑。")
+        return 2
 
     # 清理可能残留的旧启动脚本，避免下次 Max 启动误执行
     for startup in max_startup_dirs(max_exe):
@@ -1004,10 +1037,14 @@ def main() -> int:
             # 它挡住 -U MAXScript 的自动执行，用户不在电脑前就是死锁。
             # taskkill 只留作超时兜底（宁可多等，也别再污染崩溃计数）。
             if not wait_max_exit(proc, GRACEFUL_EXIT_SECONDS):
-                log(f"Max 在 {GRACEFUL_EXIT_SECONDS}s 内没自行退出，兜底 taskkill /F"
+                log(f"Max 在 {GRACEFUL_EXIT_SECONDS}s 内没自行退出，"
+                    f"兜底 taskkill /F /T /PID {proc.pid}"
                     "（这会让 Max 记一次异常终止，下次启动可能弹 Startup Failure Detection）")
-                subprocess.run(["taskkill", "/F", "/IM", "3dsmax.exe"],
-                               capture_output=True, text=True, errors="replace")
+                killer = subprocess.run(kill_max_tree(proc.pid),
+                                        capture_output=True, text=True, errors="replace")
+                if killer.returncode:
+                    log(f"  taskkill 退出码 {killer.returncode}："
+                        f"{(killer.stdout or '').strip()} {(killer.stderr or '').strip()}")
 
     # 退出码必须反映真实产物。实跑踩到：MAXScript 报错、既没有 .max 也没有成功
     # 标记，但本函数仍 return 0，GUI 于是把这一轮写成「完成」，用户以为装配成功。
