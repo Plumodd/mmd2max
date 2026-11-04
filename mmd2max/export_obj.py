@@ -699,19 +699,24 @@ def _dot(a, b):
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
 
-# 胸部特写的取景框（#70）。余量是**模型实测高度**的比例，不是厘米：heads/tails 与
-# 网格坐标都是「已乘 scale 的导出单位」，写死厘米数换一具模型（或 GUI 里改身高）就废，
-# 同一类事故见上面 TOE_SPLIT_BAND 的注释。
+# 特写取景框（#70 胸部、#71 颈部）的余量。一对旋钮、两处共用：
+# 余量是**模型实测高度**的比例，不是厘米 —— heads/tails 与网格坐标都是「已乘 scale 的
+# 导出单位」，写死厘米数换一具模型（或 GUI 里改身高）就废，同一类事故见上面
+# TOE_SPLIT_BAND 的注释。
 # 为什么这只框必须由导出侧量：上一版把它写成「场景包围盒高度 × 0.58~0.72」，那两个比例
 # 是对着 PMX 标称身高 160 定的，而 .ms 里的 h 是场景实测高度 140.513 —— 分母一换，整只带
 # 低了 4cm：第 35 轮的 chest_front / bone_chest_front 里一根胸骨都没有（胸骨实测
 # z 105.23~105.73，带的上沿只到 101.17），而 shot_rb 的 fill_pct 报 63%、全绿 ——
 # 「框里到底有没有那个东西」这件事，填充率在结构上就看不见。现在框跟着量出来的骨走：
-# 任何一具模型，只要认得出胸骨，框就一定框得住它。
-# 0.06 的账（香菱实测网格高 H=144.33、骨 z 跨度 0.51）：带高 17.9cm，经 #69 按视口宽高比
+# 任何一具模型，只要认得出那几根骨，框就一定框得住它。
+# 0.06 的账（香菱实测网格高 H=144.33、胸骨 z 跨度 0.51）：带高 17.9cm，经 #69 按视口宽高比
 # 收过之后横向 30.9cm；4.66cm 的胸骨在 820x474 的视口里横向约 124px ——
 # 「指着乳头」在像素上读得出来，框里又还留得下肩与颈根，骨不至于孤零零地飘着。
-CHEST_BAND_PAD = 0.06
+# 颈部同一对数（#71）：颈链实测 z 100.76（上半身2 的 head）..128.29（頭 的 tail）= 27.5cm，
+# 上下各外扩 8.7cm ⇒ 带高 44.8cm，比旧的比例带（z 77.28..137.70 = 60.4cm）紧 1.35 倍，
+# 而**上沿几乎没动**（137.0 vs 137.7）—— 旧带一直就把头顶裁在 137，收紧只发生在下面，
+# 腰腹那 25cm 本来不是颈部特写要看的东西。
+BAND_PAD_Z = 0.06
 # 宽与深的余量单独给（第 36 轮的账）：那轮 z 已经是量出来的，x/y 却还拿「场景包围盒 ±10cm」
 # 凑，于是框的前后中心被身后的裙摆与长发拽到 y=+9.8，#69 按宽高比收水平跨度时是**朝框中心**
 # 收的 —— 收到的 y -0.41..20.01 把站在 -11.75..-7.24 的两根胸骨整个裁到框外，
@@ -719,15 +724,24 @@ CHEST_BAND_PAD = 0.06
 # 框深 33.3cm，装得下整个胸腔的前后（胸前缘 -12.8 / 背后缘 +3.1）还留 15cm 余量 ——
 # 特写里看得见胸的轮廓，而不是两根骨悬在空白里。横向同理给 14.4cm（收框后 30.9 > 27.2，
 # 不再被 x 绑架，#69 那一段也就不用改）。
-CHEST_BOX_PAD = 0.10
+# 颈部的 x/y 极值只有 3.8cm（颈与头都贴着中线），14.4cm 的余量把框撑到 ~33cm；这只框的
+# 纵向更高（44.8），所以 zoomToBounds 由纵向贴、横向实际可见约 51cm ⇒ 肩线仍在画面里。
+BOX_PAD_XY = 0.10
 
-CHEST_AXES = ("x", "y", "z")
+FRAMING_AXES = ("x", "y", "z")
+
+# 颈部特写要看的东西 = 颈链三节：#17 的颈部落位 + #27 的躯干后仰与颈前倾，三个判据的骨
+# 全部进极值，框才「按构造」罩得住它们 —— 只框 首/頭 会把 上半身2 甩出画面，那正是
+# .ms 旧注释里点名要避免的事（「用户说『Spine2 没后仰』时画面里没有它」）。
+# 按 **Biped 目标**认而不按骨名认：`首` 与 `左手首/右手首/左足首/右足首` 都含「首」，
+# 名字规则迟早被一具奇形怪状的模型骗；而 biped_map 是这条链为什么存在的唯一真值源。
+NECK_TARGETS = ("Bip001 Spine2", "Bip001 Neck", "Bip001 Head")
 
 
-class ChestBand(NamedTuple):
-    """胸部特写的取景依据，两组端点都是导出单位的 **(x, y, z)** 三元组。
+class FramingBand(NamedTuple):
+    """一张特写的取景依据，两组端点都是导出单位的 **(x, y, z)** 三元组。
 
-    `b_min` / `b_max` 是量出来的胸骨端点极值（要看的东西），`lo` / `hi` 是框。
+    `b_min` / `b_max` 是量出来的 subject 端点极值（要看的东西），`lo` / `hi` 是框。
     分成两组数是判据的需要：Max 只许用框，而 Python 拿 subject 去问「Max 这一轮实际用的
     框罩住骨了没有」—— 用框去验框（把 lo/hi 原样比回来）只能证明 CFG 没丢，证明不了框里
     有东西，而后者才是第 35 轮真正坏掉的那件事。
@@ -737,6 +751,26 @@ class ChestBand(NamedTuple):
     hi: tuple
     b_min: tuple
     b_max: tuple
+
+
+def _mesh_height(positions, scale) -> float:
+    """网格实测高度（导出单位），没有顶点返回 0 —— 调用处拿 0 当「量不出来」。"""
+    if not positions:
+        return 0.0
+    heights = [convert_vec(p, scale)[2] for p in positions]
+    return max(heights) - min(heights)
+
+
+def _framing_band(pts, mesh_h) -> FramingBand | None:
+    """subject 点集 + 网格高 → 取景框与极值；点集空或量不出高度返回 None。"""
+    if not pts or mesh_h <= 0.0:
+        return None
+    b_min = tuple(min(p[a] for p in pts) for a in range(3))
+    b_max = tuple(max(p[a] for p in pts) for a in range(3))
+    pads = (BOX_PAD_XY * mesh_h, BOX_PAD_XY * mesh_h, BAND_PAD_Z * mesh_h)
+    lo = tuple(b_min[a] - pads[a] for a in range(3))
+    hi = tuple(b_max[a] + pads[a] for a in range(3))
+    return FramingBand(lo=lo, hi=hi, b_min=b_min, b_max=b_max)
 
 
 def _chest_band(bone_names, bone_names_en, heads, tails, positions, scale):
@@ -754,35 +788,58 @@ def _chest_band(bone_names, bone_names_en, heads, tails, positions, scale):
         if _is_breast_bone(name, name_en):
             pts.append(heads[i])
             pts.append(tails[i])
-    if not pts or not positions:
-        return None
-    heights = [convert_vec(p, scale)[2] for p in positions]
-    mesh_h = max(heights) - min(heights)
-    b_min = tuple(min(p[a] for p in pts) for a in range(3))
-    b_max = tuple(max(p[a] for p in pts) for a in range(3))
-    pads = (CHEST_BOX_PAD * mesh_h, CHEST_BOX_PAD * mesh_h, CHEST_BAND_PAD * mesh_h)
-    lo = tuple(b_min[a] - pads[a] for a in range(3))
-    hi = tuple(b_max[a] + pads[a] for a in range(3))
-    return ChestBand(lo=lo, hi=hi, b_min=b_min, b_max=b_max)
+    return _framing_band(pts, _mesh_height(positions, scale))
 
 
-def chest_meta_pairs(band):
-    """取景框 + 胸骨极值 → meta 的 12 行 `键<TAB>值`；band=None 时 12 行的值都是空串。
+def _neck_band(heads, tails, biped_mapping, old_to_new, positions, scale):
+    """颈部特写该框的那块空间：颈链三节（`NECK_TARGETS`）的 head/tail 全进极值。
+
+    与 `_center_neck` 用同一张 `biped_mapping → old_to_new` 的换算表（那里是「按 Biped
+    节点名找导出序号再挪骨」，这里是「按同一张表找导出序号再量框」），所以「颈骨被摆到
+    哪」与「颈部特写框在哪」不可能分叉 —— 这是 #70 那条「认骨只认一次」的规则在颈侧的落法。
+    三节里只要有一节在就量（有些模型没有 上半身2）；三节都没有 ⇒ None ⇒ meta 那 12 条写
+    空串，Max 退回旧的比例带。
+    """
+    target_to_new: dict = {}
+    for old, target in (biped_mapping or {}).items():
+        if target and old in old_to_new:
+            target_to_new.setdefault(target, old_to_new[old])
+    pts = []
+    for target in NECK_TARGETS:
+        ni = target_to_new.get(target)
+        if ni is not None and ni < len(heads):
+            pts.append(heads[ni])
+            pts.append(tails[ni])
+    return _framing_band(pts, _mesh_height(positions, scale))
+
+
+def band_meta_pairs(prefix: str, band) -> list[str]:
+    """取景框 + subject 极值 → meta 的 12 行 `键<TAB>值`；band=None 时 12 行的值都是空串。
 
     框的 6 行进 CFG（Max 只读数、不许自己算），极值的 6 行只给判据表当尺 ——
     两边的键名分别由 tools/obj_run.META_TO_CFG 与 META_FOR_CHECK 钉住。
-    每行写成「同一轴的两端挨着」，obj_run._chest_ruler 的切片靠的就是这个顺序。
+    每行写成「同一轴的两端挨着」，obj_run._ruler 的切片靠的就是这个顺序。
     """
     lines = []
-    for i, axis in enumerate(CHEST_AXES):
-        for key, value in ((f"chest_box_{axis}_lo", None if band is None else band.lo[i]),
-                           (f"chest_box_{axis}_hi", None if band is None else band.hi[i])):
+    for i, axis in enumerate(FRAMING_AXES):
+        for key, value in ((f"{prefix}_box_{axis}_lo", None if band is None else band.lo[i]),
+                           (f"{prefix}_box_{axis}_hi", None if band is None else band.hi[i])):
             lines.append(f"{key}\t{'' if value is None else fmt(value)}")
-    for i, axis in enumerate(CHEST_AXES):
-        for key, value in ((f"chest_bone_{axis}_min", None if band is None else band.b_min[i]),
-                           (f"chest_bone_{axis}_max", None if band is None else band.b_max[i])):
+    for i, axis in enumerate(FRAMING_AXES):
+        for key, value in ((f"{prefix}_bone_{axis}_min", None if band is None else band.b_min[i]),
+                           (f"{prefix}_bone_{axis}_max", None if band is None else band.b_max[i])):
             lines.append(f"{key}\t{'' if value is None else fmt(value)}")
     return lines
+
+
+def _band_note(label: str, band) -> str:
+    """取景框的人读摘要（进 plan.notes，日志里留痕用）。"""
+    return (f"  {label}特写取景框："
+            + " ".join(f"{a} {band.lo[i]:.2f}..{band.hi[i]:.2f}"
+                       for i, a in enumerate(FRAMING_AXES))
+            + f"（{'/'.join(f'{v:.2f}' for v in band.b_min)}"
+            + f"..{'/'.join(f'{v:.2f}' for v in band.b_max)} 是量出来的骨端点，"
+            + f"高度外扩 {BAND_PAD_Z:.0%}、宽深外扩 {BOX_PAD_XY:.0%} 的网格高）")
 
 
 def _dist(a, b):
@@ -1680,8 +1737,6 @@ class Plan:
     max_parent_col: list = field(default_factory=list)
     reparented: int = 0
     neck_shift: float = 0.0
-    # 胸部特写取景带（ChestBand），None = 认不出胸骨（meta 那四条写空串）
-    chest_band: ChestBand | None = None
 
     # ---- Biped 映射 ----
     biped_mapping: dict = field(default_factory=dict)
@@ -1820,18 +1875,17 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     # 胸部特写的取景框：跟着量出来的胸骨走，不再按「身高 × 猜的比例」（#70）
     chest_band = _chest_band(bone_names, kept_names_en, heads, tails, positions, scale)
     if chest_band:
-        plan.notes.append(
-            "  胸部特写取景框："
-            + " ".join(f"{a} {chest_band.lo[i]:.2f}..{chest_band.hi[i]:.2f}"
-                       for i, a in enumerate(CHEST_AXES))
-            + f"（胸骨实测 {'/'.join(f'{v:.2f}' for v in chest_band.b_min)}"
-            + f"..{'/'.join(f'{v:.2f}' for v in chest_band.b_max)}，"
-            + f"高度外扩 {CHEST_BAND_PAD:.0%}、宽深外扩 {CHEST_BOX_PAD:.0%} 的网格高）")
+        plan.notes.append(_band_note("胸部", chest_band))
     # 颈部：把 首 挪到「颈部网格实测中线」（MMD 的躯干骨在体腔中心、颈骨在颈轴，
     # 两者不同线；按上下骨取中点会把脖子拽到喉咙前面，见 _center_neck 文档）
     neck_shift = _center_neck(heads, biped_mapping, old_to_new, positions, scale)
     if neck_shift > 0.01:
         plan.notes.append(f"  颈部：Neck 移到颈部网格实测中线，前后位移 {neck_shift:.2f}cm")
+    # 颈部特写的取景框：排在 _center_neck **之后** —— 量的是「颈骨最后落在哪」，
+    # 挪过骨再框才罩得住；先框后挪就等于框里那节骨被自己推出去了（#70 那一类分叉）。
+    neck_band = _neck_band(heads, tails, biped_mapping, old_to_new, positions, scale)
+    if neck_band:
+        plan.notes.append(_band_note("颈部", neck_band))
 
     # ---- 脚尖改绑：必须排在 skin_flag 统计之前 ----
     # 排后面的话 Toe0 会以「权重合计 0」被 min_weight 剪出蒙皮列表，改了也白改。
@@ -1930,10 +1984,12 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         # MMD2MAX.CFG，MAXScript 按 bool 读，一条链上没有任何取反（M1b 之前
         # FOOT_BOX_FLAT→foot_pitch→FOOTPITCH→`if not` 连反三次，翻开关的人数不清自己翻到哪儿了）。
         f"foot_box_flat\t{'true' if FOOT_BOX_FLAT else 'false'}",
-        # #70：胸部特写的取景框 + 胸骨极值，共 12 条（导出单位的绝对坐标）。空串 = 这具
-        # 模型认不出胸骨，Max 那侧退回旧的场景包围盒带。写成 12 个键而不是三个「x y z」串：
-        # CFG 的每个值都是单个数，Max 用 mmd2maxCfgNumOpt 直接验数，不在脚本里拆字符串。
-        *chest_meta_pairs(chest_band),
+        # #70/#71：两张特写的取景框 + subject 极值，各 12 条（导出单位的绝对坐标）。
+        # 空串 = 这具模型认不出那几根骨，Max 那侧退回旧的场景包围盒带。写成 12 个键而不是
+        # 三个「x y z」串：CFG 的每个值都是单个数，Max 用 mmd2maxCfgNumOpt 直接验数，
+        # 不在脚本里拆字符串。
+        *band_meta_pairs("chest", chest_band),
+        *band_meta_pairs("neck", neck_band),
     ]
 
     plan.positions = positions
@@ -1957,7 +2013,6 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     plan.max_parent_col = max_parent_col
     plan.reparented = reparented
     plan.neck_shift = neck_shift
-    plan.chest_band = chest_band
     plan.biped_mapping = biped_mapping
     plan.biped_missing = biped_missing
     plan.biped_conflicts = biped_conflicts

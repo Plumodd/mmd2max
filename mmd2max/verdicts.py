@@ -540,8 +540,9 @@ SHOT_MIN_FILL_PCT = 45.0
 # 「该占多少」没有物理理由，拿它当尺就是装饰。
 SHOT_MIN_FILL_FLOOR = 0.0
 
-# 取景框的三根轴（与导出侧的 mmd2max.export_obj.CHEST_AXES、tools/obj_run.CHEST_AXES 同一套词）。
-CHEST_AXES = ("x", "y", "z")
+# 取景框的三根轴（与导出侧的 mmd2max.export_obj.FRAMING_AXES、tools/obj_run.FRAMING_AXES
+# 同一套词）。胸与颈共用这一套，因为两张特写的行形状完全一样：三轴各一对框 + 一对紧边。
+FRAMING_AXES = ("x", "y", "z")
 
 # 每张 tight 截图的**水平**世界轴：.ms 的 mmd2maxAspectBox 收的就是这一根
 # （正视→x、左视→y）。键集必须与 SHOT_TIGHT_TAGS 相同（测试对撞），轴选错则判据会拿
@@ -552,14 +553,16 @@ SHOT_H_AXIS: dict[str, str] = {
 }
 
 
-def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
-    """截图取景的规格行：每张图一行填充率 + 两条聚合计数 + 胸部框的罩得住判据。
+def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None,
+                   neck_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
+    """截图取景的规格行：每张图一行填充率 + 两条聚合计数 + 两张特写的「罩得住」判据。
 
     `when` 全是 `if_present`：截图段只在 `MMD2MAX_SHOT` 打开时跑，而且它排在保存与成功
     标记之后 —— 那段坏了不该把已经落盘的 .max 判成失败，但它一旦跑了，行数与填充率
     就必须按上面这两份名单对账（少一张图 = 少一行读数，靠 `tags` 那条 gate 响）。
 
-    `chest_bone` 是导出侧量出来的胸骨端点极值 `((x,y,z)min, (x,y,z)max)`，None = 认不出胸骨。
+    `chest_bone` / `neck_bone` 是导出侧量出来的 subject 端点极值 `((x,y,z)min, (x,y,z)max)`，
+    None = 这具模型认不出那几根骨。
     """
     rows: list[tuple[str, ...]] = []
     for tag in SHOT_TAGS:
@@ -570,47 +573,51 @@ def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None) -> list[tuple[
                     when="if_present"))
     rows.append(row("shot_rb", "projection_fail", GLOBAL, 0, 0, "gate",
                     when="if_present"))
-    rows.extend(chest_box_rows(chest_bone))
-    rows.extend(tight_box_rows(chest_bone))
+    rulers = {"chest": chest_bone, "neck": neck_bone}
+    for prefix in rulers:
+        rows.extend(box_rows(prefix, rulers[prefix]))
+    rows.extend(tight_box_rows(rulers))
     return rows
 
 
-def chest_box_rows(chest_bone: tuple[tuple, tuple] | None) -> list[tuple[str, ...]]:
-    """胸部特写：Max 这一轮**实际用的**取景框必须罩住量出来的胸骨极值，三轴各一对（#70）。
+def box_rows(prefix: str, subject: tuple[tuple, tuple] | None) -> list[tuple[str, ...]]:
+    """一张特写：Max 这一轮**实际用的**取景框必须罩住量出来的 subject 极值，三轴各一对。
 
     两把尺分得很清：读数是 Max 拿去 zoom 的框角，期望是导出侧从骨坐标量出来的 subject。
     方向各用一种单向 kind —— 框比要求的更宽不是缺陷（图只是更空），更窄、把骨裁在框外才是。
     第 35 轮的形状是「带低 4cm + 全绿」：当时唯一的尺是填充率，而填充率量的是框自己，
     框里一根骨都没有也照样 63%。第 36 轮补了 z 却漏了 x/y，于是换成侧视把骨裁在框的
     **前后**方向之外，照样全绿 —— 一根轴一根轴查，才不给「只缺一轴」留位置。
-    认不出胸骨的模型（`chest_bone=None`）六行退成 `report`：仍然要求 Max 报它用的框
+    认不出 subject 的模型（`subject=None`）六行退成 `report`：仍然要求 Max 报它用的框
     （否则「取景段没跑」和「跑了但框是空的」在报告里长得一样），只是没有尺。
     """
     rows: list[tuple[str, ...]] = []
-    for i, axis in enumerate(CHEST_AXES):
-        for check, pick, kind in (("chest_box_lo", 0, "max"), ("chest_box_hi", 1, "min")):
-            expected = None if chest_bone is None else chest_bone[pick][i]
+    for i, axis in enumerate(FRAMING_AXES):
+        for check, pick, kind in ((f"{prefix}_box_lo", 0, "max"),
+                                  (f"{prefix}_box_hi", 1, "min")):
+            expected = None if subject is None else subject[pick][i]
             rows.append(row("shot_rb", check, axis, expected, 0,
                             kind if expected is not None else "report", when="if_present"))
     return rows
 
 
-def tight_box_rows(chest_bone: tuple[tuple, tuple] | None) -> list[tuple[str, ...]]:
+def tight_box_rows(rulers: dict[str, tuple[tuple, tuple] | None]) -> list[tuple[str, ...]]:
     """每张 tight 截图**收完之后真正拿去 zoom 的那条水平跨度**必须罩得住骨（#70 的另一半）。
 
     为什么上面那六行不够：#69 的收框是在 zoom 之前**朝框中心**砍水平跨度的，那六行读的是
     砍之前的框。第 36 轮就坏在这儿 —— 框中心被身后的裙摆拽到 y=+9.8，砍完只剩
     y -0.4..20.0，而骨在 -11.75..-7.24：砍之前的框明明罩得住，图里却没有骨。
     这一对读的是砍之后的那条边，正好是「画面上有没有」的边界。
-    颈部那两张没有导出的尺（要等 #71 去量），只要求读数出现：report。
+    尺按 tag 里的前缀挑（`chest` / `neck`）：#71 之前颈部那四行只能 report，因为导出侧
+    没有颈链的尺；现在两边都有，四行升级为参与判定 —— 一张特写也不许只报数不被判。
     """
     rows: list[tuple[str, ...]] = []
     for tag in SHOT_TIGHT_TAGS:
-        i = CHEST_AXES.index(SHOT_H_AXIS[tag])
+        prefix = next((name for name in rulers if name in tag), None)
+        subject = rulers.get(prefix) if prefix is not None else None
+        i = FRAMING_AXES.index(SHOT_H_AXIS[tag])
         for check, pick, kind in (("tight_h_lo", 0, "max"), ("tight_h_hi", 1, "min")):
-            expected = None
-            if chest_bone is not None and "chest" in tag:
-                expected = chest_bone[pick][i]
+            expected = None if subject is None else subject[pick][i]
             rows.append(row("shot_rb", check, tag, expected, 0,
                             kind if expected is not None else "report", when="if_present"))
     return rows
@@ -658,7 +665,8 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                bones: list[dict[str, str]], biped_map: list[dict[str, str]],
                morph_count: int, skin: bool = True,
                foot_reach: bool = True, rollback: bool = False,
-               chest_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
+               chest_bone: tuple[tuple, tuple] | None = None,
+               neck_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
 
     输入全部来自**导出结果**（weights 行数、limbs.tsv 的行、meta 的计数）与
@@ -689,9 +697,12 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     `if_present`（Max 一段都不跑，读数当然没有），打开时 `rollback/saved` 与三列差值
     必须出现 —— 「开关打开却什么都没报」正是「退路只是句注释」的样子，必须红。
 
-    `chest_bone`（#70）是导出侧量的胸骨端点极值 `((x,y,z)min, (x,y,z)max)`，None = 这具
-    模型认不出叫「胸 / bust」的骨。它是胸部特写那 18 行的尺：Max 只许报它用的框，
-    框里到底有没有那两根骨得由这边问 —— 认不出时那 18 行退成 `report`（必须出现、不卡数）。
+    `chest_bone` / `neck_bone`（#70、#71）是导出侧量的**取景主体骨端点极值**
+    `((x,y,z)min, (x,y,z)max)`，None = 这具模型认不出那组骨（胸：叫「胸 / bust」的骨；
+    颈：映射到 `Bip001 Spine2 / Neck / Head` 的那三节）。它们是两组特写判据的尺：Max
+    只许报它用的框，框里到底有没有那几根骨得由这边问 —— 认不出时那些行退成 `report`
+    （必须出现、不卡数）。两份尺来自同一具导出的骨坐标，但**各量各的骨**，所以一把尺
+    丢了只有那一组降级，另一组照常卡数。
     """
     rows: list[tuple[str, ...]] = []
     foot_rows = [x for x in limbs if x.get("mode") == "foot"]
@@ -941,8 +952,8 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                   "pivot_max_cm", "pivot_max_bone"):
         rows.append(row("bone_rb", check, GLOBAL, None, None, "report"))
 
-    # ── 截图取景（#69）：特写够不够特写 ───────────────────────────
-    rows.extend(shot_fill_rows(chest_bone))
+    # ── 截图取景（#69、#70、#71）：特写够不够特写、框里有没有那几根骨 ──
+    rows.extend(shot_fill_rows(chest_bone, neck_bone))
 
     # ── 蒙皮（--no-skin 时整段跳过）──────────────────────────────
     when = "always" if skin else "if_present"

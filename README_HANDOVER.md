@@ -755,13 +755,73 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
     - **回滚各一处**：`MMD2MAX_CHEST_*` 六键留空 ⇒ `mmd2maxChestGiven()` 为 false，脚本退回按高度比例那只框
       （取景与摘要走同一条退回路径，半只框比没框更坏）；`--drop-guides` 不加就是原样。
 
+29. **#71「颈部特写取景框按高度比例猜」落地（2026-11-04 11:36 第三十八轮，香菱 `--shot`，退出码 0，
+    `香菱.max` 落盘，Max 自行 `quitMax`，无弹窗）：`CHECK` 495 PASS / 0 FAIL / 22 SKIP，
+    规格 517 行 / 通道 114 个 / CFG 42 键 / meta 41 条数据行**
+    - **这一步真正的产出是「一套机制」而不是「第二个框」**：#70 那套（导出量骨极值 → meta 双份 12 行 →
+      CFG 6 键 → 脚本 zoom + 报 6 个角点 → 规格 18 行）在代码里只有胸部在用，颈部那两张图
+      （`neck_front` / `neck_side`，#69 起就参与紧框收框）用的仍是 `.ms` 里 `h × 0.55..0.98` 猜的带 ——
+      与第 35 轮胸部**同一件事**：分母是整场景高，量的是别的骨。现在三处都改成按 `FRAMINGS = ("chest","neck")`
+      循环：导出侧 `FramingBand` / `_framing_band` / `band_meta_pairs(prefix, band)`，装配侧
+      `obj_run.box_keys/bone_keys/framing_cfg_keys/_ruler(prefix)`，判据侧 `verdicts.box_rows(prefix, subject)` /
+      `tight_box_rows(rulers)`。**两把尺各自独立**：颈部量不出骨只降级颈部那 12 行，胸部照旧硬判
+      （`test_one_framing_can_be_missing_without_the_other`）。
+    - **颈部按 Biped 目标认，绝不按骨名**：`NECK_TARGETS = ("Bip001 Spine2","Bip001 Neck","Bip001 Head")`
+      从 `biped_map` 反查 PMX 骨。名字规则在颈部是陷阱 —— `左手首 / 右手首 / 左足首 / 右足首` 都含「首」字，
+      按名匹配会把腕/踝当成颈（香菱实测：腕骨 x=+31.8，匹配上就把取景框整个拽到手臂上）。
+      契约 `test_the_neck_is_recognised_by_the_biped_target_not_by_name` 直接拿 `左手首` 混进名单里断言
+      `band.b_max[0] < 1.0`。
+    - **框必须在 `_center_neck` 之后算**（`build_plan` 里就排在那一步之后）：#17 会把 `首` 的 head 沿 y 挪
+      ≤3cm，先量后挪 ⇒ 交出去的尺与画面里的骨不是同一只。用例
+      `test_the_band_follows_a_bone_moved_earlier_in_the_same_pass` 把 `頭` 的 head 挪到 (0,-30,130)，
+      断言 `b_min[1]=-30.0`、`b_max[2]=130.0` 跟着走而 `b_min[0]/b_min[2]` 不动。
+    - **余量仍是比例不是厘米**（§6 那条老规矩）：颈部用与胸部**同一对**常数 `CHEST_BAND_PAD=0.06`（z）/
+      `CHEST_BOX_PAD=0.10`（xy），分母是网格实测高 144.33 ⇒ 外扩 8.66 / 14.43cm。scale×10 时框逐位×10
+      （`test_pad_follows_the_measured_height_not_an_absolute_cm` 现在两张特写都跑）。
+    - **香菱实测（`baselines/round38_*`）**：骨端点极值 `x -3.842957..0.000088  y -6.766848..-0.036633
+      z 100.760711..128.286294` ⇒ 框 `x -18.276298..14.433429  y -21.200189..14.396708
+      z 92.100706..136.946299`。z 跨度从猜的 60.42cm 收到 **44.85cm**，上沿只降 0.75cm（不新增裁头），
+      下沿抬上去 14.8cm —— 之前那 14.8cm 全是腰。日志两行新读数：
+      `neck 取景：框=[-18.2763,-21.2002,92.1007]..[14.4334,14.3967,136.946]` 与
+      `截图 neck_side / neck_front 紧框 … -> …`（这两张收框前后一致 ⇒ 视口宽高比不再需要砍水平跨度）。
+      判据端 12 行从 `report` 升级成硬判：`shot_rb neck_box_{lo,hi}` 六行 + `tight_h_{lo,hi}` 的
+      `neck_front/neck_side` 四行 + 原有 `fill_pct` 两行，`CHECK` 全 PASS。
+    - **两条只有写代码时才撞上的坑（都改成了结构，不是改数字）**：
+      ① `CFG 键集与 CFG_KEYS 不一致：缺 ['MMD2MAX_NECK_X_HI', …6 键]` —— `build_cfg` 的字面量里手抄了
+      胸部那 6 行，而 `CFG_KEYS`/`META_TO_CFG` 已经长出颈部的。改成
+      `**{cfg_key: meta[meta_key] for meta_key, cfg_key in META_TO_CFG.items()}`：凡从 meta 搬进 CFG 的键
+      只有 `META_TO_CFG` 这一处来历，手抄这条路整个堵掉。
+      ② `AssertionError: '8.8e-05' != '0.000088'` —— `_ruler` 原本返回 `float`，规格表落盘时 `str(float)`
+      把颈链贴着中线的 `x_max = 0.000088` 打成 `8.8e-05`。改成**交回 meta 里的文本**，`float()` 只留着
+      做「读得开 + min ≤ max」两条校验。这不是排版洁癖：尺的字符串一旦被重新格式化，「规格表里那一行」
+      与「meta 里那一行」就不再逐字可比。
+    - **几何中性证明**：`diff_round --allow "^配置" …` 对撞 round37 基线 ⇒ 归一后 481 vs 482 行，
+      **17 行实质差异全部是取景行**（1 行新 `neck 取景` + 4 行 neck 紧框/填充 + 4 行别的图的填充抖动
+      ×2）。骨位、权重、转角、骨盒、`盒隙`、`链向` 一行都没进差异表。填充抖动那几行同乘 ~1.0006 且
+      框逐字未变 ⇒ 视口高度差 1 像素（#69 记过同一现象）。
+    - **图证（验收只认图）**：`shots/香菱_neck_side.png` / `香菱_neck_front.png` 现在拍的是**头→颈→胸**
+      这一段，颈链三节骨在画面中央；第三十七轮那两张里整个上半身缩在画面中间偏下，`#17 挺胸`、
+      `#27 颈前倾` 想在这张图上判都判不动（框里目标只占几十像素）。
+    - 静态：`check_ms [OK]`（非严格债仍 64 条）、`Ran 606 tests OK (skipped=2)`（599 → +7：
+      `FramingBandTests` 颈部 5 条、`FramingSpecTests` 的 `test_each_framing_uses_its_own_ruler` /
+      `test_row_count_does_not_depend_on_the_ruler`、`ConfigSingleSourceContract` 的
+      `test_every_framing_box_enters_the_config_summary`）。新增契约两条口径：摘要里每张特写各一条
+      `mmd2maxBoxSummary` 调用、`无(退回场景包围盒带)` 这句文案在代码里只许出现一次。
+    - **基线目录跟着合同走了一次**：`baselines/香菱_meta.tsv` 从 17 条数据行刷到 41 条（#70 的 12 + #71 的 12），
+      `tools/check_baseline.py 香菱` 重新全绿 —— 其余 5 个文件逐位不变。**注意基线文件是不带表头的**
+      （`check_baseline` 的口径是「新文件只许多一行表头」），刷新时得 `tail -n +2`，直接 `cp` 会让它把
+      表头当数据行、报「第 1 条数据行起不同」。
+    - **回滚一处**：`MMD2MAX_NECK_{X,Y,Z}_{LO,HI}` 六键留空（或导出侧认不出颈链）⇒ 脚本退回
+      `h × 0.55..0.98` 那只带，颈部 12 行退成 `report`，配置摘要与 `neck 取景：CFG 没给全框` 都写明退回了。
+
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
 2. `足盒缩后 … 本地 min/max` 的竖直比例必须还是 15.2 : 84.8（`FootHeelBoxHandoffTests` 钉的四个数）；换了 Max 版本若这个比例变了，那四个常量（`FOOT_BOX_*`）要跟着重新回读，不能猜。
 3. **`盒隙 <Foot> -> <Toe0> … 端面覆盖=true` 且 `盒隙结论 没接上=0 根` 是这一版脚链的唯一真判据（#41）**。`链向 … 骨轴与子关节夹角` 现在**按构造读 29.9 度、`断开=2 根` 是预期**（压平水平轴的定义），别再拿它当成绩也别拿它当回归 —— 它只在 `FOOT_BOX_FLAT=false`（斜轴回滚位，M1b 前叫 `MMD2MAX_FOOT_FLATTEN`）时才该回到 ≤3 度。两行一起看才知道口径：`画线 … 目标` 的 z 分量 =0 ⇒ 平轴（#41 默认），≠0 ⇒ 斜轴。
 4. 老账不动：`脚骨偏航结论 骨=0.0 趾=0.0`、`段校验 Foot -> Toe0 ≤0.05`、`脚趾复摆 摆后 ≤0.01`（注意 `起始偏差` 在**接趾之后**会跳到 2.2cm 量级，那是盒被拉长的必然，复摆能收回去；收不回去才是回归）、`结构向 复核 夹角>3.0度=6`。
 5. **M3 之后的两条新读数口径**：`收敛闸门: 出口=ceiling 遍数=3/3 方向超标=N 判据达标=false` 是**诚实的撞上限**，不是新故障 —— 别拿它当回归，也别拿它当达标；要判断有没有变好，看 `converge dir_over / place_max_cm` 那些锁的行。换模型（非香菱）跑时锁退成 `report`，规格里 `pass/ran` 行照旧在 ⇒ 时间轴审计**参与**；如果哪一轮日志里出现「时间轴审计未参与」，说明那张规格表是 M3 之前写的（旧产物），不是配置出错。
-6. 仍开着的：#12 视觉验收（脚链三件事各有中线，等用户判这一版）、#27（Spine2 后仰 / 颈前倾 / 手指贴合）、#29（锁骨 0.955 已定价）、#35（用户拖 `Bip001 L Toe0` 的实测）、`foot_top` 被裙摆挡住不可用、`meta.tsv` 的 `has_sdef/has_qdef` 恒 0、**#71 颈部特写框仍按高度比例猜**（`h*0.55..0.98` ⇒ z 77.3..137.7 = 整个上半身，与 #70 同一类病；尺已量好：`首` z 116.33→122.96、`頭` 122.96→128.29，骨名匹配必须精确否则 `左手首/右手首/左足首/右足首` 全中招）、**#72 前向骨在正视图读成一个点**（要 3/4 视角或只画胸骨）。
+6. 仍开着的：#12 视觉验收（脚链三件事各有中线，等用户判这一版）、#27（Spine2 后仰 / 颈前倾 / 手指贴合）、#29（锁骨 0.955 已定价）、#35（用户拖 `Bip001 L Toe0` 的实测）、`foot_top` 被裙摆挡住不可用、`meta.tsv` 的 `has_sdef/has_qdef` 恒 0、**#72 前向骨在正视图读成一个点**（要 3/4 视角或只画胸骨）。**#71 已结案**（见第 29 条）：颈部特写的框现在也由导出侧量，`h × 0.55..0.98` 只剩「认不出颈链」时的兜底。
+7. **两张特写的框都归 `FRAMINGS` 之后，加第三张（手部/脚部）只许改数据不许改控制流**：`obj_run.FRAMINGS` + `export_obj` 的 `_chest_band`/`_neck_band` 同族函数 + `verdicts.SHOT_H_AXIS`（键集必须 == `SHOT_TIGHT_TAGS`）。手部/脚部那几张目前仍按节点算框（`hand 取景` / `foot_top 取景`），它们的尺是**场景里的 Biped 节点**而不是导出的骨，所以 `tight_h_*` 只有胸/颈 6 张参与判定 —— 要把脚部也纳入，得先在导出侧给脚链出一份 `{prefix}_bone_*`，别拿 Max 读回来的框当尺。
 
 建议顺序：`--no-skin --shot` 冒烟 → 完整 `--shot` → 读 `test_runs/*/shots/*.png` 与 `<模型名>_objrun.log`。
 

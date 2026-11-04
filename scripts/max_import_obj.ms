@@ -19,8 +19,8 @@
    读进来，缺文件、缺键、值不合法一律抛错中止，绝不退回默认值。
    MORPHS/PHYSICS/WIDTHS/SHOTDIR 允许是空串 = 该阶段整段跳过；LIMBS 及其余路径
    为空一律抛错（见 mmd2maxLoadCfg 的空路径校验，名单与 obj_run.py 的 CFG_EMPTY_OK 一致）。
-   另外 MMD2MAX_CHEST_{X,Y,Z}_{LO,HI} 是「允许空的数值键」（#70）：空串读成 undefined，
-   取景那一段自己决定退回什么 —— 与「写了个读不出来的数」分开，后者照抛。
+   另外 MMD2MAX_{CHEST,NECK}_{X,Y,Z}_{LO,HI} 是「允许空的数值键」（#70、#71）：空串读成
+   undefined，取景那一段自己决定退回什么 —— 与「写了个读不出来的数」分开，后者照抛。
    手跑（File ▸ Run Script 这份模板）与自动跑（生成的 mmd2max_run.ms 只注入
    MMD2MAX_CFG 一行）读到的是同一份配置，不可能分叉。
 
@@ -55,18 +55,27 @@ global MMD2MAX_SPINE_LINKS
 global MMD2MAX_FINGERS
 global MMD2MAX_FINGER_LINKS
 global MMD2MAX_FOOTBOXFLAT
-/* 胸部特写的取景框（#70）：导出侧按量出来的胸骨端点极值 + 网格高比例余量算好的六个绝对
-   坐标（三根轴各一对）。空串 = 这具模型认不出胸骨，下面读成 undefined，取景那一段退回
-   旧的场景包围盒 + 高度比例带。以前这里是本文件里的两件事：`b.min.z + h * 0.58 / 0.72`
-   （第 35 轮实测整只带比胸骨低 4cm，chest_front 里一根骨都没有）和「x/y 拿场景包围盒 ±10cm
-   凑」（第 36 轮实测框的前后中心被身后的裙摆拽到 y=+9.8，按宽高比收完只剩 y -0.4..20.0，
-   骨在 -11.75..-7.24 照样被裁出去）。账见 mmd2max/export_obj._chest_band。 */
+/* 特写的取景框（#70 胸、#71 颈）：导出侧按量出来的 subject 骨端点极值 + 网格高比例余量
+   算好的六个绝对坐标（三根轴各一对），两张特写各一组、形状一模一样。
+   空串 = 这具模型认不出那组骨，下面读成 undefined，取景那一段退回场景包围盒 + 高度比例带。
+   以前这里是本文件里的两件事，各坏过一轮：
+     · `b.min.z + h * 0.58 / 0.72`（胸）与 `h * 0.55 / 0.98`（颈）—— 分母是整场景高度，
+       量出来的却是带的位置：第 35 轮实测整只带比胸骨低 4cm，chest_front 里一根骨都没有。
+     · x/y 拿场景包围盒 ±10cm 凑 —— 第 36 轮补了 z 却漏了 x/y，换成侧视后框的前后中心被
+       身后的裙摆拽到 y=+9.8，收框只剩 y -0.4..20.0，骨在 -11.75..-7.24 照样被裁出去）。
+   账见 mmd2max/export_obj._chest_band 与 _neck_band（同一把尺：_framing_band）。 */
 global MMD2MAX_CHEST_X_LO
 global MMD2MAX_CHEST_X_HI
 global MMD2MAX_CHEST_Y_LO
 global MMD2MAX_CHEST_Y_HI
 global MMD2MAX_CHEST_Z_LO
 global MMD2MAX_CHEST_Z_HI
+global MMD2MAX_NECK_X_LO
+global MMD2MAX_NECK_X_HI
+global MMD2MAX_NECK_Y_LO
+global MMD2MAX_NECK_Y_HI
+global MMD2MAX_NECK_Z_LO
+global MMD2MAX_NECK_Z_HI
 /* 收敛循环的遍数上限。以前它是这一份脚本里的字面量 `for passNo = 1 to 3`，Python 侧
    只能用契约测试去钉一个自己看不见的数字；现在数值住在 mmd2max/passes.py 的注册表里，
    经 MMD2MAX.CFG 下发，校验器拿同一个数核对「报 ceiling 却只跑了两遍」这种自相矛盾。 */
@@ -461,19 +470,30 @@ fn mmd2maxComp p i =
     p.z
 )
 
-fn mmd2maxChestGiven =
+fn mmd2maxNumsGiven vals =
 (
-    /* CFG 有没有给全这只胸框：六个数都在才算给。缺一都当「没给」—— 让取景与摘要走同一条
+    /* CFG 有没有把这一组数都给出来：全都在才算给。缺一都当「没给」—— 让取景与摘要走同一条
        退回路径，比「用半只框」好：半只框（比如 z 是量的、y 是场景的）正是第 36 轮的形状，
        而那种框看起来是量出来的，日志里没人能看出来它缺一轴。
        写成遍历一个数组而不是六个 `and` 连成的长表达式：MAXScript 的换行是语句分隔符，
-       跨行布尔表达式要单独包括号才不误判（本文件里那句「不用行首 + 的跨行表达式」同理）。 */
+       跨行布尔表达式要单独包括号才不误判（本文件里那句「不用行首 + 的跨行表达式」同理）。
+       胸与颈共用这一条判据（#71）：两组框的键形状一模一样，各写一遍就会各坏一遍。 */
     local given = true
-    for v in #(MMD2MAX_CHEST_X_LO, MMD2MAX_CHEST_X_HI,
-               MMD2MAX_CHEST_Y_LO, MMD2MAX_CHEST_Y_HI,
-               MMD2MAX_CHEST_Z_LO, MMD2MAX_CHEST_Z_HI) do
-        if v == undefined do given = false
+    for v in vals do if v == undefined do given = false
     given
+)
+
+fn mmd2maxBoxSummary label vals =
+(
+    /* 一只特写的框进配置摘要长什么样：「 胸框=x-19.3..19.3 y-26.2..7.2 z96.6..114.4」，
+       或者「 颈框=无(退回场景包围盒带)」。
+       `无` 这一支必须写得出来：事后只看日志要能分辨「用的是量的框」和「用的是猜的带」，
+       而第 35、36 轮当时用的框都没框住骨，日志却是绿的。三个轴都写：只写 z 就看不出 y
+       有没有给全，而「缺一轴的半只框」正是第 36 轮的形状。 */
+    if not (mmd2maxNumsGiven vals) do return " " + label + "=无(退回场景包围盒带)"
+    " " + label + "=x" + (vals[1] as string) + ".." + (vals[4] as string) \
+        + " y" + (vals[2] as string) + ".." + (vals[5] as string) \
+        + " z" + (vals[3] as string) + ".." + (vals[6] as string)
 )
 
 fn mmd2maxAspectBox viewKind lo hi =
@@ -650,11 +670,12 @@ fn mmd2maxScreenshot =
            写成逗号是编译期语法错误（实测 -- Syntax error: at ,, expected <factor>）。 */
         local b = mmd2maxSceneBox()
         local h = b.max.z - b.min.z
-        /* 特写区域按包围盒高度取比例，换角色不用改：整场景一张图判不了细节 ——
+        /* 特写区域默认按包围盒高度取比例，换角色不用改：整场景一张图判不了细节 ——
            颈部落位（#17）与躯干倾角（#27）要看 0.55~0.98 这一段（从腰往上全覆盖，
            0.72 起框会把 Pelvis/Spine1 裁掉，用户说「Spine2 没后仰」时画面里没有它），
            Toe0 尺寸（#19）要看脚下 0~0.14 这一段。
-           侧视是硬性要求：挺胸、脚尖前后向、躯干后仰都只有侧面看得出来。 */
+           侧视是硬性要求：挺胸、脚尖前后向、躯干后仰都只有侧面看得出来。
+           下面这对只是**兜底**：CFG 给了颈部框（#71）就换成量出来的框，见 neck 取景那一段。 */
         local neckLo = [b.min.x - 10.0, b.min.y - 10.0, b.min.z + h * 0.55]
         local neckHi = [b.max.x + 10.0, b.max.y + 10.0, b.min.z + h * 0.98]
         local footLo = [b.min.x - 10.0, b.min.y - 10.0, b.min.z - 2.0]
@@ -769,9 +790,11 @@ fn mmd2maxScreenshot =
            收水平跨度那一步照旧交给 mmd2maxShotOneTight（#69），它现在也报收完之后的读数。 */
         local chestLo = [b.min.x - 10.0, b.min.y - 10.0, b.min.z + h * 0.58]
         local chestHi = [b.max.x + 10.0, b.max.y + 10.0, b.min.z + h * 0.72]
-        if (mmd2maxChestGiven()) then (
-            chestLo = [MMD2MAX_CHEST_X_LO, MMD2MAX_CHEST_Y_LO, MMD2MAX_CHEST_Z_LO]
-            chestHi = [MMD2MAX_CHEST_X_HI, MMD2MAX_CHEST_Y_HI, MMD2MAX_CHEST_Z_HI]
+        local chestVals = #(MMD2MAX_CHEST_X_LO, MMD2MAX_CHEST_Y_LO, MMD2MAX_CHEST_Z_LO,
+                            MMD2MAX_CHEST_X_HI, MMD2MAX_CHEST_Y_HI, MMD2MAX_CHEST_Z_HI)
+        if (mmd2maxNumsGiven chestVals) then (
+            chestLo = [chestVals[1], chestVals[2], chestVals[3]]
+            chestHi = [chestVals[4], chestVals[5], chestVals[6]]
         ) else (
             mmd2maxLog "chest 取景：CFG 没给全框（这具模型量不出胸骨），退回场景包围盒 + 高度比例带"
         )
@@ -785,6 +808,32 @@ fn mmd2maxScreenshot =
         mmd2maxReport "shot_rb" "chest_box_hi" "y" chestHi.y
         mmd2maxReport "shot_rb" "chest_box_lo" "z" chestLo.z
         mmd2maxReport "shot_rb" "chest_box_hi" "z" chestHi.z
+        /* 颈部特写（#71）：上面那对 neckLo/neckHi 是「场景高度 × 0.55~0.98」猜出来的带，
+           坏的是和胸部第 35 轮同一件事 —— 分母是整场景，量出来的却是颈链那三节骨。
+           现在框由导出侧按 `Bip001 Spine2 / Neck / Head` 三节的端点极值算，余量用与胸部
+           **同一对比例**（MMD2MAX_NECK_{X,Y,Z}_{LO,HI}，见 export_obj._neck_band）。
+           香菱实测：猜的带 z 77.3..137.7（60.4cm 高），量的框 z 92.1..137.0（44.8cm）——
+           上沿几乎没动（不新增裁头），下沿抬到锁骨以上，颈链整条在框内。
+           认不出颈链（这具模型没有映射到那三节的骨）时六个数没给全 → 保持猜的带：至少有图
+           可看，而那一轮的颈部 12 行退成 report，配置摘要与下面这句日志都写明「没给框」。
+           这一帧**不许**按骨名找颈链：PMX 的颈部名从「首」到 neck 都有，而「左手首 / 右足首」
+           同样含「首」字 —— 名字规则只住 Python 一处（export_obj._neck_band 按 **Biped 目标**
+           认），两处各认一遍必然分叉。 */
+        local neckVals = #(MMD2MAX_NECK_X_LO, MMD2MAX_NECK_Y_LO, MMD2MAX_NECK_Z_LO,
+                           MMD2MAX_NECK_X_HI, MMD2MAX_NECK_Y_HI, MMD2MAX_NECK_Z_HI)
+        if (mmd2maxNumsGiven neckVals) then (
+            neckLo = [neckVals[1], neckVals[2], neckVals[3]]
+            neckHi = [neckVals[4], neckVals[5], neckVals[6]]
+        ) else (
+            mmd2maxLog "neck 取景：CFG 没给全框（这具模型量不出颈链骨），退回场景包围盒 + 高度比例带"
+        )
+        mmd2maxLog ("neck 取景：框=" + ((neckLo as string)) + ".." + ((neckHi as string)))
+        mmd2maxReport "shot_rb" "neck_box_lo" "x" neckLo.x
+        mmd2maxReport "shot_rb" "neck_box_hi" "x" neckHi.x
+        mmd2maxReport "shot_rb" "neck_box_lo" "y" neckLo.y
+        mmd2maxReport "shot_rb" "neck_box_hi" "y" neckHi.y
+        mmd2maxReport "shot_rb" "neck_box_lo" "z" neckLo.z
+        mmd2maxReport "shot_rb" "neck_box_hi" "z" neckHi.z
         mmd2maxPrepareShot()
         try ( mmd2maxShotOne outDir baseName "front" #view_front b.min b.max ) catch ( mmd2maxLog ("front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "side" #view_left b.min b.max ) catch ( mmd2maxLog ("side 截图异常：" + (getCurrentException() as string)) )
@@ -1121,9 +1170,9 @@ fn mmd2maxLoadCfg =
     MMD2MAX_FINGERS = mmd2maxCfgInt "MMD2MAX_FINGERS" 1 5
     MMD2MAX_FINGER_LINKS = mmd2maxCfgInt "MMD2MAX_FINGER_LINKS" 1 3
     MMD2MAX_FOOTBOXFLAT = mmd2maxCfgBool "MMD2MAX_FOOTBOXFLAT"
-    /* 胸部特写的取景框（#70）：三根轴各一对，六个数。范围放到 ±100000：它们是**绝对坐标**，
-       单位跟着 scale 走（导出单位 = 厘米 × scale），这一层只能验「像不像一个数」；
-       「框到底罩不罩得住那两根骨」由 MMD2MAX.VERDICTS 用导出侧量的骨极值判，
+    /* 特写的取景框（#70 胸、#71 颈）：三根轴各一对，六个数一组。范围放到 ±100000：它们是
+       **绝对坐标**，单位跟着 scale 走（导出单位 = 厘米 × scale），这一层只能验「像不像一个数」；
+       「框到底罩不罩得住那几根骨」由 MMD2MAX.VERDICTS 用导出侧量的骨极值判，
        不写在这里（规则 II：Max 只报数）。 */
     MMD2MAX_CHEST_X_LO = mmd2maxCfgNumOpt "MMD2MAX_CHEST_X_LO" -100000.0 100000.0
     MMD2MAX_CHEST_X_HI = mmd2maxCfgNumOpt "MMD2MAX_CHEST_X_HI" -100000.0 100000.0
@@ -1131,6 +1180,12 @@ fn mmd2maxLoadCfg =
     MMD2MAX_CHEST_Y_HI = mmd2maxCfgNumOpt "MMD2MAX_CHEST_Y_HI" -100000.0 100000.0
     MMD2MAX_CHEST_Z_LO = mmd2maxCfgNumOpt "MMD2MAX_CHEST_Z_LO" -100000.0 100000.0
     MMD2MAX_CHEST_Z_HI = mmd2maxCfgNumOpt "MMD2MAX_CHEST_Z_HI" -100000.0 100000.0
+    MMD2MAX_NECK_X_LO = mmd2maxCfgNumOpt "MMD2MAX_NECK_X_LO" -100000.0 100000.0
+    MMD2MAX_NECK_X_HI = mmd2maxCfgNumOpt "MMD2MAX_NECK_X_HI" -100000.0 100000.0
+    MMD2MAX_NECK_Y_LO = mmd2maxCfgNumOpt "MMD2MAX_NECK_Y_LO" -100000.0 100000.0
+    MMD2MAX_NECK_Y_HI = mmd2maxCfgNumOpt "MMD2MAX_NECK_Y_HI" -100000.0 100000.0
+    MMD2MAX_NECK_Z_LO = mmd2maxCfgNumOpt "MMD2MAX_NECK_Z_LO" -100000.0 100000.0
+    MMD2MAX_NECK_Z_HI = mmd2maxCfgNumOpt "MMD2MAX_NECK_Z_HI" -100000.0 100000.0
     /* 收敛遍数上限：值来自 mmd2max/passes.py 的注册表（MMD2MAX_CONVERGE_MAX）。
        上限 9 是留给「真需要多跑两遍」的余量；下限 1：0 遍的循环根本不该存在，
        而撞上限这件事本身要能被校验器复现，所以这里必须是个可核对的整数。 */
@@ -1158,16 +1213,14 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 脊柱 " + (MMD2MAX_SPINE_LINKS as string)
     cfgMsg = cfgMsg + " 手指 " + (MMD2MAX_FINGERS as string) + "x" + (MMD2MAX_FINGER_LINKS as string)
     cfgMsg = cfgMsg + " 脚盒压平轴=" + (MMD2MAX_FOOTBOXFLAT as string)
-    /* 胸框进摘要：`无` 就是「这具模型量不出胸骨、特写退回场景包围盒 + 高度比例带」，
-       事后只看日志要能分辨这两条路（第 35、36 轮当时用的框都没框住骨，而日志是绿的）。
-       三个轴都写：只写 z 就看不出 y 有没有给全，而「缺一轴的半只框」正是第 36 轮的形状。 */
-    if (mmd2maxChestGiven()) then (
-        cfgMsg = cfgMsg + " 胸框=x" + (MMD2MAX_CHEST_X_LO as string) + ".." + (MMD2MAX_CHEST_X_HI as string)
-        cfgMsg = cfgMsg + " y" + (MMD2MAX_CHEST_Y_LO as string) + ".." + (MMD2MAX_CHEST_Y_HI as string)
-        cfgMsg = cfgMsg + " z" + (MMD2MAX_CHEST_Z_LO as string) + ".." + (MMD2MAX_CHEST_Z_HI as string)
-    ) else (
-        cfgMsg = cfgMsg + " 胸框=无(退回场景包围盒带)"
-    )
+    /* 两只特写的框都进摘要（#70 胸、#71 颈），文案由 mmd2maxBoxSummary 一处定：
+       「无」和「量的框」必须是两种看得出来的形状，见那条函数。 */
+    cfgMsg = cfgMsg + (mmd2maxBoxSummary "胸框" \
+        #(MMD2MAX_CHEST_X_LO, MMD2MAX_CHEST_Y_LO, MMD2MAX_CHEST_Z_LO,
+          MMD2MAX_CHEST_X_HI, MMD2MAX_CHEST_Y_HI, MMD2MAX_CHEST_Z_HI))
+    cfgMsg = cfgMsg + (mmd2maxBoxSummary "颈框" \
+        #(MMD2MAX_NECK_X_LO, MMD2MAX_NECK_Y_LO, MMD2MAX_NECK_Z_LO,
+          MMD2MAX_NECK_X_HI, MMD2MAX_NECK_Y_HI, MMD2MAX_NECK_Z_HI))
     cfgMsg = cfgMsg + " 蒙皮=" + (MMD2MAX_SKIN as string)
     cfgMsg = cfgMsg + " 方向容差=" + (MMD2MAX_DIRTOL as string)
     cfgMsg = cfgMsg + " 扭转容差=" + (MMD2MAX_ROLLTOL as string)
