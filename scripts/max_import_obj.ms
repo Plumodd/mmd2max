@@ -1813,6 +1813,48 @@ fn mmd2maxLenAxisOf nm =
     0
 )
 
+/* ===== 骨盒写在哪个轴上，是一次事实而不是每次现量（#75）=====
+   第 44 轮换模型冒烟（香菱-海灯节）撞出来的：同一根 Foot 在同一轮里被四处代码各判一次
+   长度轴 —— 肢段拟合（缩这根轴能把父→子距离改掉，操作定义）给 1，足背收截面给 2，
+   接趾给 1，最后的骨盒回读也给 1。足背那句「长度轴=2」意味着它把「高=8.7534」写在了
+   真正的长度轴上，而把 14.82 那根边当成长度留在原地没碰：脚盒于是成了一只横着伸出
+   14.82cm 的团块（两脚中心才 ±4.06，它一定盖住另一只脚），box_rb 的 7 行与脚链的
+   3 行全是这一件事的读数（三根边的数**全对**，只是贴错了轴名）。
+   香菱不显形纯属巧合：那具模型的脚骨在摆位前后长度轴恰好都是 2。
+   所以这里加一份账：写入侧（mmd2maxFitCrossSection）把「我沿哪根轴缩的」记下来，
+   回读侧（mmd2maxBoxDims）先认这份账。为什么不用 MMD2MAX_LENAXIS_MAP 直接当账：
+   那份只记「恰好一个子关节」的骨（Toe0 是叶子骨，进不去），而盒子写在哪儿这件事
+   与「转角该转哪根轴」是两个问题，混成一份账就会把 #28 的转角判据一起带跑。 */
+global MMD2MAX_BOXAXIS_MAP = #()
+
+fn mmd2maxBoxAxisOf nm =
+(
+    /* 查这根骨的盒子当初沿哪根轴写（1/2/3）；没记账 ⇒ 0 = 退回现场判据。 */
+    if nm == undefined do return 0
+    for e in MMD2MAX_BOXAXIS_MAP do
+    (
+        if e[1] == nm do return e[2]
+    )
+    0
+)
+
+fn mmd2maxRememberBoxAxis nm ax =
+(
+    /* 记一次；同一根骨再写就覆盖 —— 收敛循环里同一只盒子可能被缩两遍，后一遍才是终态。 */
+    if nm == undefined do return 0
+    if ax == 0 do return 0
+    for i = 1 to MMD2MAX_BOXAXIS_MAP.count do
+    (
+        if MMD2MAX_BOXAXIS_MAP[i][1] == nm do
+        (
+            MMD2MAX_BOXAXIS_MAP[i] = #(nm, ax)
+            return ax
+        )
+    )
+    append MMD2MAX_BOXAXIS_MAP #(nm, ax)
+    ax
+)
+
 fn mmd2maxLogStructDir label axes headPos want gotPos nodeNm =
 (
     /* 「结构方向」复核：PMX 每根骨自带 head 与 tail，骨头的**显示方向**就是
@@ -3056,6 +3098,12 @@ fn mmd2maxFitCrossSection node dir targetW targetH =
     local info = mmd2maxBipedAxis node dir
     if info == undefined do return undefined
     local ai = info[1]
+    /* #75：有肢段那笔操作账（缩它能把父→子距离改掉）就认账，没账才认现场方向；
+       认完把轴号记进盒账，最后的骨盒回读按同一笔账读 —— 否则写入与回读各自现场
+       重挑，中间隔着摆位与转角，同一只盒子会被贴到别的轴名上（第 44 轮的 10 行 FAIL）。 */
+    local want = mmd2maxLenAxisOf node.name
+    if want > 0 do ai = want
+    mmd2maxRememberBoxAxis node.name ai
     local other = #()
     for k = 1 to 3 do ( if k != ai do append other k )
     local oA = other[1]
@@ -3165,6 +3213,11 @@ fn mmd2maxBoxDims node dir =
     local info = mmd2maxBipedAxis node dir
     if info == undefined do return undefined
     local ai = info[1]
+    /* #75：先认盒账（写入那一刻沿哪根轴缩的就按哪根读），认不到才退回现场方向。
+       这一行是「数字全对、标签错位」唯一的解药：回读若自己重挑一根轴，量到的就是
+       别的轴的数，而 gate 会红在尺子上 —— 读者只会去改几何。 */
+    local pinned = mmd2maxBoxAxisOf node.name
+    if pinned > 0 do ai = pinned
     local wh = mmd2maxWidthHeightAxes node ai
     if wh == undefined do return undefined
     local wid = mmd2maxLocalExtent node wh[1]
