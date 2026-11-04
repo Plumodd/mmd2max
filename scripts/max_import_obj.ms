@@ -1001,6 +1001,11 @@ fn mmd2maxScreenshot =
            骨整个盖住，带网格那张顶多看出胸前有两个鼓包。 */
         try ( mmd2maxShotOneTight outDir baseName "bone_chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOneTight outDir baseName "bone_chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_side 截图异常：" + (getCurrentException() as string)) )
+        /* #73：「指向乳头」这句话里有两根轴 —— 向外（x）与前（−y），而正视图把 y 压成一条线、
+           侧视图把 x 压成一条线，两张各缺一半（第 33 轮那张侧视只能证「前」，胸骨在 x 上张开
+           成 80 度这件事在图上不存在）。顶视是唯一两根轴同时可见的一张；它原先拍不了不是因为
+           视口坏，而是框外的东西没藏掉 —— #72 之后才轮得到它。 */
+        try ( mmd2maxShotOneTight outDir baseName "bone_chest_top" #view_top chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_top 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxSetMeshHidden false ) catch ( mmd2maxLog ("显网格异常：" + (getCurrentException() as string)) )
         /* #66 的带网格版：乳头点在网格里，骨尖落到点上才算「指向乳头」。
            与上面 bone_chest_* 配对看 —— 只有一张时「骨在胸前」和「骨指着乳头」分不出来。 */
