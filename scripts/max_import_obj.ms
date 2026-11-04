@@ -343,6 +343,130 @@ fn mmd2maxSetMeshHidden flag =
     MMD2MAX_SHOTMESH.count
 )
 
+/* 这一张特写临时藏掉的骨，拍完原样还原（#72）。名单与 MMD2MAX_SHOTMESH 分开两份：
+   网格那套是**整段**共用的（「藏网格」= bone_* 那一组各张同一个开关），骨这套是每张自己的
+   —— 取景框不同，该藏的就不同，而还原必须按各自的名单来。 */
+global MMD2MAX_SHOTCLIP = #()
+
+fn mmd2maxBoxHit b lo hi =
+(
+    /* 一只 box3 与取景框有没有沾上：三根轴里任何一根整个错开就算没沾。
+       六次比较自己写，不调 `intersects`：本文件对「没在 Max 2022 里实测过的 API」一律不用
+       （mmd2maxZoomFit 那段记着 viewport.setViewport / setViewport 都是「按理该有」而实报
+       Unknown property 的），而这条一旦抛就被外层 catch 吞掉 —— 吞掉的后果是「一张没裁」，
+       图上看不出来，只有 clip_hidden 那条读数能看出来。 */
+    if b.max.x < lo.x or b.min.x > hi.x do return false
+    if b.max.y < lo.y or b.min.y > hi.y do return false
+    if b.max.z < lo.z or b.min.z > hi.z do return false
+    true
+)
+
+fn mmd2maxIsBoneNode o =
+(
+    /* 「这根节点是不是骨」= 两类类名，round41 的逐类计数定的：
+       - 附属骨（衣服/头发/裙摆）是 BoneGeometry，268 根；
+       - Biped 的骨盒是 Biped_Object，54 根（比 biped_map 的 53 行多 1 根没映射过的
+         Biped 节点，它在场景里就会进画面，所以也该裁）。
+       两条都是猜过来的：round39 只按 BoneGeometry 筛，foot_top 藏掉 268 根 = 附属骨总数，
+       画面正中那一大坨还是骨盆盒；round40 补上 `classOf o.controller == Biped_Control`
+       （本文件清探针残留那段用过的写法），分母**仍是 268** —— 那条一个都没认到。
+       round41 报出 `认定为骨=322`，而 322 = 268 + 54 恰好是两类类名之和，这就是「控制器
+       那条一个对象都没多认到」的算术证据，所以它删掉了。类名从哪来的：本文件自己的探针
+       记录（biped_taper.ms 那段）写着「Biped 链接节点的 classof = Biped_Object」。
+       漏掉 Biped 的后果不是「少藏几根」而是特写白拍：脚顶视那张画面正中还是骨盆盒。
+       以后再有模型认不到，看 clip_bones_total 那句逐类计数，别再往这里加没证据的第三条。 */
+    (classof o) == BoneGeometry or (classof o) == Biped_Object
+)
+
+fn mmd2maxBoneCensus =
+(
+    /* 场景里每一类节点各有几个 + 其中认定为骨的几个，拼成一串文本。
+       为什么要有这一串：上面那个 predicate 连着两轮按猜的类名筛（round39 猜 BoneGeometry、
+       round40 加控制器那条），每次都只留下一个光秃秃的数字 268 —— 而「268 根里附属骨和
+       Biped 都认到了」和「268 = 附属骨总数、Biped 一根没认到」是同一个读数。
+       有了 objects 总数与逐类计数，一轮就能看出：Biped 节点到底报什么类、它们在不在
+       `objects` 这个集合里（不在的话就得换遍历方式，而不是继续加类名）。
+       写进 clip_bones_total 那一行的读数列：它是 report 行，没有「该等于几」，装得下这段话，
+       也就不用为逐类计数新开支格表行。 */
+    local names = #()
+    local counts = #()
+    local total = 0
+    local objN = objects.count
+    for o in objects do
+    (
+        local nm = "?"
+        try ( nm = (classOf o) as string ) catch ( nm = "?" )
+        local idx = findItem names nm
+        if idx == 0 do ( append names nm; append counts 1 )
+        if idx > 0 do counts[idx] = counts[idx] + 1
+        if (mmd2maxIsBoneNode o) do total += 1
+    )
+    local msg = "objects=" + (objN as string) + " 认定为骨=" + (total as string)
+    for i = 1 to names.count do msg = msg + " " + names[i] + "=" + (counts[i] as string)
+    #(total, msg)
+)
+
+fn mmd2maxClipBones lo hi =
+(
+    /* 把**整根都不在取景框里**的骨临时藏掉，返回藏掉几根（#72）。
+       为什么必须裁：Max 的 zoom 只定视野、不裁深度。round38 的 bone_foot_top 就是证据 ——
+       取景框只到 z=19.7，可画面正中那一大坨是头骨（z≈130），四周一圈是手指与辫子，
+       两只鞋在画面下缘只剩几十像素；注释里那句「俯视那张已经判不了脚」就是这个形状。
+       用户要的「顶视看外八」从来拍不到，不是视口坏了，是**框外的东西没藏掉**。
+       判「在不在框里」用 pivot **或** bounds，两者都不沾才藏：
+       - 只看 pivot 会把「关节在框外、骨身伸进框」的骨藏掉（大腿根在髋、骨身到膝）；
+       - 只看 bounds 不可靠 —— mmd2maxSceneBox 的注释就写着 BoneGeometry 的 .bounds
+         可能是零尺寸，那种 bounds 落在哪全看运气。
+       只动骨（`mmd2maxIsBoneNode`：附属骨 + Biped 骨盒），**不动网格**：round41 的逐类计数
+       给了场景的真实形状 —— 397 个对象里网格是 62 个 Editable_mesh（身体 1 个 + 61 个
+       Morpher 目标，不是原先以为的「一个 Editable_Poly」），每一个的包围盒都盖住全身，
+       按对象裁网格等于什么都没裁 —— 带网格那几张仍然只能靠取景框本身，这是既成事实，
+       不是这一条没生效。
+       也只动**当前可见**的那些：本来就藏着的骨不进名单，还原时才不会把用户自己藏的东西
+       显示出来（同 mmd2maxRestoreShot 那条理由）。 */
+    local hidden = 0
+    MMD2MAX_SHOTCLIP = #()
+    for o in objects do
+    (
+        if (mmd2maxIsBoneNode o) do
+        (
+            local hit = false
+            local p = undefined
+            try ( p = o.transform.translationpart ) catch ( p = undefined )
+            if p != undefined do ( hit = mmd2maxBoxHit (box3 p p) lo hi )
+            if not hit do
+            (
+                local b = undefined
+                try ( b = o.bounds ) catch ( b = undefined )
+                if b != undefined do ( hit = mmd2maxBoxHit b lo hi )
+            )
+            if (not hit) and ((try ( o.isHidden ) catch ( true )) == false) do
+            (
+                /* 写回读：藏没藏上只有 Max 自己知道，而「一张没裁」在图上看不出来，
+                   只有 clip_hidden 这个数能看出来 —— 所以这个数必须是真藏成的根数。 */
+                try ( o.isHidden = true ) catch ()
+                if (try ( o.isHidden ) catch ( false )) do
+                (
+                    append MMD2MAX_SHOTCLIP o
+                    hidden += 1
+                )
+            )
+        )
+    )
+    hidden
+)
+
+fn mmd2maxUnclipBones =
+(
+    /* 只还原这一张藏掉的那些（名单为空时什么都不做，所以整场景那五张是原样）。 */
+    if MMD2MAX_SHOTCLIP.count == 0 do return 0
+    local n = MMD2MAX_SHOTCLIP.count
+    for o in MMD2MAX_SHOTCLIP do ( try ( o.isHidden = false ) catch () )
+    MMD2MAX_SHOTCLIP = #()
+    completeRedraw()
+    n
+)
+
 /* 截图前的视口整理：隐藏栅格、取消选择、叠一层网格三角边。
    上一版这里设的是节点级 `o.wire = true`，探针实测 Max 2022 根本没这个属性
    （Unknown property: "wire" in $Box:VBody），`o.seeThru` 同样不存在，
@@ -356,6 +480,16 @@ fn mmd2maxPrepareShot =
     try ( select #() ) catch ()
     MMD2MAX_SHOTMESH = mmd2maxShotMeshes()
     MMD2MAX_SHOTFILL = #()
+    /* 场景里一共有几根「骨」—— 裁骨的分母，只报一次。
+       为什么要有这一行：`clip_hidden` 单独看会骗人。round39 实测 foot_top 藏掉 268 根，
+       而 268 恰好等于附属骨总数 —— 没有分母，「藏了 268 根」和「整副骨架 321 根里只藏了
+       268 根（Biped 一根没动）」是同一个读数。有了分母，`321 - 268 = 53` 就是那 53 根
+       Biped 骨盒还留在画面里，一眼能看出来漏在哪一类。
+       round41 起这一行带的不再只是数字，而是 mmd2maxBoneCensus 那句逐类计数 —— 分母只能
+       说「认少了」，逐类计数才说得出「少的是哪一类、它在不在 objects 里」。 */
+    local census = mmd2maxBoneCensus()
+    mmd2maxReport "shot_rb" "clip_bones_total" "-" census[2]
+    mmd2maxLog ("截图裁骨分类：" + census[2])
     try ( viewport.SetShowEdgeFaces true )
     catch ( mmd2maxLog ("EdgeFaces 开关失败：" + (getCurrentException() as string)) )
     completeRedraw()
@@ -368,6 +502,10 @@ fn mmd2maxRestoreShot =
        会把用户本来就藏着的对象一并显示出来。 */
     for o in MMD2MAX_SHOTMESH do ( try ( o.isHidden = false ) catch () )
     MMD2MAX_SHOTMESH = #()
+    /* 兜底再还原一次裁掉的骨（#72）：每张 ShotOne 自己会还，但那张包在外层 try 里 ——
+       中途抛异常时名单还挂着，下一张就拍在「上一张的骨是藏的」这个现场上。
+       名单空的时候这条什么都不做，所以它不是「再藏一遍的反面」，只是收尸。 */
+    mmd2maxUnclipBones()
     try ( viewport.SetShowEdgeFaces false ) catch ()
     completeRedraw()
     true
@@ -550,7 +688,11 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
     local shotFile = outDir + "\\" + baseName + "_" + tag + ".png"
     mmd2maxLog ("截图开始 " + tag + " -> " + shotFile)
     /* 这里的 lo/hi 就是「这一张要取景的那只框」：要收紧的带由 mmd2maxShotOneTight
-       在**调进来之前**收好，所以取景与填充率天然量同一只框，中间没有任何改框的机会。 */
+       在**调进来之前**收好，所以取景与填充率天然量同一只框，中间没有任何改框的机会。
+       裁骨也吃同一只框（#72）：收完之后的水平跨度才是画面上真正的边界，按收之前的框
+       裁会留下「被收掉的那半边」里的骨 —— 它们根本不在画面上，却照样占着名单。 */
+    local clipN = mmd2maxClipBones lo hi
+    mmd2maxReport "shot_rb" "clip_hidden" tag clipN
     mmd2maxFitView viewKind lo hi
     /* 填充率排在取图之前：取景是这一段自己的事，DIB 取不到也得留下这一行 ——
        否则「视口坏了」会伪装成「这段没跑」（when=if_present 就把它跳过了）。 */
@@ -579,6 +721,10 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
         completeRedraw()
         try ( bmp = gw.getViewportDib() ) catch ()
     )
+    /* 还原排在**取图之后、落盘之前**：DIB 已经在手里，藏没藏回都不影响这张图，
+       而这一段两条出口（取图为空 / 正常）都必须走过还原 —— 排在分支之前只写一次，
+       排在分支之后就要写两遍，漏一遍下一张就带着上一张的隐藏名单。 */
+    mmd2maxUnclipBones()
     if bmp == undefined then
     (
         mmd2maxLog ("截图取图为空（视口不可用）：" + shotFile)

@@ -540,6 +540,15 @@ SHOT_MIN_FILL_PCT = 45.0
 # 「该占多少」没有物理理由，拿它当尺就是装饰。
 SHOT_MIN_FILL_FLOOR = 0.0
 
+# 取景框 = 整场景包围盒的那几张（.ms 里传的是 `b.min b.max`）。这一组的 `clip_hidden`
+# 必须是 0，而且是**构造性**的 0：mmd2maxSceneBox 就是所有对象的 pivot ∪ bounds 的并，
+# 所以没有一根骨能整个落在它外面。反过来，其余每一张都只框住身体的一截，框外必然有骨
+# （俯视那几张最典型：头骨、手指、辫子全在框外），所以期望是「至少藏掉一根」。
+# 为什么给这个数建判据：#72 的裁骨要是悄悄失效（`isHidden` 抛、类名判断写错、名单没还），
+# 图上只是「又糊成一片」，跟以前一模一样，没人看得出来。这两条方向相反的 kind 让它变成
+# 一个读数：特写报 0 = 裁骨没跑；全身报 >0 = 取景框被谁改小了。
+SHOT_SCENE_TAGS: tuple[str, ...] = ("front", "side", "top", "bone_front", "bone_side")
+
 # 取景框的三根轴（与导出侧的 mmd2max.export_obj.FRAMING_AXES、tools/obj_run.FRAMING_AXES
 # 同一套词）。胸与颈共用这一套，因为两张特写的行形状完全一样：三轴各一对框 + 一对紧边。
 FRAMING_AXES = ("x", "y", "z")
@@ -555,7 +564,7 @@ SHOT_H_AXIS: dict[str, str] = {
 
 def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None,
                    neck_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
-    """截图取景的规格行：每张图一行填充率 + 两条聚合计数 + 两张特写的「罩得住」判据。
+    """截图取景的规格行：每张图一行填充率 + 一行裁骨数 + 两条聚合计数 + 两张特写的「罩得住」判据。
 
     `when` 全是 `if_present`：截图段只在 `MMD2MAX_SHOT` 打开时跑，而且它排在保存与成功
     标记之后 —— 那段坏了不该把已经落盘的 .max 判成失败，但它一旦跑了，行数与填充率
@@ -569,7 +578,24 @@ def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None,
         floor = SHOT_MIN_FILL_PCT if tag in SHOT_TIGHT_TAGS else SHOT_MIN_FILL_FLOOR
         rows.append(row("shot_rb", "fill_pct", tag, floor, 0, "min",
                         when="if_present"))
+    for tag in SHOT_TAGS:
+        if tag in SHOT_SCENE_TAGS:
+            rows.append(row("shot_rb", "clip_hidden", tag, 0, 0, "max",
+                            when="if_present"))
+        else:
+            rows.append(row("shot_rb", "clip_hidden", tag, 1, 0, "min",
+                            when="if_present"))
     rows.append(row("shot_rb", "tags", GLOBAL, len(SHOT_TAGS), 0, "gate",
+                    when="if_present"))
+    # 裁骨的分母（场景里有几根「骨」）。这一行是 report 不是 gate：拿它当闸就是猜
+    # 「Biped 到底建了几根节点」，而那个数没有独立的真值源。它的用处是让 clip_hidden 能被
+    # 读对 —— round39 实测 foot_top 藏掉 268 根，268 恰好等于附属骨总数，没有分母的话
+    # 「藏了 268 根」与「321 根里只藏了附属骨那 268 根（53 根 Biped 骨盒一根没动）」
+    # 是同一个读数。
+    # round41 起 .ms 在这一格写的不再是一个数，而是逐类计数（objects 总数 + 每类几个 +
+    # 认定为骨几个）：round40 证明光有分母只能说「认少了 53 根」，说不出**漏的是哪一类**，
+    # 而那才是这一轮真正卡住的地方。report 行没有 expected，装得下这句话，不用新开支。
+    rows.append(row("shot_rb", "clip_bones_total", GLOBAL, None, 0, "report",
                     when="if_present"))
     rows.append(row("shot_rb", "projection_fail", GLOBAL, 0, 0, "gate",
                     when="if_present"))
