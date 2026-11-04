@@ -181,6 +181,9 @@ class App(tk.Tk):
         self.mode_var = tk.StringVar(value="useful")
         self.accessory_var = tk.StringVar(value="nearest")
         self.min_weight_var = tk.StringVar(value="0.0")
+        # 「保留辅助骨骼」：默认勾上 = 与历轮基线逐字相同。取消勾选就丢掉
+        # 什么都不干的骨（センター2 / WeaponL·R / 十根指先 …），见 semantic.guide_bone_indices
+        self.keep_guides_var = tk.BooleanVar(value=True)
         self.height_var = tk.StringVar(value="160")
         self.auto_scale_var = tk.BooleanVar(value=True)
         self.scale_var = tk.StringVar(value="8.0")
@@ -662,6 +665,17 @@ class App(tk.Tk):
         spin.bind("<FocusOut>", self._changed)
 
         row += 1
+        ttk.Checkbutton(panel, text="保留辅助骨骼（什么都不干的骨：センター2 / WeaponL·R / 指先…）",
+                        variable=self.keep_guides_var,
+                        command=self._changed).grid(row=row, column=0, columnspan=2,
+                                                    sticky="w", pady=(8, 0))
+        row += 1
+        ttk.Label(panel, text="取消勾选 → 这批骨不进场景，视口和运动列表立刻清爽；"
+                              "蒙皮权重、刚体、Biped 都不受影响（它们本来就没绑东西）。",
+                  wraplength=300, foreground="#666").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+
+        row += 1
         ttk.Checkbutton(panel, text="按目标身高自动算 scale",
                         variable=self.auto_scale_var,
                         command=self._changed).grid(row=row, column=0, sticky="w",
@@ -749,7 +763,8 @@ class App(tk.Tk):
         return {"scale": scale, "min_weight": min_weight,
                 "humanoid_only": mode == "humanoid",
                 "filter_useless": mode != "full",
-                "accessory_parent": self.accessory_var.get()}
+                "accessory_parent": self.accessory_var.get(),
+                "keep_guides": self.keep_guides_var.get()}
 
     def _source(self) -> Path | None:
         raw = self.path_var.get().strip()

@@ -26,9 +26,12 @@
     full      保留全部骨骼
     humanoid  只保留标准人形骨骼，非人形骨权重归并到最近保留祖先
     （humanoid 模式下若某顶点无法映射，则按空间最近的标准骨兜底，绝不输出空权重）
+    keep_guides=False（= CLI 的 --drop-guides）：在以上任一模式里再丢掉
+    「既不是 Biped 目标、又没蒙皮、又没挂刚体、也不是 IK」的纯辅助骨
+    （见 semantic.guide_bone_indices）。默认 True，保持历轮基线不变。
 
 用法: python -m mmd2max.export_obj <input.pmx> <outdir> [scale] [min_weight]
-      [humanoid|full] [accessory_parent]
+      [humanoid|full] [accessory_parent] [--drop-guides]
 """
 from __future__ import annotations
 
@@ -1562,6 +1565,7 @@ class Plan:
     humanoid_only: bool
     filter_useless: bool
     accessory_parent: str
+    keep_guides: bool = True
 
     # ---- 网格 ----
     positions: list = field(default_factory=list)
@@ -1624,10 +1628,11 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
                humanoid_only: bool = False, filter_useless: bool = True,
                max_skin_bones: int | None = None,
                accessory_parent: str = "nearest",
-               model=None) -> Plan:
+               keep_guides: bool = True, model=None) -> Plan:
     """把参数换算成 Plan。除读 PMX 外不产生任何副作用。
 
     model：已解析的 PMXModel，GUI 反复调参时传进来，省掉每次重新解析（大模型 ~2MB）。
+    keep_guides：False 时丢掉「什么都不干的辅助骨」（见 semantic.guide_bone_indices）。
     计算顺序与旧版 export() 逐段一致：heads/tails 会被原地修正，顺序换了就对不上。
     """
     if model is None:
@@ -1635,7 +1640,7 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
 
     plan = Plan(source=source, model=model, scale=scale, min_weight=min_weight,
                 humanoid_only=humanoid_only, filter_useless=filter_useless,
-                accessory_parent=accessory_parent)
+                accessory_parent=accessory_parent, keep_guides=keep_guides)
     warnings = plan.warnings
     warnings.extend(model.warnings)
     if "SDEF" in model.deform_types or "QDEF" in model.deform_types:
@@ -1668,6 +1673,17 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
                           "它们与 Biped Toe0 重叠在鞋头里；权重/刚体归并到 つま先、足首")
 
     # ---- 选择保留的骨架骨骼（并剔除无用骨 / 归并权重）----
+    # 「辅助骨骼」开关：默认 True = 行为与历轮基线逐字相同。关掉它只丢
+    # semantic.guide_bone_indices 判出来的那批骨（既无 Biped 目标、又无蒙皮权重、
+    # 又无刚体引用、又不是 IK），权重照样经 _remap_humanoid 归到保留祖先。
+    guides = set()
+    if not keep_guides:
+        guides = semantic.guide_bone_indices(model, biped_mapping)
+        if guides:
+            dropped_torso |= guides
+            names = "、".join(model.bones[i].name for i in sorted(guides)[:12])
+            plan.notes.append(f"  辅助骨骼：{len(guides)} 根已丢弃（开关关闭），"
+                              f"如 {names}；权重归并到保留祖先")
     roles = None
     if humanoid_only:
         skeleton = _humanoid_skeleton(model, scale, biped_mapping, dropped_torso)
@@ -1690,11 +1706,19 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         plan.notes.append(f"  有效骨架：{len(kept)} / 原 {len(model.bones)} 根"
                           f"（剔除 control={n_control} morph={n_morph}）")
     else:
-        bone_names = [b.name for b in model.bones]
-        kept = list(range(len(bone_names)))
+        # 「保留全部骨骼」模式：连 control/morph/同坐标躯干骨都不丢，所以这里只减
+        # 辅助骨，绝不把 dropped_torso 整套搬进来（那会把这个模式已经定价的行为改掉，
+        # 基线里 humanoid/full 的骨数就差好几根）。
+        # 但一旦真丢了骨，权重里就会出现已经不存在的骨序号 —— 必须和上面两条走同一条
+        # 归并路径，不能假设 old_to_new 是恒等映射。
+        kept = [i for i in range(len(model.bones)) if i not in guides]
         kept, old_to_new, parents, heads, tails = _build_skeleton_from_kept(
             model, scale, kept, biped_mapping)
         kept_set = set(kept)
+        bone_names = [model.bones[i].name for i in kept]
+        if guides:
+            deform = _remap_humanoid(deform, positions, model, kept_set, old_to_new,
+                                     heads, scale)
 
     # 眼部 tip 骨（目先/瞳）的 tail 在 MMD 里指得很远，画出来像长箭头；压短它
     _clamp_tip_bone_lengths(bone_names, parents, heads, tails)
@@ -2063,9 +2087,12 @@ def auto_scale(source: Path, target_cm: float = 160.0, model=None) -> float:
 
 
 def main(argv: list[str]) -> int:
+    # --drop-guides 是开关而不是位置参数：插在任意位置都生效，免得为它重排 5~7 号槽
+    keep_guides = "--drop-guides" not in argv
+    argv = [a for a in argv if a != "--drop-guides"]
     if len(argv) < 3:
         print("用法: python -m mmd2max.export_obj <input.pmx> <outdir> "
-              "[scale|auto] [min_weight] [humanoid|full]")
+              "[scale|auto] [min_weight] [humanoid|full] [--drop-guides]")
         return 1
     source = Path(argv[1])
     outdir = Path(argv[2])
@@ -2090,7 +2117,8 @@ def main(argv: list[str]) -> int:
         accessory = "nearest"
     info = export(source, outdir, build_plan(
         source, scale, min_weight, humanoid_only=humanoid_only,
-        filter_useless=filter_useless, accessory_parent=accessory))
+        filter_useless=filter_useless, accessory_parent=accessory,
+        keep_guides=keep_guides))
     for key in ("obj", "bones", "weights", "morphs", "physics"):
         print(f"  {key}: {info[key]}")
     print(f"  顶点 {info['vertex_count']}  三角面 {info['face_count']}  "

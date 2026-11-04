@@ -3,6 +3,7 @@
 用法：
     python tools/run_model.py "C:/Users/Administrator/Desktop/test3"
     python tools/run_model.py "D:/models/xxx" --height 160 --min-weight 0
+    python tools/run_model.py "D:/models/xxx" --drop-guides   # 不导出辅助骨骼
 
 它做四件事：
   1. 在给定目录里找 .pmx / .pmd（多个时报错让你指定）；
@@ -88,6 +89,9 @@ def main(argv: list[str]) -> int:
     folder = Path(args[0]).resolve()
     height = 160.0
     min_weight = 0.0
+    # --drop-guides：不导出「什么都不干的辅助骨」（センター2 / WeaponL·R / 十根指先…）。
+    # 默认不传 = 保持历轮行为，基线数字不变。
+    drop_guides = "--drop-guides" in argv
     for i, item in enumerate(argv):
         if item == "--height" and i + 1 < len(argv):
             height = float(argv[i + 1])
@@ -99,8 +103,10 @@ def main(argv: list[str]) -> int:
     # 目录交给 export() 自己建：在这里先 mkdir 会在 auto_scale/export 抛错时
     # 留下一堆空目录，看起来像「跑过了」。
     scale = export_obj.auto_scale(pmx, target_cm=height)
-    print(f"[1/3] 导出：{pmx.name}  scale={scale}（目标身高 {height}cm）")
-    plan = export_obj.build_plan(pmx, scale=scale, min_weight=min_weight)
+    print(f"[1/3] 导出：{pmx.name}  scale={scale}（目标身高 {height}cm）"
+          + ("　[--drop-guides] 辅助骨骼不导出" if drop_guides else ""))
+    plan = export_obj.build_plan(pmx, scale=scale, min_weight=min_weight,
+                                 keep_guides=not drop_guides)
     info = export_obj.export(pmx, outdir, plan)
     print(f"      顶点 {info['vertex_count']}  面 {info['face_count']}  "
           f"骨骼 {info['bone_count']} -> {info['kept_bone_count']}")

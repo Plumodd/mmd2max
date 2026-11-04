@@ -675,6 +675,53 @@ def dropped_toe_ex_indices(model) -> set:
     return dropped
 
 
+def guide_bone_indices(model, biped_mapping: dict | None = None) -> set:
+    """「纯辅助骨骼」的原始骨序号 —— MMD 里用来摆位/撑形状、导出后什么都不干的骨。
+
+    用户 2026-11-03 点名要能一键关掉它们：「可以加一个按钮开启或者关闭保留这些辅助
+    骨骼（センター2 WeaponR 右親指先 右小指先 右人指先 等，左边的也一样）」。
+    它们在 Max 里就是一堆没人会去动的 Bone gizmo，把视口和运动列表挤满。
+
+    判据（probes/breast_axis_probe.py 在香菱 356 根骨上实测：可丢 63 / 保留 293）：
+    **四者皆无**才算辅助骨 ——
+      1) 不是 Biped 目标（否则它是被自动骨架接管的关节）；
+      2) 没有任何蒙皮权重（否则删了要丢顶点权重）；
+      3) 没被刚体/关节引用（否则物理代理会悬空）；
+      4) 不是 IK 骨（flags & 0x0020；IK 骨由 control 角色另行剔除，这里只是不重复判）。
+
+    实测落在这条判据两边的东西都对：丢掉的正好是 センター2、WeaponL/R、十根指先、
+    操作中心、全ての親、グルーブ、肩P/肩C、両目、腰キャンセルL/R、足補、足IK親
+    以及第二层布料链的末端；保留的有 センター（Biped 目标）和 左胸/右胸
+    （蒙皮权重 23.5 / 21.2）。
+
+    为什么不用 PMX 的「非显示」标志位（flags & 0x0008）：量过了，香菱有 291 根
+    被标隐藏、65 根显示，且和用户点名的那批**对不上** —— 那是 MMD 视口的显示偏好，
+    不是「这根骨有没有用」。
+    """
+    weights: dict = {}
+    for vertex in model.vertices:
+        for index, weight in vertex.weights:
+            if weight > 0.0:
+                weights[index] = weights.get(index, 0.0) + weight
+    physics_bones = {rb.bone_index for rb in model.rigid_bodies}
+    for joint in model.joints:
+        for rb_index in (joint.rigid_a, joint.rigid_b):
+            if 0 <= rb_index < len(model.rigid_bodies):
+                physics_bones.add(model.rigid_bodies[rb_index].bone_index)
+    guides = set()
+    for i, bone in enumerate(model.bones):
+        if biped_mapping and biped_mapping.get(i):
+            continue
+        if weights.get(i, 0.0) > 0.0:
+            continue
+        if i in physics_bones:
+            continue
+        if bone.flags & 0x0020:
+            continue
+        guides.add(i)
+    return guides
+
+
 def _dedupe_torso_chain(model, matched: dict, mapping: dict) -> dict:
     """把「同一坐标上的多根躯干骨」压缩成一级，避免 Biped 骨重叠。
 
