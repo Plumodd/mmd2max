@@ -45,7 +45,7 @@ from typing import NamedTuple
 from mmd2max.pmx import PMXError, load_pmx
 from mmd2max import semantic
 from mmd2max.coords import (convert_vec, max_delta as coords_max_delta, obj_delta as coords_obj_delta,
-                            obj_vec)
+                            obj_vec, rigid_rotation_max)
 
 
 def fmt(value: float) -> str:
@@ -1528,7 +1528,8 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
     """生成刚体 & 关节数据行，供 Max 端构建物理代理（MassFX / 约束）。
 
     刚体引用的 PMX 骨序号会被换算成导出后的新序号（找不到则 -1，挂场景根）。
-    位置按坐标变换；旋转保留原始 MMD 弧度欧拉（Max 端需经坐标基变换，见脚本注释）。
+    位置按坐标变换；旋转**同时**给出原始 MMD 弧度欧拉（`rigid_rot_*`，只作诊断）
+    与 Max 节点可直接写的度数（`rigid_rot_max_*`，见 coords.rigid_rotation_max）。
 
     尺寸必须和位置用同一个 scale：PMX 的长度单位与坐标单位相同，早期版本只给位置
     乘了 scale、尺寸没乘，导致刚体代理相对骨架大 1/scale 倍（scale=0.08 时大 12.5 倍）。
@@ -1547,6 +1548,7 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
             "rigid_size_x", "rigid_size_y", "rigid_size_z",
             "rigid_pos_x", "rigid_pos_y", "rigid_pos_z",
             "rigid_rot_x", "rigid_rot_y", "rigid_rot_z",
+            "rigid_rot_max_x", "rigid_rot_max_y", "rigid_rot_max_z",
             "rigid_mass", "rigid_move_damping", "rigid_rotation_damping",
             "rigid_repulsion", "rigid_friction", "rigid_physics_mode")
     joint_cols = ("joint_index", "joint_name", "joint_type",
@@ -1566,6 +1568,9 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
         # 尺寸与位置必须用同一 scale（早期版本漏乘，代理会比骨架大 1/scale 倍）
         sx, sy, sz = (rb.size[0] * scale, rb.size[1] * scale, rb.size[2] * scale)
         rx, ry, rz = rb.rotation
+        # Max 端只负责把三个**度数**写进 `node.rotation`；手性共轭与节点口径
+        # 反转全在 coords.rigid_rotation_max 里算（那里的注释记了两条实测依据）。
+        mx, my, mz = rigid_rotation_max(rb.rotation)
         lines.append(
             "RIGID\t" + "\t".join([
                 str(ri), rb.name, rb.name_en, str(bone_new),
@@ -1573,6 +1578,7 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
                 fmt(sx), fmt(sy), fmt(sz),
                 fmt(px), fmt(py), fmt(pz),
                 fmt(rx), fmt(ry), fmt(rz),
+                fmt(mx), fmt(my), fmt(mz),
                 fmt(rb.mass), fmt(rb.move_damping), fmt(rb.rotation_damping),
                 fmt(rb.repulsion), fmt(rb.friction), str(rb.physics_mode),
             ]))

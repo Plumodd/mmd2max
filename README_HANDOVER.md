@@ -32,11 +32,11 @@ v3 改成 det=−1，于是：
 
 | 位置 | 改动 |
 | --- | --- |
-| `mmd2max/coords.py`（新增） | 坐标/手性的**唯一事实来源**：`convert_vec`（Z-up 数据）、`obj_vec`（OBJ 文本）、`obj_delta`/`max_delta`/`horizontal`、`determinant()`、`max_from_obj()` |
+| `mmd2max/coords.py`（新增） | 坐标/手性/旋转的**唯一事实来源**：`convert_vec`（Z-up 数据）、`obj_vec`（OBJ 文本）、`obj_delta`/`max_delta`/`horizontal`、`determinant()`、`max_from_obj()`；#88 起再加 `rotation_matrix_pmx` 与 `rigid_rotation_max`（PMX 弧度欧拉 → 直接写给 `node.rotation` 的**度数**） |
 | OBJ 数值 | 写 `(x, y, −z)`。Max 2022 的 OBJ 导入器把 Y-up `(a,b,c)` 变成 Z-up `(a,−c,b)`，两者复合后网格正好落在 `convert_vec` 上 —— 所以 **MaxScript 里不再有任何补偿旋转**，第三方工具打开 OBJ 看到的也不是镜像 |
 | 三角面 | 绕序**恒定**翻转一次（`_worker_faces` 不再看开关；PMX 正面是顺时针） |
 | `semantic.py` | `_lr_is_mirrored` 降级为「自检哨兵」：正确手性下应当永远返回 False；`measure_forward` 改用 `coords.horizontal` |
-| `max_import_obj.ms` | 删掉 180° 网格旋转块；`mmd2maxCoordMatrix` 改成 `[1,0,0][0,0,1][0,1,0]`（det=−1，必须和 `coords.py` 一致）；`mmd2maxRotToMax` 的共轭 `M*R*Mᵀ` 对镜像正交阵仍成立 |
+| `max_import_obj.ms` | 删掉 180° 网格旋转块；几何映射的单一来源改成 `coords.py`（**#88 起 `mmd2maxCoordMatrix` / `mmd2maxRotToMax` 两个函数已删**：`transpose <matrix3>`、`<Angle4>.order = #xyz` 在本机 Max 2022 实测抛错，刚体朝向改由 Python 供度数，见下节） |
 | `tests/make_sample.py` | 修正样本骨骼：MMD 角色朝 −Z，所以 `左つま先` 必须在 **z=−1**（v2 样本写 +1 = 脚尖朝后，导致新自检误报「左右反了」） |
 | `tests/test_coordinate.py` | 重写：up→+Z、朝向→−Y、**+X（角色自身左）不被镜像**、det=−1、`max_from_obj(obj_vec(v)) == convert_vec(v)` |
 
@@ -136,7 +136,7 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 | `<名>_limbs.tsv` | `parent_target child_target desired_len mmd_parent mmd_child child_x child_y child_z mode` + 仅 `mode=foot` 行才有的 9 列 `foot_len toe_len tip_x tip_y tip_z toe_w toe_h foot_w foot_h`（脚段多给的列，是 Max 端闭环缩放的唯一事实来源） |
 | `<名>_widths.tsv` | `biped_target width` —— Biped 默认手指比网格粗得多，按此收缩横截面 |
 | `<名>_morphs.tsv` | `row_kind morph_index morph_name morph_name_en morph_panel morph_type item_count_or_flag`，`@V vertex_index offset_x offset_y offset_z` 为其顶点明细 |
-| `<名>_physics.tsv` | `row_kind rigid_index rigid_name rigid_name_en rigid_bone rigid_group rigid_nocollide_mask rigid_shape rigid_size_* rigid_pos_* rigid_rot_* rigid_mass rigid_move_damping rigid_rotation_damping rigid_repulsion rigid_friction rigid_physics_mode`，`@JOINT joint_*` 为关节明细；尺寸与位置同 `scale`；骨序号已映射到保留骨 |
+| `<名>_physics.tsv` | `row_kind rigid_index rigid_name rigid_name_en rigid_bone rigid_group rigid_nocollide_mask rigid_shape rigid_size_* rigid_pos_* rigid_rot_* rigid_rot_max_* rigid_mass rigid_move_damping rigid_rotation_damping rigid_repulsion rigid_friction rigid_physics_mode`，`@JOINT joint_*` 为关节明细；尺寸与位置同 `scale`；骨序号已映射到保留骨；`rigid_rot_*` 是 PMX 原始**弧度**（只留档、不参与装配），`rigid_rot_max_*` 是 `coords.rigid_rotation_max` 算好的 Max **度数**，MAXScript 只写后者（#88） |
 | `<名>_meta.tsv` | `key value` 两列：`scale has_sdef has_qdef filter_useless spine_links fingers finger_links kept_bones role_* morph_count rigid_count joint_count vertex_count dropped_verts foot_box_flat` —— 装配侧只取 `spine_links fingers finger_links foot_box_flat` 四个键，写进 `MMD2MAX.CFG`；**缺任一个键 = 直接中止**（不接受默认值，见 §4b） |
 
 判据的三张表（M2b/M2c，同在 `test_runs/<模型名>/`，ASCII 定名、不带模型前缀）：
@@ -855,7 +855,8 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       **同时否掉一条把我拦住两轮的猜测**：「藏 `Biped_Object` 会不会连带把整副骨抹掉」——
       `香菱_bone_front.png`（整场景、`clip_hidden=0`）与脚部特写里框内的骨盒都还在 ⇒ Max 的 `isHidden`
       不沿父子传播，这一条以后不用再担心。
-    - **静态与测试**：`check_ms [OK]`（非严格债 66 条）、`Ran 611 tests OK (skipped=2)`（606 → +5：
+    - **静态与测试**：`check_ms [OK]`（非严格债 66 条 —— 这是当时的数，#81 已清到 0
+      并把 `--strict` 删掉成默认拦路，见第 38 条）、`Ran 611 tests OK (skipped=2)`（606 → +5：
       `ShotClippingContract` 五条 —— 谓词只有一条规则且两条腿都是实测来的、裁剪只认这把尺、
       计数排在写回读之后、还原只用这一张的名单、裁/报/还三件事在 `ShotOne` 里的先后次序、
       Python 的 5 张整场景名单与 `.ms` 的 `b.min b.max` 调用点同源）。谓词那条现在钉的是
@@ -1087,7 +1088,7 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       ⇒ 39 行差异全是 `段校验` 那几行多出来的 `父scale=` 字段（诊断，不改几何）。**诚实的一条**：
       `父scale=` 这一栏正是它把「残余是 pivot 落位、不是 scale」这件事读出来的 —— `scale.x` 与
       limbs 目标逐字相等，所以别再把这 0.0562 记在缩放头上。套件 627 条 OK（skip 2），
-      `check_ms.py` 仍 66 条非阻塞结构债。
+      `check_ms.py` 仍 66 条非阻塞结构债（当时的数；#81 清到 0，见第 38 条）。
 
 37. **#56 收尾：坏配置必须中止 + 删两份「写了没人读」的东西（2026-11-04 15:10~15:23
     第六十一轮，香菱 `--shot`，退出码 0，`.max` 落盘，无弹窗：529 PASS / 0 FAIL / 22 SKIP）**
@@ -1127,6 +1128,167 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       （`bones 321 / limbs 39 / meta 41 / weights 18892 / widths 12`），第 61 轮与冻结的
       第 56 轮 `tools/diff_round.py` 归一后 502 行**无实质差异**。套件 627 → **634** 条 OK（skip 2）。
 
+38. **#81~#92 一整串：空 catch 债清到 0、两条恒绿的死闸、Biped「刷新」这一步从来没做成、物理代理第一次实跑（2026-11-04 15:30~18:57
+    第六十二~七十三轮 + 探针 87/87b/89/90/91/92，香菱 `--shot`，其中 64 轮起带 `--physics`，退出码全 0，无弹窗；
+    第七十三轮 530 PASS / 0 FAIL / 21 SKIP，其中 27 条是 lock）**
+    - **为什么这一整串值得单独立一条**：#81 立项时只想「把空 catch 清干净」，清完的第一个实证是它自己抓出来的
+      `update 0`（下面第三节），顺着这条又掉出物理通道第一次实跑的全部真相（第四~六节）。
+      这五节里**没有一处是靠推理定案的**，每一处都有一份同名 `.txt` 探针读数或一轮日志行做出处。
+    - **一、#81：66 条空 catch → 0 条债，判据改成默认拦路**。`tools/check_ms.py` 原来把「空体 catch」当
+      非阻塞提示（`--strict` 才拦），理由是 v3 继承了 60+ 条、一次拦死会让每轮实跑卡住。本轮把存量清完后
+      **删掉 `--strict` 开关，默认就是拦路**（`:576`），于是「新增一条空 catch」从「日志里少一行」变成「过不了静态检查」。
+      三种合法收法，逐条对号：
+      ①**记数**（`centerFail += 1`、`offFail += 1`、`worldFail += 1`…，进汇总行，`if 计数 <= 3` 打前几行明细）；
+      ②**记文字**（`catch ( rotErr = (getCurrentException() as string) )`，再由明细行带出去）——
+        这条是被实测逼出来的：第 64 轮那个 catch 只写 `rotOk = false`，`旋转失败=254` 一个字都读不到，
+        补上报错文字之后第 65 轮立刻给出根因 `Argument count error: EulerAngles wanted 3, got 6`。
+        **只数不记文字 = 下一轮又要重新猜一遍是谁死的。**
+      ③**真的允许失败**，必须就地写「允许失败」四个字，check_ms 认这四个字，不认解释。
+      收完的账（`tools/count_catch.py`，本轮实测）：catch 行 **211** = 空体 **25**（25 条全部带声明，无声明 **0**）
+      + 非空体 **186**；「记了变量但全文没人读」**0**。棘轮在 `tests/test_check_ms.py:221` `CATCH_DEBT = 0`
+      （`assertEqual`，涨要改数、**清掉也要改数** —— 单向棘轮会漏掉「判据被删」这种退步）。
+    - **二、清 catch 的同时挖出两条「看着在跑、实际恒绿」的死闸 —— 比没有闸更坏，因为它让人以为有人在管**：
+      - `tools/check_ms.py:_fn_spans`（`:615`）按括号深度切顶层 `fn` 的行范围，旧写法「深度回到 0 就关段」。
+        这份文件里绝大多数函数是「`fn mmd2maxLog message =` 换行后单独一行 `(` 开段、
+        收尾单独一行 `)`」—— 声明行自己没有括号，于是**每个 fn 的跨度只有声明那 1 行**，
+        规则 I（判据函数不许调用
+        `*Want*/*Target*/*Expect*` 这类求值器，防止拿写入侧的数自证）只看得到 `fn 名字 …` 那一行，
+        **永远查不出调用**。修成「声明行没括号不算关段」之后，它**当场命中一条**
+        （`mmd2maxVerifyBoxes → mmd2maxBoxWantDir`）。命中是对的方向，但这条是定价过的例外，
+        进 `ORACLE_EXEMPT`（`:610`）并写清删除条件：**它成立完全靠 #79 那把 `span_want_cm` 独立尺**，
+        哪天那把尺被删，这个例外必须跟着删。
+      - `update 0` —— 见第三节，它是本轮最贵的一条。
+    - **三、#84/#85：`update 0` 从 #4 起从来没生效过，所以「转角判据·刷新后仍在」的历史含义是「写完立刻读」**。
+      第 62 轮的日志自己报出来的：`-- No "update" function for 0` —— Max 2022 没有全局 `update`，
+      MAXScript 把 `update 0` 读成「给整数 0 发 update 消息」。这与 v3 那句从来没生效的 `skinOps.forceUpdate`
+      是同一种死法。第 63 轮探针把候选按「会不会真按时间重算控制器」排（不是按名字看着像），三个全实测死，
+      报错文字都进读数：`update`（第 62 轮）、`updateSceneTime`（`Call needs function or class, got: undefined`，第 64 轮）、
+      `evalTime`（同一条报错，第 65 轮）⇒ **Max 2022 上没有可达的「全局控制器重算」入口**。
+      赢家只剩 `redrawViews()`，而它跑通**不构成**「控制器重算过」，所以读数必须自带口径（第 72 轮实报）：
+      `Biped 刷新调用：redrawViews()（只重画视口，不重算控制器）（试掉： evalTime→-- Type error: Call needs function or class, got: undefined；）`。
+      真正逼 Biped 重算的那一步不在这个函数里，是调用方对同一根骨**原值重发** `biped.setTransform node #pos p false`
+      （Biped 自己的 API，会重算它自己的节点）。所以 #32 那条判据的字面意思要读成「重发 `#pos` 后仍在 ≥15 度」，
+      **不是**「全场景控制器都重算过了」—— 两者对 Biped 骨恰好指向同一件事，但口径不能混。
+    - **四、#86~#88 旋转：Max 端的矩阵算术整块搬去 Python**（探针 87/87b `test_runs/probe87/probe_api*.txt` 一次量完，不拿正式轮次猜）。
+      第 64/64b 轮第一次实跑读数：`物理刚体代理：253（失败 1） 旋转失败=254`。两处都不是「物理坏了」：
+      - `（失败 1）` 是**账本**死的不是代理死的：PMX 刚体索引 0 基、Max 数组 1 基，`rigids[idx]` 对第一根必然抛
+        `array index must be positive number, got: 0`，被外层 try 数成创建失败 —— 代理其实建好并挂上了父骨（`:7065` 注释）。
+      - `旋转失败=254` 是「每一根都没转上」，补记文字后根因 `Argument count error: EulerAngles wanted 3, got 6`。
+      探针 87/87b 的量出来的接口生死表（**这台机 Max 2022**，别处不保证）：
+      - **死**：`transpose <matrix3>`（`No "transpose" function`）、`<Angle4>.order = #xyz`（`Unknown property: "order"`）、
+        `(eulerAngles a b c order:#xyz)`（`Unable to convert: #xyz to type: Integer`）、`M * v`（`Incompatible types`）、
+        `angBetween`（`Call needs function or class, got: undefined`）、整块写 `node.transform`（`No "Translate" function for [10,20,30]`）、
+        `node.parentpos`（`Unknown property: "parentPos"`）、**`Biped_Object.scale`**（`Unknown property: "scale" in $Biped_Object:Bip001 Head`）。
+      - **活**：`inverse <matrix3>`、`M*M`、`M as quat`、`(eulerAngles a b c)`（度数，算子口径 = `Rz(c)·Ry(b)·Rx(a)`）、
+        `quat as matrix3`、`node.rotation = (eulerAngles …)`、`node.transform` 读写、行既可用属性也可用下标取。
+      - 一条只能量不能推的符号关系（探针 87b 的 4a/4b/4c/3 行）：**节点 `.rotation` 用的 quat 与纯数学 quat 是共轭的（矢量部分反号）**，
+        且写 `(eulerAngles a b c)` 与写其共轭 quat 得到**同一个** transform ⇒ 目标节点矩阵 `N = Φ·R_pmx·Φ⁻¹`，
+        而 `std(a,b,c) = Nᵀ`。推错符号就是 254 根整片朝反、日志全绿。
+      ⇒ 于是 `mmd2maxCoordMatrix` / `mmd2maxRotToMax` 两个 MAXScript 函数**删掉**，朝向改由
+      `mmd2max/coords.py:159 rotation_matrix_pmx` + `:170 rigid_rotation_max` 算成**度数**，
+      `physics.tsv` 加三列 `rigid_rot_max_*`（`rigid_rot_*` 的 PMX 弧度只留档、不参与装配），
+      MAXScript 只做那一件实测活着的写 `proxy.rotation = (eulerAngles ax ay az)` + 回读。
+      第 68 轮读数：`旋转失败=0 有朝向的刚体=250 转后偏心=0` —— `有朝向的刚体` 这一格是防「旋转失败=0 其实是因为没人有朝向」的空话闸（V5 钉着）。
+    - **五、#89~#91 位置：从「散成一团」到「贴着角色」，四轮才把归属拆干净**。
+      第 68 轮转上了朝向，并集却炸开：`x[-149.944,140.738] y[-51.9991,48.0791] z[-52.195,149.469]`（角色只有 160 高）。
+      逐轮读数与当时能下的结论：
+      - **第 69 轮**：一次改三处（胶囊也定心 / 挂父后写回 `transform` / 父骨 `.scale` 包 try）⇒
+        `物理刚体代理：212（失败 42） 挂父后世界偏心=38 最大=213.539 父骨带缩放=202`。
+        那 42 条是 `Unknown property: "scale" in $Biped_Object…` —— **裸读 `.scale` 把创建段带死了**。
+        更要紧的是 `父骨带缩放=202` 是**半盲**读数：只有读得到 `.scale` 的那批节点（附属骨/Dummy）进了计数，
+        挂在 Biped 上的全被 catch 掉。换对仪器（探针 90 F2：缩放 = `distance parent.transform[k] [0,0,0]` 三行长度，
+        `scale=2` 的父骨量出 2.0/2.0/2.0，纯旋转量出 1.0，任何节点都有 `.transform`）之后同一轮读 `父骨带缩放=0`。
+        **教训：那 202 是坏仪器的读数，不是真膨胀 —— 一条判据的分母要能自证。**
+      - **第 70 轮**：`254（失败 0） 挂父后世界偏心=4 最大=94.6242`（并集收回到 `x[-49.0465,49.0465] z[-52.195,142.55]`）。
+        第 4 根**查无此人**（明细只打前 3 行）⇒ 汇总行加 `最大=<距离>@<名字>`（V14 钉），并补「循环跑完再读一遍」的第二把尺。
+      - **探针 90**（`test_runs/probe87/probe_link_back.txt`）：按产品里真实的先后顺序一步一步走，每步读同一组世界量
+        （`center` / `transform[4]` / `.pos` / `d(形心,目标)` / 世界盒），S0 刚建好 → S1 写 rotation → S2 写 center →
+        S3 只设 `.parent` → S4 再写回 `transform` → S5 重写 center。结论三条：
+        ①`.parent =` **保持子的世界位置**：平移+旋转的父骨（C1）与 `scale=[2,2,2]` 的父骨（C2），S2/S3/S4/S5 的四组量**逐行相同**
+          （`d(形心,目标)` 4.8e-07→5.3e-06）⇒ 那条 `proxy.transform = worldTM` 写回是**恒等写**，
+          保留它只为让物理通道与附属骨通道用同一对写；同时证明第 69 轮把 38→4 的功劳记在「写回」上是记错了。
+        ②父骨缩放只能按行长度量（`.scale` 在 Biped 上抛，见第四节死表）。
+        ③`.pos` 在有父骨时仍在**世界轴**上移动（F3：加 10 就是世界 x 加 10，父骨转 90 度没把它折到 z 上）。
+        ⇒ 于是加**三层归属**：`挂父搬走=`（S3 这一步）/ `挂父后世界偏心=`（挂完之后离 PMX 点）/ `循环后仍偏=`（整段循环之后）。
+      - **第 71 轮**：`挂父搬走=0 循环后仍偏=4 最大=94.6242@RB_21_右ひざ 父骨带缩放=0` —— 归属一层层排掉，剩下 4 根有名有姓。
+        拿 `physics.tsv` 对账发现**这 4 根全是球** ⇒ 嫌疑收窄到探针 89 那句旧注释「方块与胶囊 pivot 在底角要定心，球中心对称不用写」。
+      - **探针 91**（`test_runs/probe87/probe_sphere_center.txt`）：两把尺一起量（A=`sph.center`，B=`nodeGetBoundingBox` 世界盒中心），
+        量的就是第 70/71 轮那两个原数：A2 半径 80.9 的球写 3.65 度 → 形心走 **5.28 厘米**（≈ |P|×角的弧）；
+        B2 半径 48.6 的球写 158.8 度 → 走 **94.6 厘米**；每一步 `|A-B| = 0`（球心、pivot、`.pos` 三个一起走）；
+        B3 转完补一次 `center = PMX 点` 精确回到 `(5.98564,-4.83298,47.7569)`，半径与朝向都没被改写。
+        ⇒ **`node.rotation = (eulerAngles …)` 会把整个节点绕世界原点画一段弧**（为什么这样 Max 没测出来，只登记现象），
+        而修法不是「别转」，是转完补定心 —— 于是定心从「方块与胶囊」改成**三种形状都写**，`if shapeIdx != 0` 那层排除删掉。
+      - **第 72 轮**（收口读数）：
+        `物理刚体代理：254（失败 0） 关节标记：330（失败 0） 旋转失败=0 有朝向的刚体=250 转后偏心=0 挂父后世界偏心=0 最大=0.00069778@RB_1 挂父搬走=0 循环后仍偏=0 最大=0.00069778@RB_1_首 父骨带缩放=0 层收纳失败=0`，
+        并集 `x[-49.0465,49.0465] y[-28.7218,48.0791] z[-11.5768,142.55]` —— **z 底从 −52.195 回到 −11.5768**，
+        那 −52 一截就是没定心的球甩出去的弧；`香菱_phys_front.png` / `香菱_phys_side.png`（18:31）里代理贴着身体，没有散落。
+        `最大=0.0007` 那个残差是浮点/字符串往返量级，不是几何差。
+      - **第 73 轮**（补完 `胶囊退圆柱=` 之后的复跑）：整行与第 72 轮**逐字相同**，只多出新的一格
+        `… 父骨带缩放=0 胶囊退圆柱=0 层收纳失败=0`，并集仍是 `x[-49.0465,49.0465] y[-28.7218,48.0791] z[-11.5768,142.55]`，
+        530 PASS / 0 FAIL / 21 SKIP，`香菱_phys_front.png` / `香菱_phys_side.png`（18:57）代理照旧贴着身体
+        —— 新加的计数本身没改动几何路径，复跑必须给出同一组数，否则「计数」这件事本身就成了变量。
+      - 一个**容易被读成 bug 的口径**（先写在这里省得下轮重新查）：`刚体世界量三对照` 那一行里
+        `.pos` / `transform[4]` 是 **pivot 的世界位置**，`.center` 是**几何形心的世界位置**，两者天生差**半个形状尺寸**
+        （第 72 轮 `RB_2` 的 x 差 13.5262 = 世界盒 x 跨度 27.0524 的一半）。这是 Max 原始图形的 pivot 在底/端（探针 87b 第 7 行、
+        探针 92 第 4 步「定心后 `tm4` 从 0 挪到 13」），不是刚体没放对 —— 判据读的是 `.center`，别拿 `.pos` 减导出位置当误差。
+    - **六、#89 那条「解析并集 vs Max 并集还差 ~4 厘米」本轮关掉，顺带补了探针 92**。
+      探针 92（`test_runs/probe87/probe_box_axes.txt`）先量死 **Max 的 Box 参数名各对应哪根局部轴**：
+      `width:6 length:10 height:14` 不旋转 → 世界盒 `(6,10,14)` ⇒ **width=X、length=Y、height=Z**，
+      所以产品那段方块创建（`:6888`，三边各带 `amax … 0.001` 下限）的轴位是**对的**（这条不能省：
+      要是 length 长在 X，方块就 X/Y 换位，裙摆那些转过 90 度的薄板会竖着躺平，而 `旋转失败=0` 一切正常）。
+      同一份还量到：转 90 度后尺寸对调（`(10,6,14)`）、定心**不改尺寸**只挪 pivot、
+      `Capsule radius:2 height:8` → `(4,4,12)`（`height:` 不含端帽，与探针 89 B1 同口径）、
+      `Cylinder radius:2 height:8` → `(4,4,8)`（**胶囊的退路比胶囊短 2×半径**，见第八节）。
+      然后拿 `test_runs/union_compare.py` 与第 72 轮 Max 报的并集对撞，**差在我那把解析尺上，两处口径**：
+      ①半边长没做 MMD→Max 的轴置换（产品是 `ex=sx, ey=sz, ez=sy`，解析侧照抄才同框）；
+      ②胶囊不能用方块的 `Σ|row_i|·h_i` —— 胶囊是「±半高的线段 ⊕ 半径 r 的球」，
+        世界半边长 = `半高×|row_z| + r`（逐分量）。改完三轴读数：
+      `x 下差=+0.0066 上差=-0.0066 / y 下差=+0.0000 上差=-0.0000 / z 下差=+0.0036 上差=-0.0040`（厘米）。
+      **y 逐位相等**、x/z 万分之几厘米 —— 而且决定极值的 6 根（`左/右ひじ` 胶囊、`前摆_7_2`/`左带_7_1` 方块、`左踵`（z 底）与 `左辫_5_1`（z 顶）两根胶囊）
+      形状、朝向、尺寸全对上 ⇒ 这同时是 #88 那套旋转矩阵跨 254 根骨的一次**独立**核对（比「前 4 根打一行明细」宽得多）。
+    - **七、#83/#85 的变异验证收成一把常驻尺：`test_runs/mutate85.py` 17 支全 RED + 逐字节还原**（本轮实测）。
+      前置断言三条，缺一条就**一条变异都不做**（宁可少验，不许改坏产品）：needle 在原文**恰好出现 1 次**、
+      替换文本必须带「变异」标记（恢复检查靠它）、**基线必须先绿**（否则「变异后变红」可能是测试自己坏，不是判据咬人）。
+      跑完查「与原文逐字节相同=True 且『变异』残留=0」。V1~V17 各对应一条判据：
+      V1 账本回 0 基 / V2 旋转退回 `eulerAngles … order:#xyz` / V3 catch 不存报错文字 / V4 定心排在旋转之前 /
+      V5 不数有朝向的刚体 / V6 转完不回读形心 / V7 挂父不写回世界变换 / V8 世界偏心写死 0.0 /
+      V9 胶囊高度退回 `(ey*2)+(radius*2)` / V10 又把球排除在定心之外 / V11 父骨缩放退回裸读 `.scale` /
+      V12 「挂父搬了多少」不量 / V13 循环后不再读一遍 / V14 最偏那根不留名字 /
+      V15 胶囊退成圆柱不计数 / V16 计数不进汇总行 / V17 连圆柱退路都删掉。
+      **一条自己的教训**（M2 那次）：变异改到的行若不是判据真正读的那行，会报 GREEN 且看着像「判据没用」——
+      恒绿的判据必须拿变异证明它有牙，而 mis-target 的变异只是没测到东西，别拿它下结论。
+      同理，**注释里不要出现与代码逐字相同的片段**：本轮 V7 的 needle 一度匹配两次，就是因为新注释抄了
+      `proxy.transform = worldTM` 原文，只能把注释改写成「那条写回（把记下的矩阵再赋给 transform）」。
+    - **八、还开着的（别当已经完）**：
+      ①`.rotation` 绕世界原点画弧的**内部原因**没测出来，只知道现象与量级（≈ |P|×角）。
+      附属骨那条路**不经过这个写**：它按 `BoneSys.createBone head (head + xaxis*len) zaxis`（`:5808`）在创建时就把朝向定死，
+      之后只剩挂父那对写（`:5855` 记 `worldTM` → `:5860` 写回）。所以「画弧」对它不适用；**但这对写没拿探针 90 的口径复查过**
+      —— 代理那边实测出「`.parent` 保持世界位置 ⇒ 写回是恒等写」，附属骨这边只有一条失败日志（`:5861`「这一根会飞」），
+      成功侧的恒等性至今没有证据。
+      ②`pivot ≠ 形心`（差半个尺寸）在接进 MassFX/PhysX 之后会不会变成「刚体原点不对」，未量 ——
+        Max 的求解看几何，所以截图与包围盒都对，但这句是**推断不是实测**。
+      ③胶囊建不出来时**静默退成圆柱**（`:6875` 那个 catch 有体、所以 check_ms 不拦），而探针 92 实测圆柱比胶囊短 `2×半径`
+        ⇒ 真退路发生时那 72 根胶囊（香菱 shape 计数：球 8 / 方块 174 / 胶囊 72）会整体短一截而**日志里没有一格会动**。
+        **本轮已补**：`capFalls` 计数 + 汇总行 `胶囊退圆柱=`（第 73 轮实读 `胶囊退圆柱=0`，即香菱一根都没退），
+        明细只打前 3 条但计数打全部；契约三条 + 变异 V15~V17 钉住。**换模型时这一格必须优先看** ——
+        它非 0 就说明这台 Max 的 `Capsule` 建不出来，那批代理天生短，`转后偏心=0` 也照样是短的。
+      ④`rigids[]` 这本账目前**没人读**（接 MassFX 才用得上），留着只因为它是唯一一处 0 基/1 基换算。
+      ⑤视觉验收（#12 / #27 / #29 / #35）仍等用户的眼睛；本轮只证明数字与并集自洽。
+    - **九、环境插曲一次（那条纪律第一次被真实触发并走对）**：第 64 轮第一次尝试停在 Max 启动弹窗
+      `DLL <c:\program files\autodesk\3ds max 2022\stdplugs\creasemod.dlm> failed to initialize. Error code 1114`
+      ——「DLL 初始化例程失败」是 Autodesk 自带 stdplug 的启动期故障，与流水线无关。它**不在**白名单里
+      （`tools/obj_run.py:166-169` 的 `SAFE_STARTUP_BUTTONS` 是唯一白名单：`Startup Failure→Continue Without Restore`、
+      `Heads Up→Continue`；`Restore Factory Settings…` 永不碰）⇒ 探针/驱动**只截图读字、没点 OK**，
+      只 `taskkill` 自己起的 pid，重跑一次（`run_probe.py` 也带这一次重试，注释直说「启动期一次性故障常见：插件 DLL 加载失败」）
+      就正常了。**报错弹窗绝不点**这条纪律的价值就在这：点了会把「环境坏了」读成「我们跑通了」。
+    - **十、静态与测试（本轮末尾实测）**：`tools/check_ms.py` ⇒ `[OK]`；`tools/count_catch.py` ⇒ catch 行 211、
+      空体 25 条全带声明、无声明债 **0**、记了变量没人读 **0**；
+      套件 `Ran 660 tests OK (skipped=2)`（第 61 轮 634 → +26，全在物理与判据契约上）；
+      `tests/test_maxscript_contract.py::PhysicsProxyContract` 8 条绿；`mutate85.py` **17/17 RED** 且还原逐字节相同。
+      实跑侧：第 72 轮 530 PASS / 0 FAIL / 21 SKIP（21 条 SKIP 全是 `when=if_present` 的 rollback/pass-ran 那组，
+      本轮没开 `ROLLBACK`，属预期），第 73 轮补完 `胶囊退圆柱=` 后复跑**同一组数**（530/0/21，退出码 0）；
+      `香菱_phys.max` 落盘，`quitMax` 干净退出。
+
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
 2. `足盒缩后 … 本地 min/max` 的竖直比例必须还是 15.2 : 84.8（`FootHeelBoxHandoffTests` 钉的四个数）；换了 Max 版本若这个比例变了，那四个常量（`FOOT_BOX_*`）要跟着重新回读，不能猜。
@@ -1140,6 +1302,10 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
 10. **`沿指向=` 这一行的读法（#79）**：脚趾那两根必须与 `长=` 逐字相等（同一个压平口径，溢量 0 才是正常几何）；足背那两根**天生比 `长=` 大 20~30%**（参考方向是三维的踝→脚掌、盒子按压平轴写），这是口径不是缺陷，别去「修」它。真缺陷长什么样：`沿指向` 落到 `宽` 或 `高` 那几个数上（薄边朝前）——带宽见 `targets.span_tol_cm`，香菱趾盒是 ±0.371。
 11. **`nodeGetBoundingBox node node.transform` 的口径是「已乘 #scale 的本地盒」，不是世界盒**（第 35 条②）：任何「把本地角点搬到世界」的新代码只许乘旋转（`mmd2maxBipedAxes`），整块乘 `node.transform` 会把 #scale 乘两遍。这条与第 12 轮那条「`node.min/max` 在 Biped_Object 上退化成一个点」是两份不同的坑，别再混。
 12. **`skin_rb/zero_links` 与段长锁的读法（#76）**：`zero_links` 的期望恒 **0** —— 它一旦 > 0，含义是权重表里又混进了「非零但印成 `0.000000`」的对（导出侧 `%.6f` 口径漏了），**不是**「Max 掉了链路」；掉链路看 `links_missing` / `link_diff_max`。段长锁（`verdicts.SEGMENT_LOCKS`）换模型必须仍是 `gate`：别的模型上出现 `lock` 就是定价泄漏，而定价泄漏等于没人再量那一段。
+13. **物理代理那一行每一格都是闸，缺格≠没坏（#86~#92，第 73 轮起）**：`旋转失败=0` 只跟 `有朝向的刚体=250` 成对读才有意义（0 根有朝向也能报 0 失败，V5 钉着）；`转后偏心=` 是「旋转+定心之后离 PMX 点的距离」；`挂父搬走=` / `挂父后世界偏心=` / `循环后仍偏=` 是三层归属（挂那一步搬了多少 / 挂完之后离 PMX 点 / 整段循环之后），三层要能各自单独为 0，同时非 0 才值得往下追；`最大=<距离>@<名字>` 那格为 0 时也必须存在（第 70 轮第 4 根查无此人就是少了 `@名字`，V14 钉）。`父骨带缩放=` 用 `distance parent.transform[k] [0,0,0]` 量，裸读 `.scale` 在 Biped 上抛、会把创建段带死（第 69 轮那 42 条）；`胶囊退圆柱=` **非 0 就是这台 Max 建不出 `Capsule`**，那批代理天生短 2×半径（探针 92 实测 (4,4,8) vs (4,4,12)），此时 `转后偏心=0` 依然可能是短的；`层收纳失败=` 只影响可见性分组不影响几何。
+14. **`.pos` / `transform[4]` 是 pivot，`.center` 才是几何形心，两者天生差半个形状尺寸**：`刚体世界量三对照` 那行里 `RB_2` 的 x 差 13.5262 = 世界盒 x 跨度 27.0524 的一半，这是 Max 原始图形 pivot 在底/端（探针 87b 第 7 行、探针 92 第 4 步「定心后 `tm4` 从 0 挪到 13」），不是刚体没放对。任何偏心判据一律读 `.center`；拿 `.pos` 减导出位置当误差会造出一堆假缺陷。
+15. **`Biped 刷新调用：redrawViews()（只重画视口，不重算控制器）` 这句口径不许省（#84/#85）**：Max 2022 上没有可达的「全局控制器重算」入口 —— `update`（`-- No "update" function for 0`）、`updateSceneTime`、`evalTime` 三个全实测抛。真正逼 Biped 重算的那一步是调用方对同一根骨**原值重发** `biped.setTransform node #pos p false`。所以历史上「转角判据·刷新后仍在」的字面意思是「重发 `#pos` 后仍在」，**不是**「全场景控制器都重算过」。
+16. **`test_runs/union_compare.py` 是解析侧的独立尺，改了物理口径必须重跑它**：拿 `physics.tsv` + `coords.rigid_rotation_max` 解析算 254 根代理的世界 AABB 并集，与 Max 报的 `刚体代理包围盒` 那一行对撞（第 73 轮实测差 `x ±0.0066 / y 0.0000 / z +0.0036~-0.0040` 厘米）。三处口径任改一处就得重跑：轴置换 `ex=sx, ey=sz, ez=sy`、PMX shape 语义（0=球半径 / 1=方块半边长 / 2=胶囊半径+半高）、胶囊不能用方块的 `Σ|row_i|·h_i` 而要用 `半高×|row_z| + 半径`（线段⊕球）。两边同时错才会一致 —— 它是 #88 那套旋转矩阵跨全部刚体的唯一全量核对，比「前 4 根打一行明细」宽得多。
 
 建议顺序：`--no-skin --shot` 冒烟 → 完整 `--shot` → 读 `test_runs/*/shots/*.png` 与 `<模型名>_objrun.log`。
 

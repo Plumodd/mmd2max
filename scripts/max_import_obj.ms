@@ -2082,27 +2082,38 @@ fn mmd2maxBipedRefresh =
        「刷新后仍在 >= 15 度」量的其实都是「写完立刻读」。这和 v3 那句从来没生效过的
        `skinOps.forceUpdate` 是同一种死法，而规则 V 立项时举的就是后者的例子 ——
        清完空 catch 的第一个实证是它自己抓出来的。
-       候选按「会不会真按时间重算控制器」排：`updateSceneTime` 就是干这个的；
-       `redrawViews()` 只重画视口，聊胜于无。 */
+
+       候选按「会不会真按时间重算控制器」排，不是按「名字看着像」排，并且赢家要带口径：
+       ① `evalTime` 是唯一一类「把场景推到指定时刻重算」的名字。第 65 轮实测它在
+          Max 2022 里也不存在：`-- Type error: Call needs function or class, got: undefined`。
+       ② `redrawViews()` 只重画视口，跑通了也不构成「控制器重算过」，所以读数里必须带上
+          这句 —— 否则下一轮看到一行 `redrawViews()` 又会被人当成「刷新做完了」。
+       已实测死掉的名字不再重复探，只留字面记录：`update`（`No "update" function for 0`，
+       第 62 轮）、`updateSceneTime`（`Call needs function or class, got: undefined`，第 64 轮）。
+       真正逼 Biped 重算的那一步不在这个函数里，是调用方对同一根骨重发的
+       `biped.setTransform node #pos p false` —— 那是 Biped 自己的 API，会重算它自己的节点。 */
     if MMD2MAX_REFRESHCALL == undefined do
     (
         local used = ""
+        local usedKind = ""
         local why = ""
         if used == "" do
         (
-            try ( updateSceneTime 0; used = "updateSceneTime 0" )
-            catch ( why = why + " updateSceneTime→" + (getCurrentException() as string) + "；" )
+            try ( evalTime 0; used = "evalTime 0"; usedKind = "按时间重算控制器" )
+            catch ( why = why + " evalTime→" + (getCurrentException() as string) + "；" )
         )
         if used == "" do
         (
             try ( redrawViews(); used = "redrawViews()" )
             catch ( why = why + " redrawViews→" + (getCurrentException() as string) + "；" )
+            if used == "redrawViews()" do usedKind = "只重画视口，不重算控制器"
         )
         MMD2MAX_REFRESHCALL = used
         /* 试掉的那几句必须一起报：第 63 轮就是这句「redrawViews」赢了，但没人知道
            updateSceneTime 是怎么死的 —— 「哪种写法真的会重算控制器」这件事，
-           全靠这几个报错文字才能判，光一个赢家名字不够。 */
-        mmd2maxLog ("Biped 刷新调用：" + (if used == "" then "没有一种跑得通" else used) \
+           全靠这几个报错文字才能判，光一个赢家名字不够。
+           赢家后面那个括号是口径：`redrawViews()` 跑通 ≠ 控制器重算过。 */
+        mmd2maxLog ("Biped 刷新调用：" + (if used == "" then "没有一种跑得通" else used + "（" + usedKind + "）") \
             + (if why != "" then "（试掉：" + why + "）" else ""))
     )
     MMD2MAX_REFRESHCALL
@@ -2112,10 +2123,15 @@ fn mmd2maxRefreshedMoveDeg node axRef =
 (
     /* 「转完再逼 Biped 刷新一次」之后的局轴转角（度），取不到返回 -1.0。
        为什么必须有这一步：10:17 直接写 .transform / rotate 命令都读到 30 度，但那可能
-       只是 MAXScript 自己的缓存 —— Biped 的控制器完全可以在下一次 update 时把 TM 按
-       结构重算回去，那 30 度就是假的。做法：对同一根骨再发一次一直好用的 #pos（原值写回，
-       位置不动），再逼一次控制器重算（见 mmd2maxBipedRefresh；第 62 轮之前那句是
-       `update 0`，实测从来没生效过），然后重量局轴。 */
+       只是 MAXScript 自己的缓存 —— Biped 的控制器完全可以在下一次重算时把 TM 按
+       结构算回去，那 30 度就是假的。做法：对同一根骨再发一次一直好用的 #pos（原值写回，
+       位置不动），再走一次刷新（见 mmd2maxBipedRefresh），然后重量局轴。
+
+       口径要说准（第 62~65 轮实测出来的）：真正逼 Biped 重算的是那句 `#pos` 原值重发
+       —— 它是 Biped 自己的 API，会重算它自己的节点；`mmd2maxBipedRefresh()` 在 Max 2022
+       上只剩 `redrawViews()` 这一句，它只重画视口。第 62 轮之前这里写的是 `update 0`，
+       那句从来没生效过，所以历史上所有「刷新后仍在」的字面意思其实是「重发 #pos 后仍在」。
+       两者对 Biped 骨来说指向同一件事，但别再把它读成「全场景控制器都重算过了」。 */
     local p = undefined
     local refreshed = false
     try ( p = node.transform.translationpart )
@@ -6695,29 +6711,22 @@ fn mmd2maxBuildMorpher meshObj morphFile =
 
 /* ================= 物理刚体 & 关节 =================
    PMX 物理（刚体+关节）在 Max 端 best-effort 落地：每根刚体生成一个可见代理
-   （Box/Sphere/Cylinder，按形状与尺寸），挂到对应骨架骨；关节用 Link_Constraint
-   把两刚体约束在一起，并把限位/弹簧记到注释属性。真实动力学需用户再开启 MassFX
-   （这些代理已带正确位置/朝向，可直接作为 MassFX 的刚体源）。 */
-fn mmd2maxCoordMatrix =
-(
-    /* convert_vec(v) = (v.x, v.z, v.y)，忽略缩放后的 3x3 线性部分（det = -1，含镜像）。
-       矩阵按「第 i 行 = 基向量 e_i 的像」写，所以 M * [x,y,z] = x*r1 + y*r2 + z*r3。
-       注意：这里必须是 Python 侧 mmd2max/coords.py 的同一个映射，改一处就要改另一处。 */
-    matrix3 [1,0,0] [0,0,1] [0,1,0] [0,0,0]
-)
+   （Box/Sphere/Capsule，按形状与尺寸），挂到对应骨架骨；关节位置放 Dummy 标记，
+   限位/弹簧记到注释属性。真实动力学需用户再开启 MassFX（这些代理已带正确的
+   位置与朝向，可直接作为 MassFX 的刚体源）。
 
-fn mmd2maxRotToMax rx ry rz =
-(
-    /* 把 MMD 弧度欧拉（XYZ）旋转映射到 Max 坐标系：R' = M * R * M^T（M 正交）。
-       M 含镜像时这个共轭仍然是正确的（M^T = M⁻¹），只是手性会反映在转向的顺逆上。
-       这只是近似（PMX 未规定刚体欧拉顺序），用于物理代理朝向。 */
-    local M = mmd2maxCoordMatrix()
-    local R = (eulerAngles rx ry rz order:#xyz) as matrix3
-    local Rmax = M * R * (transpose M)
-    local eu = Rmax as eulerAngles
-    eu.order = #xyz
-    eu
-)
+刚体朝向的数学不在这里做，全部在 Python（mmd2max/coords.py 的 rigid_rotation_max），
+   MAXScript 这一侧只剩 `proxy.rotation = (eulerAngles a b c)` 一条（探针 87b 的 4c 行
+   实测过它的写入与回读）。原因是「在 Max 里自己算共轭再拆回欧拉」要用的四条写法
+   在本机 Max 2022 每一条都抛（探针 87 / 87b，test_runs/probe87/probe_api*.txt）：
+       transpose <matrix3>             → No "transpose" function for (matrix3 ...)
+       <Angle4>.order = #xyz           → Unknown property: "order"
+       eulerAngles a b c order:#xyz    → Argument count error: EulerAngles wanted 3, got 6
+       translate <point3>              → No "Translate" function for [1,2,3]
+   再加一条单位坑：`eulerAngles` 吃**度**，PMX 的刚体欧拉是弧度（探针 87 的 F/G 行）。
+   早期版本在这里放了 `fn mmd2maxCoordMatrix` + `fn mmd2maxRotToMax`（M*R*Mᵀ 共轭），
+   第 64~66 轮连踩三条，读到 `旋转失败=254` —— 254 根代理一根都没转上，正是用户
+   截图里「裙摆刚体竖着排成一块板」。这两个函数已删；口径与推导记在 coords.py。 */
 
 fn mmd2maxBuildPhysics boneNodes physicsFile =
 (
@@ -6746,6 +6755,12 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local cRRX = mmd2maxColPos lines "rigid_rot_x"
     local cRRY = mmd2maxColPos lines "rigid_rot_y"
     local cRRZ = mmd2maxColPos lines "rigid_rot_z"
+    /* Python 已经把 PMX 弧度欧拉换成了「直接写给 node.rotation 的度数」（含手性共轭
+       与 Max 节点口径反转）。原始弧度列仍然读：只为诊断行能把「PMX 给的是什么」
+       和「我们写进去的是什么」并排报出来。 */
+    local cRRMaxX = mmd2maxColPos lines "rigid_rot_max_x"
+    local cRRMaxY = mmd2maxColPos lines "rigid_rot_max_y"
+    local cRRMaxZ = mmd2maxColPos lines "rigid_rot_max_z"
     local cRMode = mmd2maxColPos lines "rigid_physics_mode"
     local cJName = mmd2maxColPos lines "joint_name"
     local cJJA = mmd2maxColPos lines "joint_rigid_a"
@@ -6772,7 +6787,37 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local rigidFail = 0
     local rotFail = 0
     local centerFail = 0
+    /* 胶囊建不出来会**静默退成圆柱**（下面那个 catch 有体，check_ms 不拦）。
+       探针 92 第 6 步实测：`Capsule radius:2 height:8` 世界盒 (4,4,12)，
+       `Cylinder radius:2 height:8` 只有 (4,4,8) —— 退路天生短 2×半径。
+       不数这一格，换一台机器（或某个 Max 版本）Capsule 类不存在时，
+       72 根胶囊整体短一截而汇总行一个字都不动，看起来仍然「代理 254（失败 0）」。 */
+    local capFalls = 0
+    local offFail = 0
+    local rotNonZero = 0
     local layerFail = 0
+    /* #89/#90 的格子：`.center` 与 `.rotation` 都是「代理此刻自己的世界量」，挂父之后
+       这块几何到底还在不在 PMX 那个点，它们不会替后面的事说话。第 70 轮量到的读数是
+       `挂父后世界偏心=4 最大=94.6242`，而**探针 90 把「挂父」这一步本身洗掉了**：
+       父骨平移+绕 Y 转 90 度（C1）与父骨 scale=[2,2,2]（C2）两种情况下，
+       `只设 .parent` 之后的 center / tm[4] / 世界盒与写 center 之后**逐行相同**
+       （d(形心,目标)=5.3e-06，世界盒尺寸一分没涨）。
+       所以这一格现在分三层归属，谁搬的代理要说得出名字：
+         linkShift   —— 挂父那一步把形心搬走多少（探针说该是 0，不是 0 就是新事实）
+         worldFail   —— 挂完之后形心离 PMX 点多远（>1 厘米才数）
+         afterMove   —— 整个循环跑完之后再读一次：循环外还有谁动了代理
+       「父骨 scale 放大代理」这条**已被探针 90 否掉**，不再照它写注释。 */
+    local worldFail = 0
+    local worstWorld = 0.0
+    local worstName = "—"
+    local linkShift = 0
+    local afterFail = 0
+    local afterWorst = 0.0
+    local afterName = "—"
+    local parentScaled = 0
+    /* 循环后再读一次要用「这根代理本该在哪儿」，与 rigids 同下标存目标点。 */
+    local rigidWant = #()
+    for i = 1 to 4096 do append rigidWant undefined
     local minP = undefined
     local maxP = undefined
     for p in rows do
@@ -6800,6 +6845,9 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 local rx = p[cRRX] as float
                 local ry = p[cRRY] as float
                 local rz = p[cRRZ] as float
+                local ax = p[cRRMaxX] as float
+                local ay = p[cRRMaxY] as float
+                local az = p[cRRMaxZ] as float
                 local proxy = undefined
                 /* 尺寸要和位置用同一套轴变换：MMD(x,y,z) -> Max(x,-z,y)。
                    所以三个半边长也要同样置换：Max.x=sx, Max.y=sz, Max.z=sy。
@@ -6815,11 +6863,23 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 else if shapeIdx == 2 then
                 (
                     /* 胶囊：PMX 的 size = (半径, 半高, 0)，轴向是局部 Y（转成 Max 就是 Z）。
-                       Max 的 Capsule 轴向也是 Z，height 是「含两端的整体高度」。 */
+                       探针 89 的 B1 实测 Max 的 `height:` **不含两端半球**
+                       （radius:1 height:8 建在 z=30 → 世界盒 z[30,40]，总长 10 = 8 + 2×1），
+                       所以圆柱段直接写 2×半高，两顶帽子由 Max 自己加，总长正好是 MMD 的
+                       2×(半径+半高)。早期版本按「height 含两端」这个没测过的口径写
+                       `ey*2 + radius*2`，而胶囊的 PMX size.z 恒为 0 ⇒ ey=0 ⇒
+                       圆柱段实际被写成 2×半径，72 根胶囊每一根都短了半根。 */
                     local radius = amax ex 0.001
-                    local hgt = amax ((ey * 2.0) + (radius * 2.0)) 0.002
+                    local hgt = amax (ez * 2.0) 0.002
                     try ( proxy = Capsule radius:radius height:hgt pos:[px,py,pz] ) \
-                        catch ( proxy = Cylinder radius:radius height:hgt pos:[px,py,pz] )
+                        catch (
+                            proxy = Cylinder radius:radius height:hgt pos:[px,py,pz]
+                            capFalls += 1
+                            if capFalls <= 3 do
+                                mmd2maxLog ("胶囊退成圆柱 RB_" + (idx as string) \
+                                    + "：这块天生短 2×半径（探针 92 实测 (4,4,8) vs (4,4,12)）：" \
+                                    + (getCurrentException() as string))
+                        )
                 )
                 else
                 (
@@ -6833,31 +6893,184 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 (
                     proxy.name = ("RB_" + (idx as string) + "_" + name)
                     proxy.wirecolor = color 255 128 0
-                    /* Box 的 pivot 在底角，用 center 把它挪到刚体中心 */
-                    if shapeIdx != 0 and shapeIdx != 2 do
-                        try ( proxy.center = [px, py, pz] )
-                        catch ( centerFail += 1; if centerFail <= 3 do mmd2maxLog ("刚体中心没挪到形心（pivot 留在底角，这块刚体的位置会整块偏）RB_" + (idx as string) + "：" + (getCurrentException() as string)) )
-                    /* 关键：`(eulerAngles) as quat` 这条转换在部分 Max 版本上不成立，
-                       异常又被 try 吞掉 —— 结果 363 个代理**全部保持竖直**，
-                       裙摆刚体竖着排成一块板，不顺着裙子的喇叭形（用户截图）。
-                       改为经 matrix3 转四元数，并统计失败数。 */
+                    /* PMX 里这根刚体到底有没有朝向。三根轴全是 0 的代理「转不上也无所谓」，
+                       所以汇总行要能看出「旋转失败=0」是转好了还是根本没有朝向可转。 */
+                    if (rx != 0.0) or (ry != 0.0) or (rz != 0.0) do rotNonZero += 1
+                    /* 朝向：只写 Python 算好的那三个度数（见本节开头那段注释）。
+                       第 64 轮第一次实跑读到 `旋转失败=254`，而代理一共 254 个 ——
+                       也就是「每一根都没转上」，当时一个字都读不到，因为那个 catch
+                       只写了 `rotOk = false`；补上报错文字之后第 65 轮立刻给出根因。
+                       只数不记文字 = 下一轮又要重新猜一遍是谁死的。 */
                     local rotOk = false
+                    local rotErr = ""
                     try
                     (
-                        local m3 = (mmd2maxRotToMax rx ry rz) as matrix3
-                        proxy.rotation = (m3 as quat)
+                        proxy.rotation = (eulerAngles ax ay az)
                         rotOk = true
                     )
-                    catch ( rotOk = false )
-                    if not rotOk do rotFail += 1
+                    catch ( rotErr = (getCurrentException() as string) )
+                    if not rotOk do
+                    (
+                        rotFail += 1
+                        if rotFail <= 3 do
+                            mmd2maxLog ("刚体没转上（这块代理保持竖直）RB_" + (idx as string) + "：" + rotErr)
+                    )
+                    /* 前 3 根「PMX 确实给了朝向」的代理留一行三对照：
+                       PMX 弧度 → 写进 node.rotation 的度数 → Max 读回的 quat。
+                       手性/镜像这类错是看不见的（`旋转失败=0` 也可能是每一根都朝反），
+                       必须留下能对截图的数字。 */
+                    if rotOk and (rotNonZero <= 3) do
+                        mmd2maxLog ("刚体朝向 RB_" + (idx as string) \
+                            + " PMX弧度=(" + (rx as string) + "," + (ry as string) + "," + (rz as string) + ")" \
+                            + " 写入度=(" + (ax as string) + "," + (ay as string) + "," + (az as string) + ")" \
+                            + " 读回=" + (proxy.rotation as string))
+                    /* 定心排在旋转之后，而且**三种形状都要写**。
+                       旧注释（探针 89 的 C1「球对称 ⇒ 只有球不写」）在第 71 轮被探针 91 否掉：
+                       球虽然 pivot 就在球心，但给它写 `.rotation` 会把**整个节点**绕
+                       **世界原点**画一段弧 —— 球心、pivot、.pos 三个一起走（探针 91 的 A2/B2，
+                       与第 70/71 轮的读数逐字相同）：
+                         A2 半径 80.9 的球写 3.65 度 → 走 5.28 厘米（= 80.9 × 3.65° 的弧）
+                         B2 半径 48.6 的球写 158.8 度 → 走 94.6 厘米
+                       而 `.center` 是**世界**量（探针 89 A3 + 探针 91 B3）：转完再写一次
+                       center = PMX 点，球就精确回到该在的位置（B3 量到 center=tm4=pos=期望，
+                       |A-B|=0，半径与朝向都没被改写）。
+                       方块与胶囊原本就靠这一步（它们的 pivot 在底角，探针 87b 第 7 行），
+                       现在球也走同一步 —— 第 71 轮 `挂父后世界偏心=4` 那 4 根全是球，
+                       就是被这条排除规则漏掉的。 */
+                    (
+                        try ( proxy.center = [px, py, pz] )
+                        catch ( centerFail += 1; if centerFail <= 3 do mmd2maxLog ("刚体中心没挪到形心（转完这段弧没被拽回来，这块刚体不在 PMX 那个点上）RB_" + (idx as string) + "：" + (getCurrentException() as string)) )
+                        /* 回读：抓住「center 写成功、但那一转把节点整块带离了刚体中心」这种不抛错的错，
+                           并给「代理落在刚体中心」这句话一个出处。 */
+                        local dOff = (distance proxy.center [px, py, pz])
+                        if dOff > 0.01 do
+                        (
+                            offFail += 1
+                            if offFail <= 3 do
+                                mmd2maxLog ("转完之后形心不在刚体中心 RB_" + (idx as string) \
+                                    + "：偏 " + (dOff as string) \
+                                    + " 期望=(" + (px as string) + "," + (py as string) + "," + (pz as string) + ")")
+                        )
+                    )
                     /* MAXScript 的 and **不短路**：boneNew = -1 时 `boneNodes[0]` 会抛
                        "array index must be positive number"（实跑 362/363 里那 1 个失败
                        就是它）。必须拆成嵌套 if 才安全。 */
+                    /* 挂父这一对：探针 90 把「.parent 会把变换按父级重新解释」这条**洗掉了**。
+                       C1（父骨平移 + 绕 Y 转 90 度）与 C2（父骨 scale=[2,2,2]）两种父级下，
+                       `只设 .parent` 之后的 center / tm[4] / 世界盒与写 center 之后逐行相同
+                       （d(形心,目标) 从 4.8e-07 变 5.3e-06，尺寸一分没涨）。
+                       所以那条写回（把记下的矩阵再赋给 transform）写的是刚读到的同一个值 —— 恒等写，
+                       既没保住世界位置（第 69 轮那 38 根不是它治的，是胶囊开始定心治的），
+                       也不会把位置搞坏。留着它的唯一用处是：附属骨那段（:5855）用的是同一对写法，
+                       两处行为一致才不至于「一份探针解释了两份代码」。 */
+                    local centerBefore = undefined
+                    try ( centerBefore = proxy.center ) catch ( centerBefore = undefined )
+                    local worldTM = proxy.transform
                     if boneNew >= 0 do
                         if boneNew < boneNodes.count do
                             if boneNodes[boneNew + 1] != undefined do
-                                proxy.parent = boneNodes[boneNew + 1]
-                    if idx >= 0 and idx < rigids.count do rigids[idx] = proxy
+                            (
+                                try
+                                (
+                                    proxy.parent = boneNodes[boneNew + 1]
+                                    proxy.transform = worldTM
+                                )
+                                catch ( mmd2maxLog ("!! 刚体挂父这一对写没走完 RB_" + (idx as string) \
+                                    + "：可能已改父级而世界变换没写回，" + (getCurrentException() as string)) )
+                            )
+                    /* 挂父**之后**再读一次世界量（#89/#90）。`.center` 是**世界**量：
+                       探针 89 的 A3（pivot 在 (10,20,30) 的 Box 写 center=[10,20,30]，世界盒
+                       正好以 (10,20,30) 为中心）+ 探针 90 的 C1/C2（挂父之后仍然如此）。
+                       探针 90 的 F1 顺手否掉了「球没有 center」这句旧注释 —— Sphere 读得到
+                       center=[20,20,20]；下面那个 transform[4] 兜底只在 center 真读不出来时走。 */
+                    local wC = undefined
+                    try ( wC = proxy.center ) catch ( wC = undefined )
+                    if wC == undefined do
+                    (
+                        try ( wC = proxy.transform[4] ) catch ( wC = undefined )
+                    )
+                    local pn = "无父骨"
+                    local ps = "—"
+                    /* 父骨缩放**不能**读 `.scale`：Biped 骨没有这个属性，第 69 轮那 42 条
+                       「刚体代理创建失败」全是这一行读出来的 `Unknown property: "scale"`。
+                       更要紧的是那条 `父骨带缩放=202` 数的是**读得到 .scale 的那批**（附属骨/Dummy），
+                       254 根里挂在 Biped 上的全被 catch 成「父骨没有scale属性」—— 这一格当时是半盲的。
+                       探针 90 的 F2 给了活的尺：缩放 = transform 三行的长度，
+                       scale=2 的父骨量出 2.0/2.0/2.0，纯旋转的父骨量出 1.0，任何节点都有 .transform。 */
+                    local parN = undefined
+                    try ( parN = proxy.parent ) catch ( parN = undefined )
+                    if parN != undefined do
+                    (
+                        try ( pn = parN.name ) catch ( pn = "父骨名字读不出" )
+                        local parT = undefined
+                        try ( parT = parN.transform ) catch ( parT = undefined )
+                        if parT != undefined do
+                        (
+                            /* 名字用 psx/psy/psz：这一段外层的 `sx/sy/sz` 已经是 PMX 的
+                               刚体尺寸，就地重名会把「尺寸」换成「父骨缩放」，后面谁用错一个都不抛错。 */
+                            local psx = (distance parT[1] [0, 0, 0])
+                            local psy = (distance parT[2] [0, 0, 0])
+                            local psz = (distance parT[3] [0, 0, 0])
+                            ps = "(" + (psx as string) + "," + (psy as string) + "," + (psz as string) + ")"
+                            if (abs (psx - 1.0) > 0.001) or (abs (psy - 1.0) > 0.001) or (abs (psz - 1.0) > 0.001) do parentScaled += 1
+                        )
+                    )
+                    /* 归属第一层：挂父这一步自己搬了多少（centerBefore 与 wC 都是世界形心）。
+                       探针 90 说这一步该是 0；真跑里不是 0 就是新事实，必须留字。 */
+                    if centerBefore != undefined and wC != undefined do
+                    (
+                        local dLink = (distance centerBefore wC)
+                        if dLink > 0.01 do
+                        (
+                            linkShift += 1
+                            if linkShift <= 3 do
+                                mmd2maxLog ("挂父这一步把代理搬走了 RB_" + (idx as string) \
+                                    + "：搬 " + (dLink as string) + " 之前=" + (centerBefore as string) \
+                                    + " 之后=" + (wC as string) + " 父骨=" + pn + " 父骨行长度=" + ps)
+                        )
+                    )
+                    if wC != undefined do
+                    (
+                        local dW = (distance wC [px, py, pz])
+                        if dW > worstWorld do ( worstWorld = dW; worstName = "RB_" + (idx as string) )
+                        if dW > 1.0 do
+                        (
+                            worldFail += 1
+                            if worldFail <= 3 do
+                                mmd2maxLog ("挂上骨之后代理离开了 PMX 那个点 RB_" + (idx as string) \
+                                    + "：偏 " + (dW as string) + " 中心=" + (wC as string) \
+                                    + " 期望=(" + (px as string) + "," + (py as string) + "," + (pz as string) + ")" \
+                                    + " 父骨=" + pn + " 父骨行长度=" + ps)
+                        )
+                    )
+                    /* 前 4 根（球/胶囊/胶囊/方块）各留一行三值对照 + 自己的世界盒尺寸：
+                       `.pos` / `transform[4]` 是 pivot 的世界位置（探针 90 的 F3：挂父之后
+                       `.pos` 加 10 就是世界 x 加 10，父骨转 90 度也没把它折到 z 上），
+                       `.center` 是几何形心的世界位置。世界盒尺寸对不上导出尺寸才是放大。 */
+                    if created < 4 do
+                    (
+                        local wb = "读不出"
+                        local bb0 = undefined
+                        try ( bb0 = nodeGetBoundingBox proxy (matrix3 1) ) catch ( bb0 = undefined )
+                        if bb0 != undefined and bb0[1] != undefined do
+                            wb = "(" + ((bb0[2][1] - bb0[1][1]) as string) + "," \
+                                 + ((bb0[2][2] - bb0[1][2]) as string) + "," \
+                                 + ((bb0[2][3] - bb0[1][3]) as string) + ")"
+                        mmd2maxLog ("刚体世界量三对照 RB_" + (idx as string) \
+                            + " .pos=" + (proxy.pos as string) \
+                            + " tm[4]=" + (proxy.transform[4] as string) \
+                            + " 导出=(" + (px as string) + "," + (py as string) + "," + (pz as string) + ")" \
+                            + " 父骨=" + pn + " 父骨行长度=" + ps + " 世界盒=" + wb)
+                    )
+                    /* PMX 的刚体索引是 0 基，Max 数组是 1 基 —— 写 `rigids[idx]` 时
+                       第一根刚体（idx=0）必然抛 `array index must be positive number, got: 0`，
+                       而这条异常被外层 try 当成「创建失败」数走了：第 64 轮那
+                       `（失败 1）` 就是它，代理其实已经建好并挂上了父骨，死的是这本账。
+                       这本账现在没人读（接 MassFX 时才用得上），但正因为它是唯一一处
+                       0 基/1 基换算，留着就要写对。 */
+                    if idx >= 0 and idx < rigids.count do rigids[idx + 1] = proxy
+                    /* 与 rigids 同下标记下「这根代理本该在哪」，循环跑完后再读一遍用（#90 第三层归属）。 */
+                    if idx >= 0 and idx < rigidWant.count do rigidWant[idx + 1] = [px, py, pz]
                     try ( if layerRB != undefined do layerRB.addNode proxy ) catch ( layerFail += 1; if layerFail <= 3 do mmd2maxLog ("!! 刚体没进 mmd2max_physics 层 RB_" + (idx as string) + "：汇总行「刚体在层 mmd2max_physics」对它不成立") )
                     /* 记录整体包围盒，跑完用一行日志核对「代理是否落在角色身上」 */
                     local bb = undefined
@@ -6881,6 +7094,37 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
             )
             catch ( rigidFail += 1; \
                     if rigidFail <= 3 do mmd2maxLog ("刚体代理创建失败：" + (getCurrentException())) )
+        )
+    )
+    /* #90 第三层归属：整个刚体循环跑完之后再读一遍形心。循环里那一格只看到「挂父那一刻」，
+       搬代理的如果是循环**后面**的事（Biped 刷新 / 关节段 / 分层），只有这里能看见。
+       探针 90 的 C1/C2 说挂父这一步本身不搬（d 从 4.8e-07 变 5.3e-06），
+       所以真跑里两边都非零时，比的是**哪一边大**：循环外大 = 后面有人动了代理。 */
+    local pr = undefined
+    local want = undefined
+    local wc2 = undefined
+    local d2 = 0.0
+    for k = 1 to rigids.count do
+    (
+        pr = rigids[k]
+        want = rigidWant[k]
+        if pr != undefined and want != undefined do
+        (
+            wc2 = undefined
+            try ( wc2 = pr.center ) catch ( wc2 = undefined )
+            if wc2 != undefined do
+            (
+                d2 = (distance wc2 want)
+                if d2 > afterWorst do ( afterWorst = d2; afterName = (pr.name as string) )
+                if d2 > 1.0 do
+                (
+                    afterFail += 1
+                    if afterFail <= 3 do
+                        mmd2maxLog ("循环跑完代理还是不在 PMX 那个点 " + (pr.name as string) \
+                            + "：偏 " + (d2 as string) + " 中心=" + (wc2 as string) \
+                            + " 期望=" + (want as string))
+                )
+            )
         )
     )
     /* 关节：在关节位置放一个 Dummy 标记，记录两刚体索引与限位/弹簧（注释属性）。
@@ -6945,6 +7189,21 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local sumMsg = "物理刚体代理：" + (created as string) + "（失败 " + (rigidFail as string) + "）"
     sumMsg = sumMsg + " 关节标记：" + (jointCount as string) + "（失败 " + (jointFail as string) + "）"
     sumMsg = sumMsg + " 旋转失败=" + (rotFail as string)
+    /* 「有朝向的刚体」= PMX 里三根欧拉轴非零的根数。没有这一格，
+       `旋转失败=0` 分不清「全转上了」和「根本没有朝向可转」——
+       第 64~66 轮那种「254 根一根没转」反过来也可能变成「0 根其实什么都不用转」。 */
+    sumMsg = sumMsg + " 有朝向的刚体=" + (rotNonZero as string)
+    sumMsg = sumMsg + " 转后偏心=" + (offFail as string)
+    /* 挂父之后那一格才是「代理在不在角色身上」的尺：前面几格都在节点自己的空间里量。
+       `最大=` 带名字：第 70 轮 `挂父后世界偏心=4` 只留了前 3 条文字，第 4 根是谁、
+       最偏的那根是不是第 4 根，日志里查不到 —— 计数封顶可以，名字不能封顶。 */
+    sumMsg = sumMsg + " 挂父后世界偏心=" + (worldFail as string) + " 最大=" + (worstWorld as string) + "@" + worstName
+    sumMsg = sumMsg + " 挂父搬走=" + (linkShift as string)
+    /* 循环外那一次的读数（#90 第三层归属）：与上面那格成对照。 */
+    sumMsg = sumMsg + " 循环后仍偏=" + (afterFail as string) + " 最大=" + (afterWorst as string) + "@" + afterName
+    sumMsg = sumMsg + " 父骨带缩放=" + (parentScaled as string)
+    /* 非 0 就说明这一轮的胶囊其实是圆柱：形状退化了，但创建计数仍然好看。 */
+    sumMsg = sumMsg + " 胶囊退圆柱=" + (capFalls as string)
     sumMsg = sumMsg + " 层收纳失败=" + (layerFail as string)
     sumMsg = sumMsg + "；刚体在层 mmd2max_physics，关节在层 mmd2max_joints（隐藏=" + jtHide + "）"
     mmd2maxLog sumMsg

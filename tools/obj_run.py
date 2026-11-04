@@ -170,7 +170,15 @@ SAFE_STARTUP_BUTTONS = {
 
 
 def log(message: str) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+    line = f"[{time.strftime('%H:%M:%S')}] {message}"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # 控制台走本地代码页（这台机是 GBK），而判据消息里有 ⇒、≤ 这类字符：直接 print
+        # 会抛穿整个驱动，装配跑到一半就死（ObjRunWiringTests 用一条含 ⇒ 的消息踩实的）。
+        # 降级成「这条消息的可编码版本」重打一次 —— 丢的只是那几个符号，不是整轮。
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
 
 def _ascii_inputs(base: Path, stem: str, physics: bool) -> dict:

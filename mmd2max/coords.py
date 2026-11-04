@@ -25,6 +25,8 @@ Max 端就**不需要任何补偿旋转**了。顺带好处：这个 OBJ 在 Ble
 """
 from __future__ import annotations
 
+import math
+
 # convert_vec 的 3x3 线性部分（按行存：结果的第 i 个分量 = 该行与 (x,y,z) 的点积）
 MATRIX = ((1, 0, 0), (0, 0, 1), (0, 1, 0))
 
@@ -72,3 +74,103 @@ def max_from_obj(obj_value) -> tuple[float, float, float]:
     才有可执行的断言，而不用等一次几十分钟的 3ds Max 实跑。
     """
     return (obj_value[0], -obj_value[2], obj_value[1])
+
+
+# ---------------------------------------------------------------------------
+# 旋转（PMX 刚体朝向）
+#
+# 为什么这段必须在 Python，而不是在 MAXScript 里做矩阵共轭：
+# MAXScript 那一侧连着量出四条「我以为有、实际没有」的写法（探针 87 / 87b，
+# test_runs/probe87/probe_api*.txt）——
+#     transpose <matrix3>      → No "transpose" function for (matrix3 ...)
+#     <Angle4>.order = #xyz    → Unknown property: "order"
+#     translate <point3>       → No "Translate" function for [10,20,30]
+#     eulerAngles a b c order:#xyz → Argument count error: EulerAngles wanted 3, got 6
+# 加上 `eulerAngles` 的单位是**度**而 PMX 给弧度（探针 87 的 F/G 行），
+# 在 Max 里算这张矩阵要踩的坑比它算的数学还多。所以 Python 把最终要写给
+# `node.rotation` 的三个**度数**算出来，MAXScript 只做那条 Max 自带脚本里出现
+# 66 次的写法：`proxy.rotation = (eulerAngles a b c)`。
+#
+# 两条口径都是**实测**的，不是推的：
+#   1) `(eulerAngles 30 40 50) as matrix3` 的线性算子 = Rz(50)·Ry(40)·Rx(30)
+#     （探针 87 的 J 行矩阵与这个乘积逐元素相同，与其余 5 种顺序差 0.25~0.67）；
+#      `eulerToQuat ... order:1` 与 `as quat` 四分量相同 ⇒ order:1 就是默认口径。
+#   2) 节点那边是**反的**：`.rotation = (eulerAngles 0 0 90)` 之后 transform 的
+#      第一行（= 该节点局部 X 轴在世界里的指向）= [0,-1,0]（探针 87b 的 4c 行），
+#      而同一个三重值的纯数学矩阵把 X 映到 [0,1,0]（探针 87 的 H 行口径）。
+#      即 node 的旋转算子 N = std(a,b,c)^T。
+#      顺带两条同源读数：4a 写 (quat 0 0 -0.7071 0.7071) 得到与 4c **完全相同**的
+#      transform，且读回 `.rotation` 与写入值相等 —— 节点用的 quat 是数学 quat 的共轭。
+# 合起来：要把 MMD 的朝向 R_pmx 搬到 Max 节点，需要
+#      N = Φ · R_pmx · Φ⁻¹（Φ 含镜像，det=-1；共轭仍给出真旋转，det=+1）
+#      且 N = std(a,b,c)^T  ⇒  std(a,b,c) = N^T = Φ · R_pmx^T · Φ（Φ 对称且对合）
+# 镜像把角度翻一次、节点口径又翻一次，两次抵消 —— 所以「MMD 里绕上轴 +90 度」
+# 在 Max 里仍是绕上轴 +90 度，观感一致。这条不是推出来的：tests/test_coords.py
+# 拿「MMD 局部 X 轴经 R_pmx 再经 Φ」与「rigid_rotation_max 复原的节点第一行」对撞。
+# ---------------------------------------------------------------------------
+
+_EULER_TOL = 1e-9
+
+
+def _mat3_mul(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+                 for i in range(3))
+
+
+def _mat3_transpose(a):
+    return tuple(tuple(a[j][i] for j in range(3)) for i in range(3))
+
+
+def _rot_x(t):
+    c, s = math.cos(t), math.sin(t)
+    return ((1.0, 0.0, 0.0), (0.0, c, -s), (0.0, s, c))
+
+
+def _rot_y(t):
+    c, s = math.cos(t), math.sin(t)
+    return ((c, 0.0, s), (0.0, 1.0, 0.0), (-s, 0.0, c))
+
+
+def _rot_z(t):
+    c, s = math.cos(t), math.sin(t)
+    return ((c, -s, 0.0), (s, c, 0.0), (0.0, 0.0, 1.0))
+
+
+def _euler_std(a, b, c):
+    """Max 的 `eulerAngles a b c`（弧度版）对应的线性算子 = Rz·Ry·Rx。"""
+    return _mat3_mul(_mat3_mul(_rot_z(c), _rot_y(b)), _rot_x(a))
+
+
+def _euler_from_std(m):
+    """把真旋转矩阵拆回 `eulerAngles` 三重角（弧度）。
+
+    cos(b)=0 是万向锁：那时只有 c-a 有定义，取 a=0 再解 c。分支公式是代入
+    b=±90° 后 Rz·Ry·Rx 的解析结果（不是数值搜出来的），两种符号各一条。
+    """
+    sy = max(-1.0, min(1.0, -m[2][0]))
+    b = math.asin(sy)
+    if abs(math.cos(b)) < _EULER_TOL:
+        if sy > 0:
+            return 0.0, b, math.atan2(-m[0][1], m[0][2])
+        return 0.0, b, math.atan2(-m[0][1], -m[0][2])
+    return math.atan2(m[2][1], m[2][2]), b, math.atan2(m[1][0], m[0][0])
+
+
+def rotation_matrix_pmx(value):
+    """PMX 刚体/关节的欧拉（弧度）→ 线性算子 Rz·Ry·Rx。
+
+    PMX 规范没写欧拉顺序（MMD 各家实现也不一致），所以这里**指定**与 Max 默认
+    口径同一套（探针 87 实测的 Rz·Ry·Rx），并把这条选择记成代码里唯一的一处。
+    顺序只在三根轴都不为零时才看得出来，而裙摆/头发刚体绝大多数只有一个非零角
+    ——单轴情况下任何顺序都给出同一个旋转。
+    """
+    return _euler_std(float(value[0]), float(value[1]), float(value[2]))
+
+
+def rigid_rotation_max(value) -> tuple[float, float, float]:
+    """PMX 欧拉（弧度）→ 直接写进 `node.rotation = (eulerAngles a b c)` 的度数。"""
+    node_want = _mat3_transpose(_mat3_mul(_mat3_mul(MATRIX, rotation_matrix_pmx(value)),
+                                          MATRIX))
+    a, b, c = _euler_from_std(node_want)
+    return (math.degrees(a), math.degrees(b), math.degrees(c))
+
