@@ -169,10 +169,24 @@ PASSES: tuple[Pass, ...] = (
     _pass("toe_snap_reach", "接趾后脚趾复摆", requires=("foot_reach",),
           writes=("toe_snap",), moves=True, optional=True,
           reads=(("toe_snap", "residual_after_reach_cm"),)),
+    # 趾盒收尾（#78）：把趾骨骨盒的三根轴在**最终帧**重收一次。
+    # 早帧那次（toe_box）量的轴号到终帧已经不作数了 —— 收敛循环与两次复摆会把趾骨
+    # 转过约 90 度，于是「薄边」写在了一根不再指向脚尖的轴上，而 #75 的盒账忠实地
+    # 把那个错轴带进回读，读数是自洽的、几何是错的。规矩与 #41 同一条：会改骨盒的写
+    # 必须排在最后挪动这根骨的 pass 之后。
+    # 这里不写 moves=True 而是留空：缩的是**链尾**那根骨，它没有子节点，父→子距离、
+    # 落位、脚链朝向都不受一次 #scale 影响（#41 之所以要 moves=True，是因为它缩的是
+    # 父骨 Foot，把 Toe0 沿轴推走了）。反过来，唯一读骨盒尺寸的人（box_verify）排在
+    # 它后面，量到的必然是重收之后的样子 —— 声明作废一条没人需要在它之后重测的读数，
+    # 等于给 audit 造一条永远满足不了的规则（注册表校验会直接拒绝 moves=True：
+    # toe_snap 的两位作者都在它之前）。哪天趾骨下面挂了东西（例如鞋带骨），这条必须
+    # 改回 moves=True。
+    _pass("toe_box_final", "趾盒截面（最终帧重收）", requires=("toe_snap_reach",),
+          invalidates=()),
     # 探针实测：退出 Figure 模式前后，Toe0 目标位与踝 pivot 逐字相同（B1 vs B2），
     # 所以这里刻意**不**声明作废任何读数 —— 声明了就是把「几何中性的退出」写成了
     # 一次移动，下一轮谁把这段往前挪都会被抓成 STALE 的假警报。
-    _pass("figure_exit", "退出 Figure 模式", requires=("toe_snap_reach",)),
+    _pass("figure_exit", "退出 Figure 模式", requires=("toe_box_final",)),
     # 以下五道是终局复核：它们只读不写，所以 invalidates 全空，但要排在
     # figure_exit 之后（骨盒朝向在 Figure 模式内读出来是另一套数）。
     _pass("foot_chain_check", "脚骨偏航 / 链向 / 盒隙复核",

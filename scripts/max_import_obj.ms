@@ -3260,7 +3260,9 @@ fn mmd2maxVerifyBoxes root limbs widths =
        （Python 沿骨轴量网格得到的截面），趾长来自第 11 列；手掌手指来自 widths.tsv。
        两把尺分开报的理由见 mmd2max/verdicts.box_targets 的注释（脚链读包围盒跨度，
        手部 gate 读 #scale、跨度只要求出现）。
-       参考方向与写入同一条：足背 = 实测踝 pivot → PMX 脚掌，脚趾 = PMX 脚掌 → 鞋尖。
+       参考方向与写入同一条：足背 = 实测踝 pivot → PMX 脚掌，脚趾 = mmd2maxBoxWantDir
+       （脚掌 → 鞋尖，压平口径与导出侧 FOOT_BOX_FLAT 同真同假 —— #78 之前写入用的是三维
+       向量，而这只鞋的鞋尖比脚掌低 1.23cm，两个口径挑出来的不是同一根轴）。
        返回 #(量到的节点数, 读不到的节点数)：读不到的也算一条失败读数，因为「没量」
        和「量了没问题」在报告里长得一样这件事，v3 已经吃过 40 轮。 */
     local measured = 0
@@ -3303,7 +3305,11 @@ fn mmd2maxVerifyBoxes root limbs widths =
                 local tl = length tv
                 if tl > 0.5 then
                 (
-                    local okC = mmd2maxReportBoxDims cName cnode (tv / tl)
+                    /* 与 脚趾两段 / 趾盒收尾 同一个参考方向：盒账读不到时才会用到它，
+                       而那正是「写入与回读各挑一根轴」最容易分叉的落点（#78）。 */
+                    local wantC = mmd2maxBoxWantDir cName ballPos ballPos tipPos
+                    if wantC == undefined do wantC = tv / tl
+                    local okC = mmd2maxReportBoxDims cName cnode wantC
                     if okC == 1 then measured += 1
                     else failed += 1
                 )
@@ -4682,7 +4688,15 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 /* 2) 三根轴各归各位：长度轴 = 趾长，另两根 = 脚尖处能量下的宽/高。
                    「哪根是宽、哪根是高」的判据与 Foot 段共用（见 mmd2maxFitCrossSection：
                    谁更贴近世界 Z 谁是高，不看谁现在更粗）。 */
-                local dir = normalize (tipPos - ballPos)
+                /* 参考方向与「画线/链向/转角」同一个函数（mmd2maxBoxWantDir），不再现场
+                   用三维的 鞋尖−脚掌：第 48 轮实测海灯节的鞋尖比脚掌关节**低 1.23cm**、
+                   水平只走 0.17cm，那条三维向量几乎是竖直的 ⇒ 挑出来的「长度轴」是骨
+                   自己的竖轴，于是 0.5722 的趾长被写在竖直轴上、3.4674 那根边顺着趾方向
+                   戳出鞋尖。导出侧量截面时用的就是压平后的那根轴（FOOT_BOX_FLAT），写入
+                   用另一根，等于两端各按各的口径。undefined（没压平且斜过 45 度）才退回
+                   三维向量。 */
+                local dir = mmd2maxBoxWantDir cnode.name ballPos ballPos tipPos
+                if dir == undefined do dir = normalize (tipPos - ballPos)
                 mmd2maxLogLocalBox ("趾盒框 " + cName) cnode
                 local cs = mmd2maxFitCrossSection cnode dir toeW toeH
                 if cs == undefined then
@@ -5031,6 +5045,69 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             mmd2maxLog ("足盒接趾复摆：净改善 " + (toeSnapped2 as string) + " 根跟回 PMX 脚掌落位")
         mmd2maxReport "pass" "ran" "toe_snap_reach" 1
     )
+
+    /* ===== 趾盒收尾（#78）：截面必须收在**最终帧**上 =====
+       第 48 轮的账：海灯节 `脚趾 … 长度轴=2 宽高轴=3/1` 是**写入那一刻**的帧量的，
+       而终帧 `画线 Bip001 L/R Toe0 … 最近轴=1` —— 趾方向早帧落在局部 Y，收敛循环
+       加两次复摆把这根骨转过约 90 度之后改落在局部 X。于是盒子的薄边 0.5722 写在
+       了一根不再指向脚尖的轴上，3.4674 那根边顺着趾方向戳出鞋尖 3.47cm。
+       `骨盒回读` 按 #75 那笔盒账读，所以它自洽、报不出问题：那一轮只有 R Toe0 的
+       宽高互换两行红，而 L 恰好早帧与终帧的 |z| 顺序一致，把同一件事整个盖住了。
+       香菱本来就一致（`脚趾 … 长度轴=1` == 终帧 `最近轴=1`），这道收尾对它是空跑：
+       三个目标都已到位，闭环一次都不写。
+       排位与 #41 同一条道理：会改骨盒的写必须排在「最后挪动这根骨的 pass」之后，
+       否则写入的帧和被验收的帧不是同一帧。 */
+    local toeBoxFinal = 0
+    for item in limbs do
+    (
+        if item.count >= 10 and item[5] == "foot" do
+        (
+            local cName = item[2]
+            local ballPos = item[4]
+            local toeLen = item[7]
+            local tipPos = item[8]
+            local toeW = item[9]
+            local toeH = item[10]
+            local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+            if cnode != undefined and ballPos != undefined and tipPos != undefined \
+               and toeLen > 0.001 and toeW > 0.05 and toeH > 0.05 do
+            (
+                /* 与早帧那一道、与画线/链向同一个参考方向（理由见 脚趾两段 里那段）。 */
+                local dir = mmd2maxBoxWantDir cnode.name ballPos ballPos tipPos
+                if dir == undefined do dir = normalize (tipPos - ballPos)
+                /* 早帧那笔盒账先抄下来：FitCrossSection 会把同一根骨的行覆盖掉。 */
+                local axEarly = mmd2maxBoxAxisOf cnode.name
+                mmd2maxLogLocalBox ("趾盒终帧前 " + cName) cnode
+                local cs = mmd2maxFitCrossSection cnode dir toeW toeH
+                if cs == undefined then
+                    mmd2maxLog ("  趾盒 " + cName + " 长度轴读不到，截面未收")
+                else
+                (
+                    local ai = cs[7]
+                    local before = mmd2maxLocalExtent cnode ai
+                    local rL = mmd2maxFitBoneExtent cnode ai toeLen
+                    local msg = "  趾盒 " + cName + " 趾长 " + (before as string)
+                    msg = msg + " -> " + (rL[1] as string)
+                    msg = msg + " 目标=" + (toeLen as string)
+                    msg = msg + " 截面 " + (cs[5] as string) + "/" + (cs[6] as string)
+                    msg = msg + " -> " + (cs[1] as string) + "/" + (cs[2] as string)
+                    msg = msg + " 宽/高目标=" + (toeW as string) + "/" + (toeH as string)
+                    msg = msg + " 宽高轴=" + (cs[3] as string) + "/" + (cs[4] as string)
+                    msg = msg + " 长度轴=" + (ai as string)
+                    msg = msg + " 早帧轴=" + (axEarly as string)
+                    msg = msg + " 迭代=" + (rL[2] as string)
+                    if rL[3] do msg = msg + "(长度对缩放没反应，已停)"
+                    if cs[10] or cs[11] do msg = msg + "(宽高对缩放没反应，已停)"
+                    mmd2maxLog msg
+                    mmd2maxLogLocalBox ("趾盒终框 " + cName) cnode
+                    toeBoxFinal += 1
+                )
+            )
+        )
+    )
+    mmd2maxLog ("趾盒收尾：最终帧重收 " + (toeBoxFinal as string) + " 根趾盒截面")
+    mmd2maxReport "pass" "ran" "toe_box_final" 1
+
     if rotTotal > 0 do
         mmd2maxLog ("转角 pass：接口=" + (rotWay as string) + " 累计尝试=" + (rotTotal as string) \
             + " 改善=" + (rotBetter as string) + " 未改善=" + (rotWorse as string) \
