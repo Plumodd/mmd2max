@@ -572,7 +572,8 @@ def check_empty_catch(src: str) -> list[str]:
     （报错文字 `Unknown property ... in #Struct:skinOps(...)` 会带出 143 个成员）——
     **forceUpdate 不在里面**。那句从来就没生效过，我们却一直以为「force 更新之后再读
     GetNumberBones」是可信的。空 catch 把一个死调用藏了十几轮。
-    同一文件里这样的 catch 有 64 个。
+    同一文件里这样的 catch 曾有 64 个 —— #81 把 66 条（含后来新增的）清到 0，
+    并把这条规则从 `--strict` 改成默认拦路。
 
     确实允许失败的地方（可选 API、探测某个属性存不存在）必须显式写
     `-- 允许失败：<理由>` 在同一行，让"这里会静默"变成一条能 grep 的声明。
@@ -596,7 +597,19 @@ CHECKER_NAME_RE = re.compile(r"(?i)^(mmd2max)?(Check|Verify|Audit|Score|Valid|Lo
 ORACLE_NAME_RE = re.compile(r"(?i)(Want|Target|Desired|Expect|SegLen|BoxDir)")
 
 # 已定价的例外：(判据函数, 它允许调用的求值器)。加进来必须带理由，空着最理想。
-ORACLE_EXEMPT: set[tuple[str, str]] = set()
+#
+# (mmd2maxVerifyBoxes, mmd2maxBoxWantDir)：脚趾盒的「参考方向」与写入同一条。
+# 这一条在 _fn_spans 修好之前根本查不出来（每个 fn 跨度只有 1 行，规则 I 只看
+# 得到声明行），修好后它立刻命中 —— 命中是对的方向，但这条是定价过的：
+#   * gate 的期望值不来自写入侧（脚链 limbs.tsv 第 15~18 列 / 趾长第 11 列 /
+#     widths.tsv，Python 沿骨轴量网格算出来的），`Want` 在这里只当「沿哪根方向量」的轴选择器；
+#   * #79 加的 `span_want_cm` 把盒角点投到这个方向上直接量，绕开盒账：骨盒要是没沿
+#     它被指着的那根轴长，这一行就短于趾长目标，判据变红 —— 换模型冒烟（#75）实测
+#     就是这么红过 15 行又收到 10 行的，所以这条判据「有能力说不」不是推测。
+# 保留：如果哪天 span_want_cm 被删，这个例外就必须跟着删（它成立完全靠那把独立尺）。
+ORACLE_EXEMPT: set[tuple[str, str]] = {
+    ("mmd2maxVerifyBoxes", "mmd2maxBoxWantDir"),
+}
 
 
 def _fn_spans(code_lines: list[str]) -> list[tuple[str, int, int]]:
@@ -604,34 +617,62 @@ def _fn_spans(code_lines: list[str]) -> list[tuple[str, int, int]]:
 
     只认顶格写的 fn —— check_fn_depth 已经保证顶格 fn 一定在深度 0，
     嵌套进去的是局部函数，不归这条规则管。
+
+    关键：声明行自己没有括号 **不算函数结束**。这份文件里绝大多数函数写成
+        fn mmd2maxLog message =
+        (
+            ...
+        )
+    括号在下一行才开。早期版本按「深度回到 0 就关段」处理，于是每个 fn 的跨度
+    都只有声明那 1 行，规则 I 只看得到 `fn 名字 …` 这行，永远查不出调用 —— 一条
+    看着在跑、实际是死的闸（比没有闸更坏，因为它让人以为有人在管）。
     """
     spans: list[tuple[str, int, int]] = []
     depth = 0
-    open_name = None
+    open_name: str | None = None
     open_line = 0
-    body_depth = 0
+    opened = False
+
+    def close(end_line: int) -> None:
+        nonlocal open_name, opened
+        if open_name is not None:
+            spans.append((open_name, open_line, end_line))
+            open_name = None
+            opened = False
+
     for index, code in enumerate(code_lines, start=1):
         stripped = code.strip()
-        if depth == 0 and open_name is None:
-            m = re.match(r"(?:fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
-            if m:
-                open_name = m.group(1)
-                open_line = index
-                body_depth = depth
-        if open_name is not None:
-            new_depth = depth + _paren_delta(code)
-            if new_depth <= 0:
-                spans.append((open_name, open_line, index))
-                open_name = None
-            depth = new_depth
-            if depth < 0:
-                depth = 0
-        else:
-            depth += _paren_delta(code)
-            if depth < 0:
-                depth = 0
-    if open_name is not None:
-        spans.append((open_name, open_line, len(code_lines)))
+        delta = _paren_delta(code)
+        head = None
+        if depth == 0:
+            match = re.match(r"(?:fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if match:
+                head = match.group(1)
+        if head is not None:
+            close(index - 1)
+            open_name, open_line, opened = head, index, False
+            depth = max(depth + delta, 0)
+            opened = depth > 0
+            continue
+        if open_name is None:
+            depth = max(depth + delta, 0)
+            continue
+        if not opened:
+            # 还没见着括号：要么这是「一行体」（本行没有开括号，下一段就是新语句），
+            # 要么括号在后面的行上等。
+            if depth == 0 and delta <= 0 and stripped and index > open_line:
+                close(index - 1)
+                depth = max(depth + delta, 0)
+                continue
+            if depth + delta > 0:
+                opened = True
+            depth = max(depth + delta, 0)
+            continue
+        depth += delta
+        if depth <= 0:
+            close(index)
+            depth = 0
+    close(len(code_lines))
     return spans
 
 
@@ -707,14 +748,14 @@ def check_bare_fn_reference(src: str) -> list[str]:
     return problems
 
 
-def check_source(src: str, strict: bool = False) -> list[str]:
+def check_source(src: str) -> list[str]:
     """全部规则跑一遍，返回问题列表（obj_run 生成脚本后直接调它）。
 
-    strict=False（默认）只跑 14 条「编译期会炸」的老规则；规则 V/I 是 v4 新加的
-    结构性约束，v3 继承下来的违规还有 60+ 条，一次性拦会把每一轮实跑都卡住。
-    所以先记账不拦路，main() 会把债的条数打出来；清完那天把 strict 打开（M4 的验收
-    项之一）。**注意**：不拦路不等于不重要 —— 空 catch 把 skinOps.forceUpdate 这个
-    死调用藏了十几轮，就是"先记账、以后再说"的下场。
+    14 条是「编译期会炸」的老规则；规则 V/I 是 v4 新加的结构性约束。以前 V/I 走
+    `--strict` 开关，因为 v3 继承了 60+ 条空 catch，一次性拦会把每一轮实跑卡住。
+    #81 把这些债清到 0（每条要么换成记下了失败的读数，要么写成 `-- 允许失败：<理由>`），
+    所以开关删掉，V/I 从此默认拦路。**注意**：不拦路从来不等于不重要 —— 空 catch 把
+    `skinOps.forceUpdate` 这个死调用藏了十几轮，就是"先记账、以后再说"的下场。
     """
     problems = (check_reserved(src) + check_balance(src) + check_strings(src)
                 + check_if_do_else(src) + check_local_time(src)
@@ -722,25 +763,22 @@ def check_source(src: str, strict: bool = False) -> list[str]:
                 + check_empty_fn_params(src) + check_chained_call_property(src)
                 + check_bare_min_max(src) + check_comma_call(src)
                 + check_optional_params(src) + check_forward_reference(src)
-                + check_bare_fn_reference(src))
-    if strict:
-        problems = problems + check_v4_debt(src)
+                + check_bare_fn_reference(src) + check_v4_debt(src))
     return problems
 
 
-def check_file(path: Path, strict: bool = False) -> list[str]:
+def check_file(path: Path) -> list[str]:
     if not path.is_file():
         return [f"文件不存在：{path}"]
-    return check_source(path.read_text(encoding="utf-8"), strict=strict)
+    return check_source(path.read_text(encoding="utf-8"))
 
 
 def main(argv: list[str]) -> int:
-    strict = "--strict" in argv[1:]
     targets = [Path(a) for a in argv[1:] if not a.startswith("--")] or sorted(
         (ROOT / "scripts").glob("*.ms"))
     total = 0
     for path in targets:
-        problems = check_file(path, strict=strict)
+        problems = check_file(path)
         label = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
         if problems:
             total += len(problems)
@@ -749,14 +787,6 @@ def main(argv: list[str]) -> int:
                 print("   ", item)
         else:
             print(f"[OK]   {label}")
-        if not strict:
-            # 结构性债（规则 V/I）默认只记账不拦路 —— 拦路会让每一轮实跑都卡在这
-            # 60+ 条继承债上。清到 0 就把 --strict 打开，让 check_ms 真正咬人。
-            debt = len(check_v4_debt(path.read_text(encoding="utf-8")
-                                     if path.is_file() else ""))
-            if debt:
-                print(f"       （另有 {debt} 条 v4 结构性债：空 catch / 判据同源；"
-                       f"--strict 才拦路）")
     return 1 if total else 0
 
 

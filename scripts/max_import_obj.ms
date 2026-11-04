@@ -48,6 +48,7 @@ global MMD2MAX_OUTPUT
 global MMD2MAX_MARKER
 global MMD2MAX_LOG
 global MMD2MAX_VERDICTS
+global MMD2MAX_REFRESHCALL
 global MMD2MAX_REPORT
 global MMD2MAX_SHOTDIR
 global MMD2MAX_VERTS
@@ -177,7 +178,9 @@ fn mmd2maxLog message =
             if f != undefined do ( format "%\n" text to:f; close f )
         )
     )
-    catch ()
+    -- 这里不许调 mmd2maxLog 记失败：它自己就是 mmd2maxLog，写不进就会递归。
+    -- 上一行的 format 已经把同一条打到监听器，所以失败出口是监听器 + 这条异常文字。
+    catch ( format "[mmd2max] !! 日志落盘失败: %\n" (getCurrentException()) )
 )
 
 fn mmd2maxInitLog =
@@ -204,7 +207,9 @@ fn mmd2maxInitLog =
             )
         )
     )
-    catch ()
+    -- 同上：这条也不能用 mmd2maxLog（日志文件正是这里要建的）。初始化没成 = 后面每一行
+    -- 只剩监听器，实跑的 obj_run 收不到文件日志，所以失败文字必须自己打出去。
+    catch ( format "[mmd2max] !! 日志初始化失败: %\n" (getCurrentException()) )
 )
 
 /* ===== 判据通道（M2b）：Max 只报数，不判定 ===== */
@@ -309,7 +314,8 @@ fn mmd2maxZoomFit =
         catch ( mmd2maxLog ("切视口失败：" + (getCurrentException() as string)) )
         try ( viewport.zoomToBounds off b.min b.max )
         catch ( mmd2maxLog ("取景失败：" + (getCurrentException() as string)) )
-        try ( viewport.zoom 1.35 ) catch ()
+        try ( viewport.zoom 1.35 )
+        catch ( mmd2maxLog ("取景余量拉伸失败：" + (getCurrentException() as string)) )
     )
     completeRedraw()
     true
@@ -338,7 +344,12 @@ fn mmd2maxShotMeshes =
 
 fn mmd2maxSetMeshHidden flag =
 (
-    for o in MMD2MAX_SHOTMESH do ( try ( o.isHidden = flag ) catch () )
+    /* 每只网格各包一次：Max 对单个节点写 isHidden 会挑（上一版实测过 Biped 那类不接受），
+       所以「一条抛错」不该把后面几十条一起带走。抛过的根数必须变成一行日志 —— 「藏网格」
+       失败=骨和网格混在同一张图里，那是图不可判，不是截图段没跑。 */
+    local failed = 0
+    for o in MMD2MAX_SHOTMESH do ( try ( o.isHidden = flag ) catch ( failed += 1 ) )
+    if failed > 0 do ( mmd2maxLog ("截图切网格可见性失败 " + (failed as string) + "/" + (MMD2MAX_SHOTMESH.count as string) + " 根 flag=" + (flag as string)) )
     completeRedraw()
     MMD2MAX_SHOTMESH.count
 )
@@ -444,7 +455,7 @@ fn mmd2maxClipBones lo hi =
             (
                 /* 写回读：藏没藏上只有 Max 自己知道，而「一张没裁」在图上看不出来，
                    只有 clip_hidden 这个数能看出来 —— 所以这个数必须是真藏成的根数。 */
-                try ( o.isHidden = true ) catch ()
+                try ( o.isHidden = true ) catch () -- 允许失败：下一行立刻回读 o.isHidden，没藏上就不进名单，clip_hidden 不会把它数成藏了
                 if (try ( o.isHidden ) catch ( false )) do
                 (
                     append MMD2MAX_SHOTCLIP o
@@ -461,7 +472,9 @@ fn mmd2maxUnclipBones =
     /* 只还原这一张藏掉的那些（名单为空时什么都不做，所以整场景那五张是原样）。 */
     if MMD2MAX_SHOTCLIP.count == 0 do return 0
     local n = MMD2MAX_SHOTCLIP.count
-    for o in MMD2MAX_SHOTCLIP do ( try ( o.isHidden = false ) catch () )
+    local failed = 0
+    for o in MMD2MAX_SHOTCLIP do ( try ( o.isHidden = false ) catch ( failed += 1 ) )
+    if failed > 0 do ( mmd2maxLog ("截图还原骨可见失败 " + (failed as string) + "/" + (n as string) + " 根：下一张会拍在「上一张的骨还藏着」这个现场上") )
     MMD2MAX_SHOTCLIP = #()
     completeRedraw()
     n
@@ -476,8 +489,8 @@ fn mmd2maxUnclipBones =
    这些都发生在 .max 落盘之后，抓完立刻还原，不污染用户接着看的场景。 */
 fn mmd2maxPrepareShot =
 (
-    try ( hide (getNodeByName "Grid") ) catch ()
-    try ( select #() ) catch ()
+    try ( hide (getNodeByName "Grid") ) catch () -- 允许失败：场景里没有名为 Grid 的栅格时 hide 直接抛；画面上多一个栅格不影响任何读数，只影响好不好看
+    try ( select #() ) catch () -- 允许失败：取消选择失败只让选中对象在图上带高亮色，落盘的 .max / 骨 / 权重都不看选中集
     MMD2MAX_SHOTMESH = mmd2maxShotMeshes()
     MMD2MAX_SHOTFILL = #()
     /* 场景里一共有几根「骨」—— 裁骨的分母，只报一次。
@@ -500,13 +513,15 @@ fn mmd2maxRestoreShot =
 (
     /* 只还原我们藏掉的那些：上一版对 objects 里每个对象都 isHidden = false，
        会把用户本来就藏着的对象一并显示出来。 */
-    for o in MMD2MAX_SHOTMESH do ( try ( o.isHidden = false ) catch () )
+    local failed = 0
+    for o in MMD2MAX_SHOTMESH do ( try ( o.isHidden = false ) catch ( failed += 1 ) )
+    if failed > 0 do ( mmd2maxLog ("截图还原网格可见失败 " + (failed as string) + "/" + (MMD2MAX_SHOTMESH.count as string) + " 根：用户接着看的场景里它们还是藏的") )
     MMD2MAX_SHOTMESH = #()
     /* 兜底再还原一次裁掉的骨（#72）：每张 ShotOne 自己会还，但那张包在外层 try 里 ——
        中途抛异常时名单还挂着，下一张就拍在「上一张的骨是藏的」这个现场上。
        名单空的时候这条什么都不做，所以它不是「再藏一遍的反面」，只是收尸。 */
     mmd2maxUnclipBones()
-    try ( viewport.SetShowEdgeFaces false ) catch ()
+    try ( viewport.SetShowEdgeFaces false ) catch () -- 允许失败：只关用户视口的三角边叠层；下一段 PrepareShot 会自己设 true，落盘产物不读这个开关
     completeRedraw()
     true
 )
@@ -527,7 +542,7 @@ fn mmd2maxFileTicks path =
 (
     local ticks = -1
     if doesFileExist path do
-    try ( ticks = ((dotNetClass "System.IO.File").GetLastWriteTime path).Ticks ) catch ()
+    try ( ticks = ((dotNetClass "System.IO.File").GetLastWriteTime path).Ticks ) catch () -- 允许失败：取不到就是 -1，调用方拿 before/after 两个 -1 相等判「没落盘」，失败只会多报失败、不会报成成功
     ticks
 )
 
@@ -584,7 +599,7 @@ fn mmd2maxShotFill viewKind lo hi =
     if sLo == undefined or sHi == undefined do return -1.0
     local dPx = distance [sLo.x, sLo.y, 0.0] [sHi.x, sHi.y, 0.0]
     local winY = 0.0
-    try ( winY = gw.getWinSizeY() as float ) catch ()
+    try ( winY = gw.getWinSizeY() as float ) catch () -- 允许失败：winY 留在 0.0 ⇒ 下面那条 `winY <= 0.0` 把这一张的填充率判成 -1.0（刺眼的负数），不会读成一个正常的百分比
     if winY <= 0.0 do return -1.0
     100.0 * dPx / winY
 )
@@ -678,7 +693,8 @@ fn mmd2maxFitView viewKind lo hi =
     local fitted = false
     try ( viewport.zoomToBounds off lo hi; fitted = true )
     catch ( mmd2maxLog ("取景失败：" + (getCurrentException() as string)) )
-    try ( viewport.zoom 1.35 ) catch ()
+    try ( viewport.zoom 1.35 )
+    catch ( mmd2maxLog ("取景余量拉伸失败：" + (getCurrentException() as string)) )
     completeRedraw()
     fitted
 )
@@ -719,7 +735,7 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
     if bmp == undefined do
     (
         completeRedraw()
-        try ( bmp = gw.getViewportDib() ) catch ()
+        try ( bmp = gw.getViewportDib() ) catch () -- 允许失败：再拿不到时 bmp 仍是 undefined，下面那条 `if bmp == undefined` 已经把「视口取不到图」打成一行失败读数；第一次尝试的异常文字在上面那个 catch 里已经记过
     )
     /* 还原排在**取图之后、落盘之前**：DIB 已经在手里，藏没藏回都不影响这张图，
        而这一段两条出口（取图为空 / 正常）都必须走过还原 —— 排在分支之前只写一次，
@@ -794,7 +810,7 @@ fn mmd2maxScreenshot =
         if p != "" do baseName = getFilenameFile p
     )
     catch ( baseName = "mmd2max" )
-    try ( makeDir outDir ) catch ()
+    try ( makeDir outDir ) catch () -- 允许失败：目录在不在由下面 doesFileExist (outDir + "\\") 实测，绝不靠「makeDir 没报错」推断；目录已存在时 makeDir 也会抛
     /* 目录到底在不在，用 doesFileExist 实测，绝不靠「makeDir 没报错」推断。 */
     local dirReady = false
     try
@@ -1473,7 +1489,7 @@ fn mmd2maxImportObj =
                 )
                 else firstMap = theMat.diffusemap
             )
-            catch ()
+            catch ( mmd2maxLog ("贴图探查失败：" + (getCurrentException() as string)) )
             if firstMap != undefined do
             (
                 local mapFile = "?"
@@ -1510,7 +1526,8 @@ fn mmd2maxMeshes =
            必须显式排除。本函数在「建骨之后」调用，若不排除会把几百根骨骼/Biped
            节点一起算成网格（实跑踩到：报「产生了 446 个网格对象」而中止）。 */
         if cls == BoneGeometry do continue
-        try ( if (classOf obj.controller) == Biped_Control do continue ) catch ()
+        try ( if (classOf obj.controller) == Biped_Control do continue )
+        catch ( mmd2maxLog ("Biped 控制器探测失败 " + (classOf obj as string) + "：" + (getCurrentException() as string)) )
         if cls == Biped_Object do continue
         if (canConvertTo obj Editable_Mesh) do append result obj
     )
@@ -1603,7 +1620,10 @@ fn mmd2maxBipedScale node =
         local v = biped.getTransform node #scale
         if v != undefined do s = v
     )
-    catch ()
+    /* 回落 [1,1,1] 和「真 scale 就是 [1,1,1]」在数上长得一样，而这一份 scale 直接乘进
+       骨盒的厘米数（段校验 父scale= / 骨盒回读 都吃它）—— 所以读不到必须留一行字，
+       不能让「没量到」冒充「量到 1.0」。 */
+    catch ( mmd2maxLog ("Biped scale 读不到 " + (try (node.name) catch ("?")) + "：回落 [1,1,1]，" + (getCurrentException() as string)) )
     s
 )
 
@@ -2051,20 +2071,65 @@ fn mmd2maxRotateBoneAround node ang ax =
     err
 )
 
+fn mmd2maxBipedRefresh =
+(
+    /* 逼一次控制器重算。返回真跑通的那一句的名字，一种都不通返回 ""；结果缓存在
+       全局里，所以每轮只打一行读数。
+
+       这条是第 62 轮的日志自己报出来的：旧写法 `update 0` 抛
+       `-- No "update" function for 0` —— Max 2022 没有全局 `update`，MAXScript 把
+       `update 0` 读成「给整数 0 发 update 消息」。也就是说从 #4 起每一句
+       「刷新后仍在 >= 15 度」量的其实都是「写完立刻读」。这和 v3 那句从来没生效过的
+       `skinOps.forceUpdate` 是同一种死法，而规则 V 立项时举的就是后者的例子 ——
+       清完空 catch 的第一个实证是它自己抓出来的。
+       候选按「会不会真按时间重算控制器」排：`updateSceneTime` 就是干这个的；
+       `redrawViews()` 只重画视口，聊胜于无。 */
+    if MMD2MAX_REFRESHCALL == undefined do
+    (
+        local used = ""
+        local why = ""
+        if used == "" do
+        (
+            try ( updateSceneTime 0; used = "updateSceneTime 0" )
+            catch ( why = why + " updateSceneTime→" + (getCurrentException() as string) + "；" )
+        )
+        if used == "" do
+        (
+            try ( redrawViews(); used = "redrawViews()" )
+            catch ( why = why + " redrawViews→" + (getCurrentException() as string) + "；" )
+        )
+        MMD2MAX_REFRESHCALL = used
+        /* 试掉的那几句必须一起报：第 63 轮就是这句「redrawViews」赢了，但没人知道
+           updateSceneTime 是怎么死的 —— 「哪种写法真的会重算控制器」这件事，
+           全靠这几个报错文字才能判，光一个赢家名字不够。 */
+        mmd2maxLog ("Biped 刷新调用：" + (if used == "" then "没有一种跑得通" else used) \
+            + (if why != "" then "（试掉：" + why + "）" else ""))
+    )
+    MMD2MAX_REFRESHCALL
+)
+
 fn mmd2maxRefreshedMoveDeg node axRef =
 (
     /* 「转完再逼 Biped 刷新一次」之后的局轴转角（度），取不到返回 -1.0。
        为什么必须有这一步：10:17 直接写 .transform / rotate 命令都读到 30 度，但那可能
        只是 MAXScript 自己的缓存 —— Biped 的控制器完全可以在下一次 update 时把 TM 按
        结构重算回去，那 30 度就是假的。做法：对同一根骨再发一次一直好用的 #pos（原值写回，
-       位置不动），再 update 0，然后重量局轴。 */
+       位置不动），再逼一次控制器重算（见 mmd2maxBipedRefresh；第 62 轮之前那句是
+       `update 0`，实测从来没生效过），然后重量局轴。 */
     local p = undefined
-    try ( p = node.transform.translationpart ) catch ()
+    local refreshed = false
+    try ( p = node.transform.translationpart )
+    catch ( mmd2maxLog ("刷新前平移读不到 " + (try (node.name) catch ("?")) + "：" + (getCurrentException() as string)) )
     if p != undefined do
     (
-        try ( biped.setTransform node #pos p false ) catch ()
+        try ( biped.setTransform node #pos p false; refreshed = true )
+        catch ( mmd2maxLog ("刷新用 #pos 原值重发失败 " + (try (node.name) catch ("?")) + "：" + (getCurrentException() as string)) )
     )
-    try ( update 0 ) catch ()
+    mmd2maxBipedRefresh()
+    /* 原值重发那条路没走通 ⇒ 下面量到的局轴仍是「没被 Biped 重算过的那份」，而本函数
+       存在的理由就是排除这种假 30 度。报 -1.0（调用方按「读不到」处理），不把未经验证
+       的读数当成验证过的 —— 这一句把三个 catch 的失败方向从「冒充成绩」改成「刺眼负数」。 */
+    if not refreshed do return -1.0
     local ax = mmd2maxBipedAxes node
     if axRef == undefined or ax == undefined do return -1.0
     mmd2maxAxisMoveDeg axRef ax
@@ -2281,7 +2346,7 @@ fn mmd2maxRotateBoneToDir node wantDir way =
         if drop == 2 do rows[2] = cross rows[3] rows[1]
         if drop == 3 do rows[3] = cross rows[1] rows[2]
         local m0 = undefined
-        try ( m0 = node.transform ) catch ()
+        try ( m0 = node.transform ) catch () -- 允许失败：m0 留在 undefined，下面那条 if 直接 return「当前位姿读不到」，失败变成返回值不是静默
         if m0 == undefined do return #(before, before, "当前位姿读不到")
         rows[1] = mmd2maxScaleRow rows[1] (length [m0.row1.x, m0.row1.y, m0.row1.z])
         rows[2] = mmd2maxScaleRow rows[2] (length [m0.row2.x, m0.row2.y, m0.row2.z])
@@ -2345,7 +2410,7 @@ fn mmd2maxDumpBipedApi logTag =
         )
         if n == 0 do
         (
-            try ( n = getMethodCount biped ) catch ()
+            try ( n = getMethodCount biped ) catch () -- 允许失败：n 留在 0 ⇒ 下面 `if n == 0 do return` 把 dumpErr/oldErr 原文报进日志，反射失败是读得出名字的
             if n > 0 do def = biped
         )
         if n == 0 do return (logTag + " 反射失败：dumpInterface=" + dumpErr \
@@ -2354,7 +2419,8 @@ fn mmd2maxDumpBipedApi logTag =
         for i = 1 to n do
         (
             local one = ""
-            try ( one = ((getMethod def i) as string) ) catch ()
+            try ( one = ((getMethod def i) as string) )
+            catch ( append rows ("!getMethod[" + (i as string) + "] 抛错：" + (getCurrentException() as string)) )
             if one != "" do append rows one
         )
     )
@@ -2373,12 +2439,12 @@ fn mmd2maxDumpBipedApi logTag =
     /* 全表落盘：日志同目录。MMD2MAX_LOG 没设（比如手工在 Max 里跑脚本）就跳过写文件，
        只把命中行留在日志里 —— 反射本身不依赖路径。 */
     local apiPath = ""
-    try ( apiPath = (getFilenamePath MMD2MAX_LOG) + "biped_api.txt" ) catch ()
+    try ( apiPath = (getFilenamePath MMD2MAX_LOG) + "biped_api.txt" ) catch () -- 允许失败：apiPath 留在 "" ⇒ 下面 `if apiPath != ""` 跳过写文件，wrote 报「未写文件」，命中行仍进日志
     local wrote = "未写文件"
     if apiPath != "" do
     (
         local fh = undefined
-        try ( fh = createFile apiPath encoding:#utf8 ) catch ()
+        try ( fh = createFile apiPath encoding:#utf8 ) catch () -- 允许失败：fh 留在 undefined ⇒ 不写文件，wrote 保持「未写文件」并随这一行的结论一起进日志
         if fh != undefined do
         (
             for s in rows do ( format "%\n" s to:fh )
@@ -2563,7 +2629,11 @@ fn mmd2maxLegRoll root limbs rotWay =
                                         local rb = mmd2maxSetBoneRot tnode rotWay back
                                         msg = msg + " 没改善->回滚"
                                         if rb != "" do msg = msg + "(回滚也失败)"
-                                        try ( biped.setTransform fnode #pos ankleTgt false ) catch ()
+                                        /* 回滚转角之后要把踝的 #pos 再钉回目标：Biped 转父关节会甩子树，
+                                           只回滚矩阵不重发踝位，踝就留在被甩开的那儿。写没写成只有 Max 知道。 */
+                                        local posErr = ""
+                                        try ( biped.setTransform fnode #pos ankleTgt false ) catch ( posErr = (getCurrentException() as string) )
+                                        if posErr != "" do msg = msg + " 回滚后重发踝位失败=" + posErr
                                         settled = true
                                     )
                                 )
@@ -2666,11 +2736,15 @@ fn mmd2maxToeSnapBack root limbs checkNm =
                     )
                     else
                     (
-                        try ( biped.setTransform cnode #pos before false ) catch ()
+                        local posErr2 = ""
+                        try ( biped.setTransform cnode #pos before false ) catch ( posErr2 = (getCurrentException() as string) )
                         local back1 = distance cnode.transform.translationpart ballPos
                         local backA = distance fnode.transform.translationpart ankleTgt
                         msg = msg + " 没改善->回滚 回读=" + (back1 as string) \
                             + " 踝回读=" + (backA as string)
+                        /* 回读两个数说明「现在离目标多远」，说明不了「回滚这条写有没有做成」——
+                           抛错原文必须另带一截，否则「回滚写了但没生效」和「回滚没执行」读起来一样。 */
+                        if posErr2 != "" do msg = msg + " 回滚抛错=" + posErr2
                     )
                     mmd2maxLog msg
                     mmd2maxReport "toe_snap" checkNm cName \
@@ -2992,7 +3066,11 @@ fn mmd2maxScaleBoneAxis node axisIdx factor =
     if axisIdx == 1 do v.x = v.x * factor
     if axisIdx == 2 do v.y = v.y * factor
     if axisIdx == 3 do v.z = v.z * factor
-    try ( biped.setTransform node #scale v false ) catch ()
+    /* 返回值是「算出来的」那份 scale，不是回读：调用方紧接着还会自己量骨盒（box_rb 那三行
+       宽/高/长就是它的独立尺）。所以写没写成必须在这一行留字，不能让「没写进去」冒充
+       「写进去了、下一轮再看」。 */
+    try ( biped.setTransform node #scale v false )
+    catch ( mmd2maxLog ("单轴缩放写入失败 " + (try (node.name) catch ("?")) + " axis=" + (axisIdx as string) + " ×" + (factor as string) + "：" + (getCurrentException() as string)) )
     v
 )
 
@@ -3187,12 +3265,16 @@ fn mmd2maxApplyWidths root widths =
                     if (abs (f - 1.0)) > 0.05 do
                     (
                         for ai = 1 to 3 do if ai != lax do comps[ai] = comps[ai] * f
-                        try ( biped.setTransform node #scale [comps[1], comps[2], comps[3]] false ) catch ()
+                        local wErr = ""
+                        try ( biped.setTransform node #scale [comps[1], comps[2], comps[3]] false ) catch ( wErr = (getCurrentException() as string) )
                         local s2 = mmd2maxBipedScale node
                         mmd2maxLog ("  手部粗细 " + name + " 长轴=" + (lax as string) \
                             + " 目标宽=" + (target as string) \
                             + " scale: (" + (s.x as string) + "," + (s.y as string) + "," + (s.z as string) + ")" \
                             + " -> (" + (s2.x as string) + "," + (s2.y as string) + "," + (s2.z as string) + ")")
+                        /* s2 是从 Max 读回来的：写失败时它等于 s，日志里那对「-> 」读数自己会露馅；
+                           这一行把抛错原文也钉上，省得下次再靠肉眼比对两个三元组。 */
+                        if wErr != "" do ( mmd2maxLog ("  手部粗细写入抛错 " + name + "：" + wErr) )
                         adjusted += 1
                     )
                 )
@@ -3680,7 +3762,16 @@ fn mmd2maxProbeScaleAxis root =
                 mmd2maxLog ("  探针 biped.setTransform axis=" + (axis as string) \
                     + " : " + (base as string) + " -> " + (d1 as string))
                 if (abs (d1 - base)) > 0.001 do result = #(axis, "biped.setTransform")
-                try ( biped.setTransform pnode #scale s0 false ) catch ()
+                /* 还原必须回读确认：探针把某一根轴乘了 1.5，没还原等于把整副 Biped 的
+                   骨盒尺寸留在那个错误 scale 上，而后面每一节的厘米数都从它上面量。 */
+                local rbErr = ""
+                try ( biped.setTransform pnode #scale s0 false ) catch ( rbErr = (getCurrentException() as string) )
+                local sBack = mmd2maxBipedScale pnode
+                if rbErr != "" or ((abs (sBack.x - s0.x)) > 0.0001 or (abs (sBack.y - s0.y)) > 0.0001 or (abs (sBack.z - s0.z)) > 0.0001) do
+                (
+                    mmd2maxLog ("!! 缩放探针(biped#scale) 没还原 axis=" + (axis as string) \
+                        + " s0=" + (s0 as string) + " 回读=" + (sBack as string) + " " + rbErr)
+                )
             )
         )
     )
@@ -3703,7 +3794,15 @@ fn mmd2maxProbeScaleAxis root =
                     mmd2maxLog ("  探针 node.scale axis=" + (axis as string) \
                         + " : " + (base as string) + " -> " + (d1 as string))
                     if (abs (d1 - base)) > 0.001 do result = #(axis, "node.scale")
-                    try ( pnode.scale = s0 ) catch ()
+                    /* 同方法一：还原没做成 = 这根骨留在 1.5 倍上，后面每一节的厘米数都从它上面量。 */
+                    local rbErr2 = ""
+                    local sBack2 = s0
+                    try ( pnode.scale = s0; sBack2 = pnode.scale ) catch ( rbErr2 = (getCurrentException() as string) )
+                    if rbErr2 != "" or ((abs (sBack2.x - s0.x)) > 0.0001 or (abs (sBack2.y - s0.y)) > 0.0001 or (abs (sBack2.z - s0.z)) > 0.0001) do
+                    (
+                        mmd2maxLog ("!! 缩放探针(node.scale) 没还原 axis=" + (axis as string) \
+                            + " s0=" + (s0 as string) + " 回读=" + (sBack2 as string) + " " + rbErr2)
+                    )
                 )
             )
         )
@@ -3721,10 +3820,15 @@ fn mmd2maxProbeScaleAxis root =
 
 fn mmd2maxSetScale node s method =
 (
+    /* 骨盒缩放的唯一写入口，5 个调用点都不看返回值（它们之后靠回读长度判）。所以失败必须
+       自己留字：否则「scale 根本没写进去」只表现为下一节骨盒尺寸不对 —— 那不是缺陷的形状，
+       那是查不出来源的红。 */
     if method == "node.scale" then
-        try ( node.scale = s ) catch ()
+        try ( node.scale = s )
+        catch ( mmd2maxLog ("缩放写入失败 node.scale " + (try (node.name) catch ("?")) + " s=" + (s as string) + "：" + (getCurrentException() as string)) )
     else
-        try ( biped.setTransform node #scale s false ) catch ()
+        try ( biped.setTransform node #scale s false )
+        catch ( mmd2maxLog ("缩放写入失败 biped#scale " + (try (node.name) catch ("?")) + " s=" + (s as string) + "：" + (getCurrentException() as string)) )
     true
 )
 
@@ -4246,6 +4350,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
     /* 先把 Biped 接口整份反射出来（纯只读，不碰任何节点），这样同一轮里
        「橡皮筋开关叫什么、参数怎么给」在日志/文件里就有答案，不用为它单开一轮。 */
     mmd2maxLog (mmd2maxDumpBipedApi "Biped接口")
+    local probeErr = ""
     try
     (
         probe = biped.createNew height 0.0 [0.0, 0.0, 0.0] arms:true neckLinks:1 \
@@ -4254,7 +4359,10 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             toes:1 toeLinks:1 trianglePelvis:false \
             triangleNeck:true
     )
-    catch ()
+    catch ( probeErr = (getCurrentException() as string) )
+    /* 探针建不起来 ⇒ 旋转接口 / 橡皮筋 / 锁骨射线三段自查这一轮全部缺席，而日志上只看得到
+       「那几行没有」。缺席不是绿，所以失败自己必须留下一行字。 */
+    if probeErr != "" do ( mmd2maxLog ("!! Biped 探针创建失败，旋转接口/橡皮筋/锁骨射线三段自查本轮没跑：" + probeErr) )
     if probe != undefined do
     (
         local plf = getNodeByName (probe.name + " L Foot") exact:true
@@ -4288,7 +4396,8 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                   没开 Figure 模式，`#rotation` 读出 0.0 度很可能就是这个原因，不能算否决。
                   这里先在 Figure 模式内测，退出后再补一次对照，两个数都进日志。 */
             local figOn = false
-            try ( figOn = mmd2maxFigureMode probe.controller true ) catch ()
+            local figErr = ""
+            try ( figOn = mmd2maxFigureMode probe.controller true ) catch ( figErr = (getCurrentException() as string) )
             /* 10:34 最重要的一条：`eulerToQuat [0.0, 0.0, 30.0]` **自己就抛**
                `Unable to convert: [0,0,30] to type: EulerAngles`（旧代码只打 errP，
                这条一直藏在日志里）。也就是说 09:37/10:17 两轮看到的 `#rotation q=0.0度`
@@ -4296,8 +4405,12 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                到今天一次都没被真正调用过。Max 自带 BsBipedTools.ms:1491 的写法是
                `eulerToQuat (eulerAngles 0 y z) order:1`，照抄这个形式。 */
             local q30 = undefined
-            try ( q30 = eulerToQuat (eulerAngles 0.0 0.0 30.0) order:1 ) catch ()
+            try ( q30 = eulerToQuat (eulerAngles 0.0 0.0 30.0) order:1 ) catch () -- 允许失败：q30 留在 undefined ⇒ 下一行往 rotMsg 写「quat构造失败」，且每条 #rotation 路都被 `if q30 != undefined` 跳过（10:34 就是靠这两个数抓到 quat 根本没构造出来的）
             local rotMsg = "  旋转接口探针：Figure模式=" + (figOn as string)
+            /* Figure 模式进不去 ⇒ 下面每一组「度/留」都是模式外测的，而 rotWay 的采用条件写的是
+               「Figure 模式内也留得住」。失败原文必须跟着这一行：figOn=false 不能同时表示
+               「没进去」和「进去了但返回 false」。 */
+            if figErr != "" do rotMsg = rotMsg + " 进Figure抛错=" + figErr
             if q30 == undefined do rotMsg = rotMsg + " quat构造失败"
             local tokList = #(#rotation, #rot, #rotate, #move, #worldRot, #rotEuler)
             for ti = 1 to tokList.count do
@@ -4355,7 +4468,8 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             if rotWay == undefined and keepRot >= 15.0 do rotWay = #rotateCmd
             /* 退出 Figure 模式再对照一次 `#rotation`：如果「模式内留=0、模式外留>0」，
                pass 的摆放位置就得重想；两个数并排放日志里，不用猜。 */
-            try ( mmd2maxFigureMode probe.controller false ) catch ()
+            local figErrOut = ""
+            try ( mmd2maxFigureMode probe.controller false ) catch ( figErrOut = (getCurrentException() as string) )
             local axE = mmd2maxBipedAxes plf
             local errOut = "ok"
             if q30 != undefined do
@@ -4367,6 +4481,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             rotMsg = rotMsg + "  退出Figure(#rotation)=" + (mvOut as string) \
                 + "度/留=" + (keepOut as string) + "度"
             if errOut != "ok" do rotMsg = rotMsg + " 退出后抛错=" + errOut
+            if figErrOut != "" do rotMsg = rotMsg + " 退出Figure抛错=" + figErrOut
             if rotWay != undefined do
                 rotMsg = rotMsg + "  采用=" + (rotWay as string)
             mmd2maxLog rotMsg
@@ -4377,7 +4492,8 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                真名，下一轮在同一处再量一次，两个数一比就知道那个开关管不管事
                —— 判据照旧是行为，不是「调用没抛错」（#pos 就是接受参数而根本不转的先例）。
                上面刚退出 Figure 模式，这里再进一次：真骨架的摆位/重摆全跑在模式内。 */
-            try ( mmd2maxFigureMode probe.controller true ) catch ()
+            try ( mmd2maxFigureMode probe.controller true )
+            catch ( mmd2maxLog ("!! 橡皮筋基准没进成 Figure 模式，下面那几组「子跟」是模式外量的：" + (getCurrentException() as string)) )
             local rbPairs = #()
             append rbPairs #("L Calf", "L Foot")
             append rbPairs #("L Foot", "L Toe0")
@@ -4391,14 +4507,20 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 (
                     local p0 = pNode.transform.translationpart
                     local c0 = cNode.transform.translationpart
-                    try ( biped.setTransform pNode #pos (p0 + [0.0, 0.0, 5.0]) false ) catch ()
+                    local rubErr = ""
+                    try ( biped.setTransform pNode #pos (p0 + [0.0, 0.0, 5.0]) false ) catch ( rubErr = (getCurrentException() as string) )
                     local p1 = pNode.transform.translationpart
                     local c1 = cNode.transform.translationpart
-                    mmd2maxLog ("  橡皮筋基准 " + pr[1] + "->" + pr[2] \
+                    local rubMsg = "  橡皮筋基准 " + pr[1] + "->" + pr[2] \
                         + " 父动=" + ((distance p0 p1) as string) \
-                        + " 子跟=" + ((distance c0 c1) as string) + "cm")
+                        + " 子跟=" + ((distance c0 c1) as string) + "cm"
+                    /* 「父动=0.0」既可能是 Biped 不跟、也可能是这句 #pos 压根没写进去，而这两种
+                       结论相反（前者=橡皮筋关不掉，后者=这段根本没测）⇒ 抛错原文进同一行。 */
+                    if rubErr != "" do rubMsg = rubMsg + " 搬父抛错=" + rubErr
+                    mmd2maxLog rubMsg
                     /* 复位：不然后一对的读数被前一对污染 */
-                    try ( biped.setTransform pNode #pos p0 false ) catch ()
+                    try ( biped.setTransform pNode #pos p0 false )
+                    catch ( mmd2maxLog ("  橡皮筋复位失败 " + pr[1] + "：下一对读数带着这一对的 5cm 偏移，" + (getCurrentException() as string)) )
                 )
             )
             /* ===== b 方案的几何前提自检：肩点真的落在锁骨骨盒射线上吗 =====
@@ -4418,7 +4540,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     mmd2maxLog ("  锁骨射线自检 射线反推肩点 与 真实肩点差=" \
                         + ((distance rayT sp) as string) + "cm")
             )
-            try ( mmd2maxFigureMode probe.controller false ) catch ()
+            try ( mmd2maxFigureMode probe.controller false ) catch () -- 允许失败：这个探针骨架紧接着就 delete 掉，模式没退也只留在一个即将消失的对象上；真骨架那遍自己会重设 Figure 模式
         )
         delete probe
     )
@@ -4431,15 +4553,20 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if findItem beforeObjs o == 0 do
         (
             local isBiped = false
-            try ( if (classOf o.controller) == Biped_Control do isBiped = true ) catch ()
-            try ( if (classOf o) == Biped_Object do isBiped = true ) catch ()
+            /* 认不出类型 = 这一根既没被算进 Biped 也没被算进「不是 Biped」，而漏掉的那根恰好
+               就是会顶掉真骨架同名的那种。所以抛错必须留字，不能让它读成「场景是干净的」。 */
+            try ( if (classOf o.controller) == Biped_Control do isBiped = true )
+            catch ( mmd2maxLog ("  清理探针：认不出 controller 类型 " + (try (o.name) catch ("?")) + "：" + (getCurrentException() as string)) )
+            try ( if (classOf o) == Biped_Object do isBiped = true )
+            catch ( mmd2maxLog ("  清理探针：认不出对象类型 " + (try (o.name) catch ("?")) + "：" + (getCurrentException() as string)) )
             if isBiped do append toDelete o
         )
     )
     /* 先收集再删除：边遍历 objects 边 delete 会跳过对象 */
     for o in toDelete do
     (
-        try ( delete o; leftover += 1 ) catch ()
+        try ( delete o; leftover += 1 )
+        catch ( mmd2maxLog ("!! 探针残留删不掉 " + (try (o.name) catch ("?")) + "：后面按名字取节点会取到旧的假骨架，" + (getCurrentException() as string)) )
     )
     if leftover > 0 do mmd2maxLog ("清理探针残留 Biped 节点：" + (leftover as string))
     local wantAngle = atan2 fwdY fwdX
@@ -4681,10 +4808,14 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     if fnode != undefined do
                     (
                         local beforeDev = distance (fnode.transform.translationpart) want
-                        try ( biped.setTransform fnode #pos want false ) catch ()
+                        local ankleErr = ""
+                        try ( biped.setTransform fnode #pos want false ) catch ( ankleErr = (getCurrentException() as string) )
                         local afterDev = distance (fnode.transform.translationpart) want
                         local fmsg = "  踝关节复核 " + footName
                         fmsg = fmsg + " 偏差 " + (beforeDev as string) + " -> " + (afterDev as string)
+                        /* 两个偏差相等既可能是「Biped 顶回去了」也可能是「这句根本没写」，
+                           前者是收敛问题、后者是接口问题 ⇒ 抛错原文跟着这一行走。 */
+                        if ankleErr != "" do fmsg = fmsg + " 写位抛错=" + ankleErr
                         mmd2maxLog fmsg
                     )
                 )
@@ -5669,7 +5800,7 @@ fn mmd2maxCreateBones =
                     bone.height = thickness
                     bone.taper = 90
                 )
-                catch ()
+                catch () -- 允许失败：这三条是 BoneGeometry 的显示胖瘦/锥度，骨盒回读与 bone_rb 量的是世界变换与局部轴，不读显示属性；写不进去只是视口里那根骨按 Max 默认粗细显示
                 append nodes bone
             )
         )
@@ -5711,7 +5842,7 @@ fn mmd2maxCreateBones =
                     nodes[i].parent = nodes[parentIndex + 1]
                     nodes[i].transform = worldTM
                 )
-                catch ()
+                catch ( mmd2maxLog ("!! 附属骨挂父这一对写没走完 " + boneName + "：父级可能已改而世界位置没写回（这一根会飞），" + (getCurrentException() as string)) )
             )
             else
             (
@@ -5724,7 +5855,7 @@ fn mmd2maxCreateBones =
                     nodes[i].parent = bipedRoot
                     nodes[i].transform = worldTM
                 )
-                catch ()
+                catch ( mmd2maxLog ("!! 根附属骨挂 Biped 根这一对写没走完 " + boneName + "：可能已改父级而位置没写回，" + (getCurrentException() as string)) )
             )
         )
     )
@@ -6415,8 +6546,8 @@ fn mmd2maxBuildMorpher meshObj morphFile =
        注意：早期版本用 `isKindOf WM3_MC_BuildFromNode MAXScriptFunction` 判断，
        这个 API 对函数值不适用（isKindOf 是给对象/值用的），恒为 false，
        导致表情每次都被误判为「未加载」而全部跳过。正确做法是直接与 undefined 比较。 */
-    try ( pluginManager.loadClass Morpher ) catch ()
-    try ( pluginManager.loadClass MorpherMXS ) catch ()
+    try ( pluginManager.loadClass Morpher ) catch () -- 允许失败：这一句是 best-effort 预热，插件早就加载好时它自己也抛；可用与否由下面 haveWM3 直接问 WM3_MC_BuildFromNode 在不在，那才是判据
+    try ( pluginManager.loadClass MorpherMXS ) catch () -- 允许失败：同上一句，只是预热；可用与否的判据是下一行 haveWM3 的读数，不是「loadClass 没报错」
     local haveWM3 = false
     try ( haveWM3 = (WM3_MC_BuildFromNode != undefined) ) catch ( haveWM3 = false )
     /* 诊断：上一轮日志里 7 个通道全部报
@@ -6447,10 +6578,10 @@ fn mmd2maxBuildMorpher meshObj morphFile =
         /* 藏起来必须在「通道构建成功」之前做：早期版本建失败时 7 个复制网格全部留在
            场景里可见 —— 用户看到「多出来一个和自己重叠、选不中、也不受 Biped 控制的
            模型」就是这个（7 个完全重叠，看着像 1 个）。 */
-        try ( hide target ) catch ()
+        try ( hide target ) catch ( mmd2maxLog ("  表情副本没藏成：用户会在场景里看到一个和自己重叠、选不中也不受 Biped 控制的网格（" + (name as string) + "）") )
         /* copy 会把 Skin / Morpher 一并复制过来：必须清空修改器栈，
            否则目标网格会跟着 Biped 变形，morph 偏移就套在变形后的顶点上。 */
-        try ( while target.modifiers.count > 0 do deleteModifier target 1 ) catch ()
+        try ( while target.modifiers.count > 0 do deleteModifier target 1 ) catch ( mmd2maxLog ("  表情副本修改器没清空（偏移会套在变形后的顶点上）：" + (name as string) + " " + (getCurrentException() as string)) )
         if (classOf target) != Editable_Mesh do target = convertTo target Editable_Mesh
         for o in offsets do
         (
@@ -6489,7 +6620,7 @@ fn mmd2maxBuildMorpher meshObj morphFile =
         else
         (
             /* 建不出来就把临时网格删掉，绝不留可见残骸 */
-            try ( delete target ) catch ()
+            try ( delete target ) catch ( mmd2maxLog ("Morpher 残骸删不掉（" + (name as string) + "）：这个临时网格留在场景里，" + (getCurrentException() as string)) )
             mmd2maxLog ("Morpher 通道构建失败：" + (name as string) + " " + errMsg)
         )
     )
@@ -6503,7 +6634,7 @@ fn mmd2maxBuildMorpher meshObj morphFile =
     local chNamed = 0
     for k = 1 to blocks.count do
     (
-        try ( if (WM3_MC_GetTarget morpherMod k) != undefined do chUsed += 1 ) catch ()
+        try ( if (WM3_MC_GetTarget morpherMod k) != undefined do chUsed += 1 ) catch () -- 允许失败：读接口通不通由下面「通道明细」那行的 ?/N 区分（抛错=?、没目标=N），而 chUsed 偏低本身会触发「建通道都没抛异常但读不回」那条警告
         local nm = ""
         try ( nm = (WM3_MC_GetName morpherMod k) as string ) catch ( nm = "" )
         /* 「有名」必须等于「名字就是那个表情名」：上一轮它读回来的是副本的自动编号名
@@ -6546,8 +6677,8 @@ fn mmd2maxBuildMorpher meshObj morphFile =
        所以只警告、保留现场，让用户在 Max 里打开通道列表人工确认。 */
     if built == 0 do
     (
-        for t in targets do ( try ( delete t ) catch () )
-        try ( deleteModifier meshObj morpherMod ) catch ()
+        for t in targets do ( try ( delete t ) catch ( mmd2maxLog ("Morpher 清理：临时网格删不掉，场景里会留下可见残骸 " + (try (t.name) catch ("?")) + "：" + (getCurrentException() as string)) ) )
+        try ( deleteModifier meshObj morpherMod ) catch ( mmd2maxLog ("Morpher 清理：空修改器没删掉，.max 里会留一个坏 Morpher：" + (getCurrentException() as string)) )
         mmd2maxLog ("Morpher 不可用（" + (blocks.count as string) \
             + " 个表情全部建通道失败），已移除修改器并清理临时网格。")
         return false
@@ -6633,11 +6764,15 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
        joints 层默认隐藏（700 个 Dummy 会让视口非常卡），要看时在层管理器里打开即可。 */
     local layerRB = undefined
     local layerJT = undefined
-    try ( layerRB = LayerManager.newLayerFromName "mmd2max_physics" ) catch ()
-    try ( layerJT = LayerManager.newLayerFromName "mmd2max_joints" ) catch ()
+    /* 分层失败只影响「363 个刚体能不能整层选中/隐藏」，不影响代理本身在不在；但最后那行
+       汇总会说「刚体在层 mmd2max_physics」，所以这一句没做成必须留字，不能让汇总替它说谎。 */
+    try ( layerRB = LayerManager.newLayerFromName "mmd2max_physics" ) catch ( mmd2maxLog ("!! 物理刚体层建不出来，下面那句「刚体在层 mmd2max_physics」不成立：" + (getCurrentException() as string)) )
+    try ( layerJT = LayerManager.newLayerFromName "mmd2max_joints" ) catch ( mmd2maxLog ("!! 关节标记层建不出来，700 个 Dummy 会混在主层里：" + (getCurrentException() as string)) )
     local created = 0
     local rigidFail = 0
     local rotFail = 0
+    local centerFail = 0
+    local layerFail = 0
     local minP = undefined
     local maxP = undefined
     for p in rows do
@@ -6700,7 +6835,8 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                     proxy.wirecolor = color 255 128 0
                     /* Box 的 pivot 在底角，用 center 把它挪到刚体中心 */
                     if shapeIdx != 0 and shapeIdx != 2 do
-                        try ( proxy.center = [px, py, pz] ) catch ()
+                        try ( proxy.center = [px, py, pz] )
+                        catch ( centerFail += 1; if centerFail <= 3 do mmd2maxLog ("刚体中心没挪到形心（pivot 留在底角，这块刚体的位置会整块偏）RB_" + (idx as string) + "：" + (getCurrentException() as string)) )
                     /* 关键：`(eulerAngles) as quat` 这条转换在部分 Max 版本上不成立，
                        异常又被 try 吞掉 —— 结果 363 个代理**全部保持竖直**，
                        裙摆刚体竖着排成一块板，不顺着裙子的喇叭形（用户截图）。
@@ -6722,7 +6858,7 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                             if boneNodes[boneNew + 1] != undefined do
                                 proxy.parent = boneNodes[boneNew + 1]
                     if idx >= 0 and idx < rigids.count do rigids[idx] = proxy
-                    try ( if layerRB != undefined do layerRB.addNode proxy ) catch ()
+                    try ( if layerRB != undefined do layerRB.addNode proxy ) catch ( layerFail += 1; if layerFail <= 3 do mmd2maxLog ("!! 刚体没进 mmd2max_physics 层 RB_" + (idx as string) + "：汇总行「刚体在层 mmd2max_physics」对它不成立") )
                     /* 记录整体包围盒，跑完用一行日志核对「代理是否落在角色身上」 */
                     local bb = undefined
                     /* 第二个参数是「在哪个坐标系里算」，传对象自身 transform 得到的是
@@ -6783,7 +6919,7 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 note = note + " pspring=(" + p[cJPSpring] + "," + p[cJPSpring + 1] + "," + p[cJPSpring + 2] + ")"
                 note = note + " rspring=(" + p[cJRSpring] + "," + p[cJRSpring + 1] + "," + p[cJRSpring + 2] + ")"
                 setUserProp jm "mmd2max_joint" note
-                try ( if layerJT != undefined do layerJT.addNode jm ) catch ()
+                try ( if layerJT != undefined do layerJT.addNode jm ) catch ( layerFail += 1; if layerFail <= 3 do mmd2maxLog ("!! 关节标记没进 mmd2max_joints 层 JT_" + name + "：汇总行「关节在层 mmd2max_joints」对它不成立") )
                 jointCount += 1
             )
             catch ( jointFail += 1; \
@@ -6797,12 +6933,20 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
         bmsg = bmsg + " z[" + (minP[3] as string) + "," + (maxP[3] as string) + "]"
         mmd2maxLog bmsg
     )
-    /* 关节标记默认隐藏：700 个 Dummy 在视口里既看不见结构又特别卡 */
-    try ( if layerJT != undefined do layerJT.isHidden = true ) catch ()
+    /* 关节标记默认隐藏：700 个 Dummy 在视口里既看不见结构又特别卡。隐藏本身是装饰
+       ——错了只影响用户接着看的视口；但下一段汇总要写「关节层已隐藏」，那是个断言，
+       所以写完回读一次，让那三个字有出处。 */
+    local jtHide = "没建层"
+    if layerJT != undefined do
+    (
+        try ( layerJT.isHidden = true; jtHide = (if layerJT.isHidden then "是" else "否写没生效") ) catch ( jtHide = "写抛错" )
+    )
+    if jtHide != "是" do mmd2maxLog ("!! 关节层没隐藏（" + jtHide + "）：700 个 Dummy 留在视口里挡结构")
     local sumMsg = "物理刚体代理：" + (created as string) + "（失败 " + (rigidFail as string) + "）"
     sumMsg = sumMsg + " 关节标记：" + (jointCount as string) + "（失败 " + (jointFail as string) + "）"
     sumMsg = sumMsg + " 旋转失败=" + (rotFail as string)
-    sumMsg = sumMsg + "；刚体在层 mmd2max_physics，关节在层 mmd2max_joints（已隐藏）"
+    sumMsg = sumMsg + " 层收纳失败=" + (layerFail as string)
+    sumMsg = sumMsg + "；刚体在层 mmd2max_physics，关节在层 mmd2max_joints（隐藏=" + jtHide + "）"
     mmd2maxLog sumMsg
     true
 )
@@ -6948,10 +7092,10 @@ catch
             close errorFile
         )
     )
-    catch ()
+    catch ( format "[mmd2max] !! 写 error.txt 失败: %\n" (getCurrentException()) )
     if mmd2maxIsInteractiveNow() do
     (
-        try ( messageBox ("转换失败：\n" + message) title:"mmd2max 失败" ) catch ()
+        try ( messageBox ("转换失败：\n" + message) title:"mmd2max 失败" ) catch ( format "[mmd2max] !! 失败弹窗没弹出来（交互模式下屏幕上看不见这条错误）: %\n" (getCurrentException()) )
     )
     /* 失败也要自己退。非交互模式下没人盯着屏幕，而错误全文已经落到 error.txt 和
        日志里；留在原地只会让上层等满 GRACEFUL_EXIT_SECONDS 再 taskkill /F ——
@@ -6961,6 +7105,6 @@ catch
     if not mmd2maxIsInteractiveNow() do
     (
         mmd2maxLog "失败：写完成 error.txt 后 quitMax 退出（现场已在日志与 error.txt 里）。"
-        try ( quitMax quiet:true ) catch ( try ( quitMax ) catch () )
+        try ( quitMax quiet:true ) catch ( try ( quitMax ) catch () ) -- 允许失败：两条 quitMax 都不成时由上层 obj_run 的 GRACEFUL_EXIT_SECONDS 兜底 taskkill；这里再抛会把「错误已落 error.txt」的现场换成一次 Max 崩溃弹窗
     )
 )
