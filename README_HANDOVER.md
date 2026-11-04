@@ -1430,7 +1430,7 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       共 9 份，复制后逐份 `cmp` 核对。此前 `baselines/` 只到 round63，而第 39 条的基线换代背书写的就是
       第 74 轮 —— 背书没有冻结件，等于第 57/58 轮那次「存下来的其实是别的轮」。
     - **测试版打包（不上传 git，v4 仓库无 remote，只本地提交）**：
-      `git archive --format=zip -o ../mmd2max_v4_test_2026-11-04.zip HEAD` ⇒ **581KB / 64 个文件**
+      `git archive --format=zip -o ../mmd2max_v4_test_2026-11-04.zip HEAD` ⇒ **64 个文件，约 0.6MB**
       （`mmd2max/` 13 + `probes/` 36 + `scripts/` 2 + `tools/` 14 + 两份 README + `启动GUI.bat` + `.gitignore`）。
       `tests/ test_runs/ baselines/ outputs/` 被 `.gitignore` 排除 ⇒ 天然不进包，不需要额外裁剪。
       **依赖自查**：全仓第三方 import 只有 `tkinter`（标准库），所以 zip 解出来只要 Python 3.8+ 就能跑，
@@ -1445,6 +1445,10 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       （它是 obj_run 生成的，夹具只留了数据件）；③ 夹具里多出的 `physics.tsv`（无前缀）是 obj_run
       `mapping` 那次复制的产物，只在带 `--physics` 的轮次出现；④ 夹具里多出的 `香菱_materials.tsv`
       （11-03 01:55）是 `materials.tsv` writer 在 #56 删掉之后**留下的上一代残留**，已删 —— 全仓无人读它。
+      同一批还有 4 份 `round20/23/24/25*_driver.log` **串在夹具目录里**（`test_runs/香菱/`），README 与
+      `tests/` 都不引用它们 ⇒ 挪回 `test_runs/` 根，和其它轮次日志同一处放；夹具目录从此只有数据件与
+      最近一轮的 Max 产物。**复测用最终 HEAD 重打的包**：两边同名 20 件 ⇒ **19 件逐字节相同**、
+      只有 `MMD2MAX.CFG` 差那 5 行（归因与上面 ① 同），贴图 7/7 逐字节相同。
     - **清理（v4 内 1.1G → 74M）**：删 6 个 `.max` 轮次产物（990MB，一条命令可重生成，测试只用字符串夹具
       与 tmp 目录、不读这些文件）、`test_runs/probe_klee_stub/`（对拍的临时输出，脚本留着）、
       `香菱_materials.tsv`、全部 `__pycache__`。**没动**：`test_runs/*/*.tsv` 金标准夹具、`baselines/`、
