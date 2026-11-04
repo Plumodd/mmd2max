@@ -152,6 +152,28 @@ def biped_chain_pairs() -> list[tuple[str, str]]:
     return pairs
 
 
+def limb_mode_overrides() -> dict[tuple[str, str], str]:
+    """肢段表第 9 列（mode）不是 `link` 的那几对：`（父目标, 子目标）-> mode`。
+
+    为什么要单独一张表而不是两边各写一遍：导出侧 `export_obj._limb_rows` 按这张表**写**
+    mode，判据侧 `verdicts` 按同一张表**要**这些行。之前判据侧是
+    `if limb.get("mode") == "foot"` —— 期望值来自写入侧刚写下去的那一列，是规则 I 禁的
+    恒等式；更要命的是它让「导出量不到鞋 ⇒ 整族脚盒判据凭空消失 ⇒ 日志全绿」这条
+    静默退化无人拦截（现在 mode 与表不符 = 当场抛）。
+
+      - `foot`：足首→つま先。MMD 只给踝和脚掌两个点，「鞋有多长、脚趾该多粗」只能从
+        网格量，所以这两行额外带 9 列（limbs.tsv 第 10~18 列）。
+      - `leg`：大腿→小腿。子关节位置就是 PMX 的膝，Max 端拿它和「髋→踝」轴比出
+        膝盖的扭转残差（#36：两膝被 Biped 默认膝轨道拽向中线，看着内八）。
+    """
+    return {
+        ("Bip001 L Foot", "Bip001 L Toe0"): "foot",
+        ("Bip001 R Foot", "Bip001 R Toe0"): "foot",
+        ("Bip001 L Thigh", "Bip001 L Calf"): "leg",
+        ("Bip001 R Thigh", "Bip001 R Calf"): "leg",
+    }
+
+
 def biped_chain_child_map() -> dict[str, str]:
     """父节点 -> 首个子节点（用于确定骨骼 tail 方向）。同父多子时取链表中靠前者。"""
     result: dict[str, str] = {}
@@ -392,7 +414,14 @@ def classify_bone_roles(model) -> dict:
 
     说明：D 变形骨（足D/ひざD/足首D/足先EX）、扭转骨（腕捩/手捩）、补助骨仍属骨架，
     保留为 skeleton（腿部权重常落在 D 骨上，丢弃会丢权重）。
+
+    第 1) 步读的是 `load_config_definitions()` 而不是内置 `DEFINITIONS`：`_name_to_sid()`
+    已经按配置文件建了名字表，这里若再读内置表，用户在 JSON 里写的
+    `"role": "control"` 就只影响 `humanoid_kept_indices` / `biped_targets`（它们读
+    defs），不影响 roles —— 同一根骨在两份产物里一边算控制骨、一边算骨架骨，
+    而两边谁也没错到看得出来。
     """
+    defs = load_config_definitions()
     name_to_sid = _name_to_sid()
     roles: dict = {}
     for i, bone in enumerate(model.bones):
@@ -401,7 +430,7 @@ def classify_bone_roles(model) -> dict:
         if sid is None and bone.name_en:
             sid = name_to_sid.get(bone.name_en.strip())
         if sid is not None:
-            cfg_role = DEFINITIONS[sid].get("role")
+            cfg_role = defs[sid].get("role")
             if cfg_role in ("control", "morph"):
                 roles[i] = cfg_role
                 continue

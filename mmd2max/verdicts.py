@@ -60,7 +60,7 @@ from __future__ import annotations
 import math
 from typing import NamedTuple
 
-from mmd2max import passes
+from mmd2max import passes, semantic
 from mmd2max.targets import (
     DIR_TOL_DEG,
     GAP_TOL_CM,
@@ -82,6 +82,17 @@ REPORT_HEADER = ("phase", "check", "subject", "actual")
 
 KINDS = ("gate", "lock", "report", "min", "max")
 WHENS = ("always", "if_present")
+
+# 声明成 `lock` 的 check 名 —— 钉住「已定价的读数」，PASS 只等于「没变得更差」。
+# 这张表是**给工具读的**，不是文档：`tools/check_ms.py` 的规则 I 必须认出「这一行是锁，
+# 不是达标」，才不会把定价过的缺陷也判成假验收（判多了的下一步一定是有人来放宽规则，
+# 那才是这条规则死掉的方式）。扫源码的文本办法在这里必然失灵，因为
+# `_lock("converge", check, …)` 里的 check 是循环变量 —— 文本里根本没有 `dir_over`
+# 这个字面量，而真规格表里它确确实实是 lock。
+# 口径由 test_verdicts.LockCheckNameListTests 钉死：这张表必须与真导出规格表里
+# kind=lock 的那些 check 名**完全相等**，多一个少一个都红。
+LOCK_CHECKS = ("broken_roots", "chain_angle_deg", "dir_over", "knee_err_cm",
+               "over_tol", "place_max_cm", "place_sum_cm", "pos_err_cm")
 
 # 全模型范围的行为 "-"，Max 那边也写 "-"（两边同一个词，拼表才不需要映射）。
 # 定义在 pass 注册表那边，因为归因/闸门规则也要用它去查报告行。
@@ -433,21 +444,92 @@ def _box_float(limb: dict[str, str], key: str, row_label: str,
     return value
 
 
+def foot_pairs_with_mesh(skin_expect: SkinExpectation) -> frozenset[str]:
+    """哪些脚链「有网格可量」由**权重表**回答，不由 limbs.tsv 的第 9 列回答。
+
+    口径：`Foot` 与 `Toe0` 两节都至少挂着一个蒙皮顶点（`skin_expect.links_by_bone`
+    的计数 > 0）。这两张表（bones/weights）是导出的**输入**，与 `export_obj` 写下的
+    mode 列无关，所以「这双脚到底该不该有骨盒目标」第一次有了独立于写入侧的答案。
+
+    为什么需要它：`export_obj._foot_profile` 有两种「量不到」。方向反了那种直接抛；
+    而「脚掌上一个网格顶点也没有」是**合法**的退化 —— 样例夹具 `make_sample.py`
+    只有 4 个躯干顶点，脚上从来没网格，硬要它有骨盒目标等于要求凭空捏一个数。
+    真模型（香菱实测：Foot 363 条链路、Toe0 74 条）走到退化那一支就是事故，必须抛。
+    区分这两者不许用 mode 列自己（那就是恒等式），所以问权重表。
+    """
+    counts = {name: n for name, n in skin_expect.links_by_bone}
+    out = set()
+    for (parent, child), mode in semantic.limb_mode_overrides().items():
+        if mode == "foot" and counts.get(parent, 0) > 0 and counts.get(child, 0) > 0:
+            out.add(f"{parent} -> {child}")
+    return frozenset(out)
+
+
+def limb_rows_of_mode(limbs: list[dict[str, str]], mode: str,
+                      measured: frozenset[str] = frozenset()) -> list[dict[str, str]]:
+    """取「这一类」的肢段行：类别由父子目标名决定（`semantic.limb_mode_overrides()`），
+    第 9 列的 mode 只在这里被**核对**，不当来源。
+
+    为什么不写 `if limb.get("mode") == "foot"`（上一版就是这么写的）：
+
+    1. **规则 I**：mode 是导出侧写下去的那一列。拿它当「这具模型有没有脚盒验收」的唯一
+       来源，等于让写入侧给自己发验收单 —— 它写什么，判据就量什么。
+    2. **静默退化**：`export_obj._limb_rows` 在量不到鞋时曾经退回 `mode=link`。那一行
+       照样是一条合法的肢段行，`fit/segment_count` 照样绿，但脚链的骨盒、接趾、复摆
+       判据全部没有尺可拼 —— 一整族验收凭空消失，而没有任何一行有能力说「不」。
+       现在：表里出现「名字上是脚段、mode 却不是 foot」，而这双脚在权重表里蒙着顶点
+       （`measured`，见 `foot_pairs_with_mesh`）= 当场抛。`measured` 留空 = 只核对
+       `leg` 那一类（腿段的 mode 是纯命名，不可能退化，所以无条件核对）。
+
+    名字表是两张输入表（`semantic` 的 Biped 链）里的常量，与这一具模型的网格无关，
+    所以「该有几行脚段」这件事的期望值不出自写入侧。
+
+    收进行的标准是「名字与 mode 都说这一类」：名字说是、mode 说不是，而权重表证明这双
+    脚没有网格（样例夹具那一支），就按写侧的 `mode` 认它普通段 —— 它没有 10~18 列，
+    硬收进来 `_box_float` 只能抛一个「列缺失」，把一条**合法**的退化报成表格分叉。
+    """
+    overrides = semantic.limb_mode_overrides()
+    out: list[dict[str, str]] = []
+    for limb in limbs:
+        # 名字缺一律抛，不「认不出就算普通段」：这两列是这张表的主键，空了以后
+        # 下面所有按名字的判断都会把它当成不存在 —— 又是同一族静默丢失。
+        if not limb.get("parent_target") or not limb.get("child_target"):
+            raise ValueError(
+                f"肢段表有一行缺 parent_target/child_target：{limb}"
+                "（第 1~2 列是这张表的主键：Max 端 filterString 会丢掉空字段，"
+                "索引整体错位，判据侧则认不出它是哪一段）")
+        pair = (limb["parent_target"], limb["child_target"])
+        want = overrides.get(pair)
+        label = f"{pair[0]} -> {pair[1]}"
+        got = limb.get("mode")
+        if want is not None and got != want and (want != "foot" or label in measured):
+            raise ValueError(
+                f"肢段表 {label} 的第 9 列是 {got!r}，按目标名它必须是 {want!r}："
+                f"{want} 段的 10~18 列（截面/长度目标）只有导出侧量到网格才写得出来，"
+                "退化成普通段就等于把这一族的验收悄悄关掉 —— 宁可不拼表，也不拼一张"
+                "自己不知道少了几行的表")
+        if want != mode or got != mode:
+            continue
+        out.append(limb)
+    return out
+
+
 def box_targets(limbs: list[dict[str, str]],
-                widths: list[dict[str, str]]) -> tuple[list[FootBox], list[HandBox]]:
+                widths: list[dict[str, str]],
+                measured: frozenset[str] = frozenset()
+                ) -> tuple[list[FootBox], list[HandBox]]:
     """骨盒回读的期望值：脚链四根（含每根的宽/高/长度）+ 手掌手指各一根的粗细。
 
     脚链的顺序是「先足背后脚趾」，与 Max 那一段的写法一致，报告读起来才对得上日志。
+    「这具模型该有几根脚链骨」由 `limb_rows_of_mode` 按目标名给出，不看第 9 列 ——
+    见那里的规则 I 说明；`measured` 是 `foot_pairs_with_mesh` 给的答案，决定
+    「脚段退化成普通段」在这里该不该抛。
     """
     foot: list[FootBox] = []
-    for limb in limbs:
-        if limb.get("mode") != "foot":
-            continue
+    for limb in limb_rows_of_mode(limbs, "foot", measured):
         label = f"{limb.get('parent_target')} -> {limb.get('child_target')}"
         parent = limb.get("parent_target")
         child = limb.get("child_target")
-        if not parent or not child:
-            raise ValueError(f"肢段表脚段 {label!r} 缺 target 名：回读要有节点名当主体")
         foot.append(FootBox(parent,
                             _box_float(limb, FOOT_WIDTH_KEYS[0], label),
                             _box_float(limb, FOOT_WIDTH_KEYS[1], label),
@@ -786,8 +868,9 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     丢了只有那一组降级，另一组照常卡数。
     """
     rows: list[tuple[str, ...]] = []
-    foot_rows = [x for x in limbs if x.get("mode") == "foot"]
-    leg_rows = [x for x in limbs if x.get("mode") == "leg"]
+    measured_feet = foot_pairs_with_mesh(skin_expect)
+    foot_rows = limb_rows_of_mode(limbs, "foot", measured_feet)
+    leg_rows = limb_rows_of_mode(limbs, "leg", measured_feet)
 
     def pair(limb: dict[str, str]) -> str:
         return f"{limb['parent_target']} -> {limb['child_target']}"
@@ -925,14 +1008,14 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("rollback", check, GLOBAL, 0, tol, "gate",
                         when="if_present"))
 
-    # ── 脚链：偏航（#26）、骨轴连续（#40）、盒隙（#41）────────────
-    # 偏航比的是 mmd2maxBoxWantDir 给的目标，而那个目标就是写进去的方向（同源，
-    # 第十五轮它读 0.0 全绿而用户的截图里骨盒照旧是歪的）——所以真正的护栏是下面
-    # 两条：**骨轴 vs 回读到的子关节**（链向）与 **两个盒子之间的空气**（盒隙）。
+    # ── 脚链：骨轴连续（#40）、盒隙（#41）──────────────────────────
+    # 偏航（bone_yaw / toe_yaw）以前在这里有两行 gate，删了：它比的是
+    # `mmd2maxBoxWantDir` 给的目标，而那个目标就是转角 pass **写进骨轴的方向** ——
+    # 同源即恒等式，第十五轮压平之后它照读 0.0 全绿，用户截图里骨盒仍是指歪的。
+    # `.ms` 那边把同一个数降级成一行 `脚骨偏航结论` 日志（和截图对时序还有用），
+    # 判据换成下面两条不问写入侧的：**骨轴 vs 回读到的子关节**（链向）与
+    # **两个盒子之间的空气**（盒隙）。
     for limb in foot_rows:
-        subject = limb["parent_target"]
-        rows.append(row("foot_yaw", "bone_yaw_deg", subject, 0, DIR_TOL_DEG, "gate"))
-        rows.append(row("foot_yaw", "toe_yaw_deg", subject, 0, DIR_TOL_DEG, "gate"))
         pair_subject = pair(limb)
         value = _priced(model, CHAIN_ANGLE_LOCKS, pair_subject)
         rows.append(_lock("foot_chain", "chain_angle_deg", pair_subject, value,
@@ -977,8 +1060,16 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(_lock("placement", "pos_err_cm", bone, value, tol, model,
                           when="if_present"))
     for bone in PLACEMENT_RAY_NODES:
-        rows.append(row("placement", "ray_err_cm", bone, 0,
-                        PLACEMENT_RAY_TOL_CM, "gate", when="if_present"))
+        # `max` 不是笔误：b 方案里 UpperArm 的**写入目标**就是锁骨骨盒射线点
+        # （`mmd2maxShoulderRayTarget`），所以「实际 vs 射线点」量的是「我写下去的东西
+        # 有没有被 Biped 求解器挪走」，而不是「落位合不合 PMX」—— 后者是上面那组
+        # `pos_err_cm`（want 直接来自 limbs.tsv 的列）的活。写成 gate（期望=0）就是把
+        # 恒等式当达标证据（第十七轮 #26/#40/#41 那一类）；写成上界才是它本来的语义：
+        # 这条只承诺「偏差不得超过这个上界」，超了照样红，写卡住 / 求解器把骨拖走都抓得住。
+        # 不写成 lock：lock 的期望值是**这一具模型定价过的读数**，换模型就退化，
+        # 而这个上界与模型无关（见 PricedLockTests 那条「非定价模型不许出现 lock」）。
+        rows.append(row("placement", "ray_err_cm", bone, PLACEMENT_RAY_TOL_CM, 0,
+                        "max", when="if_present"))
 
     # ── 结构向复核 ────────────────────────────────────────────────
     rows.append(_lock("struct_dir", "over_tol", GLOBAL,
@@ -992,7 +1083,7 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     # 最终场景（四道终局复核之后、附属骨之前）。尺的来源见 `box_targets` 的注释。
     # 容差不许写成绝对常数：`mmd2maxFitBoneExtent` 的退出条件就是 2% 相对误差，
     # 尺比承诺更严会每轮红在分辨率上（`targets.box_tol_cm`）。
-    foot_boxes, hand_boxes = box_targets(limbs, widths)
+    foot_boxes, hand_boxes = box_targets(limbs, widths, measured_feet)
     for box in foot_boxes:
         rows.append(row("box_rb", "width_cm", box.node, f"{box.width:.6f}",
                         box_tol_cm(box.width), "gate"))

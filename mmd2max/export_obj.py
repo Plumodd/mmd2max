@@ -1284,8 +1284,22 @@ def _foot_link_box(pts, ankle, ball, heelbox=None, flatten=None):
     return (2.0 * edge, 2.0 * vert)
 
 
-def _foot_profile(positions, scale: float, ankle, ball, faces=None):
+def _foot_profile(positions, scale: float, ankle, ball, faces=None,
+                  label: str = "脚段"):
     """从网格量这只鞋：鞋尖坐标、趾长、Toe0 该有多宽多高、Foot 该有多宽多高、踝→鞋尖全长。
+
+    量不出来分两种，下场不同，话也要分开说：
+      - **抛 PMXError**（骨的几何坏了）：踝与脚掌水平重合 ⇒ 脚趾方向根本推不出来，而
+        窗口、鞋尖、截面全都依赖这根轴，硬写出来的数会当真把 Toe0 撑成一根大骨头
+        （#40 那一类），宁可不导出。
+      - **返回 None**（这只脚前面没有网格）：窗口全空，或窗口里的点没有一个越过脚掌
+        平面。样例夹具 `make_sample.py` 只有 4 个躯干顶点、赤足模型的网格在 つま先 收口，
+        都走这一支；调用方退回普通段，并在表里写一行 `#` 说明。这个「退回」不是静默：
+        `verdicts.foot_pairs_with_mesh` 会用权重表（导出的**输入**，与 mode 列无关）再问
+        一遍这双脚有没有蒙皮顶点，蒙着顶点却退化了 = 判据侧当场抛。
+        旧写法把两种都悄悄退成 `mode=link`，于是脚盒 / 接趾 / 复摆整族验收凭空消失，
+        导出成功、日志全绿、脚骨戳穿鞋面（用户：「脚的骨骼并没有包在脚的里面，实际上
+        脚穿模出来了」）。
 
     方向必须由骨头自己推出来。手性修正之后这个坐标系里脚掌指向 **-y**，
     而上一版按「+y 最大」取鞋尖，量到的其实是脚后跟那一片：
@@ -1317,7 +1331,10 @@ def _foot_profile(positions, scale: float, ankle, ball, faces=None):
     dx, dy = bx - ax, by - ay
     horiz = (dx * dx + dy * dy) ** 0.5
     if horiz < 1e-5:
-        return None
+        raise PMXError(
+            f"{label} 量不出鞋：踝与脚掌在水平面上重合（踝 {ankle} / 脚掌 {ball}）。"
+            "脚趾朝向推不出来，而 Max 端必须照这根轴摆骨盒 —— 宁可不导出，"
+            "也不要按 Biped 默认朝向猜一只脚出来")
     ux, uy = dx / horiz, dy / horiz
     x_half = 6.0
     z_cap = bz + 4.0
@@ -1334,6 +1351,12 @@ def _foot_profile(positions, scale: float, ankle, ball, faces=None):
     if not band:
         return None
     tmax = max(item[3] for item in band)
+    if tmax <= 1e-5:
+        # 窗口里有网格，但最靠前的一点也不在脚掌平面之前：这只脚前面没有网格
+        # （赤足模型、网格正好在 つま先 收口，都是这种）。趾长只能是 0，而
+        # 「趾长 = 0 的骨盒目标」进了判据表就是要求骨头缩成 0 —— 交给调用方退化，
+        # 由 `verdicts.foot_pairs_with_mesh` 拿权重表判断这算不算事故。
+        return None
     front = [item for item in band if item[3] > tmax - 1.0]
     n = len(front)
     tip = (sum(i[0] for i in front) / n,
@@ -1422,14 +1445,12 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
     center_present = [t for t in CENTER_NODE_ORDER if t in target_to_old]
     center_pairs = list(zip(center_present, center_present[1:]))
 
-    foot_pairs = {("Bip001 L Foot", "Bip001 L Toe0"),
-                  ("Bip001 R Foot", "Bip001 R Toe0")}
+    overrides = semantic.limb_mode_overrides()
+    foot_pairs = {p for p, m in overrides.items() if m == "foot"}
     # 大腿段（#36）：髋与踝都钉在 PMX 目标上之后，膝盖唯一的自由度就是这条腿绕
     # 「髋→踝」轴的扭转角，而 Max 端没有任何一处设过它 —— 于是两膝各自被 Biped 的
     # 默认膝轨道拽向中线（用户：「两个小腿的朝向有问题内八了，实际上并没有」）。
     # 标成 mode=leg 交给 Max 端做闭环；这里只负责**指出是哪两段**，不写角度。
-    leg_pairs = {("Bip001 L Thigh", "Bip001 L Calf"),
-                 ("Bip001 R Thigh", "Bip001 R Calf")}
 
     def emit(parent_target, child_target, po, co):
         """写一行肢段：长度 = 两个关节 head 的真实距离，第 6~8 列写子关节（child head）
@@ -1450,6 +1471,17 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
         同一句判据的两半：前者量脚尖那一小段，后者沿踝→脚掌轴逐段量）。
         全部在这里量好写进表里，Max 端只照着做闭环缩放，不再自己猜。
 
+        脚段量不到鞋，分两种下场（细节写在 `_foot_profile` 的文档里）：
+          - 踝与脚掌水平重合（脚趾方向推不出来）= **抛 PMXError 中止导出**。
+          - 这只脚前面没有网格 = 退回普通段，但在表里写一行 `#` 说明，且这个「退回」由
+            判据侧独立复核（`verdicts.foot_pairs_with_mesh` 拿 weights/bones 问这双脚
+            有没有蒙皮顶点；有 ⇒ 抛）。样例夹具 `make_sample.py` 只有 4 个躯干顶点，
+            走的正是这一支，所以不能一刀切都抛。
+            旧写法把两种都退成 `mode=link` 且不吭声：`verdicts.box_targets` 与脚盒 /
+            接趾 / 复摆那些行只从 `mode=foot` 的行取尺，退化之后**没有一行判据会红**，
+            日志照样全绿，画面上是一根按 Biped 默认粗细撑进鞋里的脚骨
+            （用户：「你的脚的骨骼也并没有包在脚的里面，实际上脚穿模出来了」）。
+
         大腿段（Thigh→Calf）标 mode=leg：这一行的 child 位置就是 PMX 的膝，
         Max 端拿它和「髋→踝」轴比出膝盖的扭转残差（见 mmd2maxLegRoll）。
         这里只给标记不给角度 —— 角度是 Max 里**摆完之后**才存在的量。
@@ -1460,21 +1492,32 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
                    + (ph[2] - ch[2]) ** 2) ** 0.5
         if desired <= 1e-5:
             return 0
-        if (parent_target, child_target) in foot_pairs:
-            shoe = (_foot_profile(positions, scale, ph, ch, faces)
-                    if positions else None)
-            if shoe is not None and shoe["toe_len"] > 1e-5 and desired > 1e-5:
+        mode = overrides.get((parent_target, child_target), "link")
+        if (parent_target, child_target) in foot_pairs and positions:
+            shoe = _foot_profile(positions, scale, ph, ch, faces,
+                                 label=f"{parent_target} -> {child_target}")
+            if shoe is not None:
                 tip = shoe["tip"]
                 lines.append(
                     f"{parent_target}\t{child_target}\t{desired:.6f}\t"
                     f"{model.bones[po].name}\t{model.bones[co].name}\t"
-                    f"{ch[0]:.6f}\t{ch[1]:.6f}\t{ch[2]:.6f}\tfoot\t"
+                    f"{ch[0]:.6f}\t{ch[1]:.6f}\t{ch[2]:.6f}\t{mode}\t"
                     f"{shoe['foot_len']:.6f}\t{shoe['toe_len']:.6f}\t"
                     f"{tip[0]:.6f}\t{tip[1]:.6f}\t{tip[2]:.6f}\t"
                     f"{shoe['toe_w']:.6f}\t{shoe['toe_h']:.6f}\t"
                     f"{shoe['foot_w']:.6f}\t{shoe['foot_h']:.6f}")
                 return 1
-        mode = "leg" if (parent_target, child_target) in leg_pairs else "link"
+            # 这只脚上没有网格顶点：9~18 列无处可量，退回普通段，但**在表里留一行说明**。
+            # 静悄悄写 mode=link 才是上一版的错 —— 脚链的骨盒 / 接趾 / 复摆判据整族没了尺，
+            # 而没有任何一处能看出表少了东西。留了这行，`verdicts` 再拿权重表复核一次：
+            # 「Foot/Toe0 都蒙着顶点却走到这里」= 抛，见 `foot_pairs_with_mesh`。
+            lines.append(f"# 脚段退化：{parent_target} -> {child_target} 的脚掌窗口里没有"
+                         "越向前方的网格顶点，第 9 列写 link、第 10~18 列不写"
+                         "（脚链骨盒判据没有尺）")
+            mode = "link"
+        elif (parent_target, child_target) in foot_pairs:
+            # 一份网格顶点也没有（`positions` 为空）：同上，问不出「有没有鞋」。
+            mode = "link"
         lines.append(f"{parent_target}\t{child_target}\t{desired:.6f}\t"
                      f"{model.bones[po].name}\t{model.bones[co].name}\t"
                      f"{ch[0]:.6f}\t{ch[1]:.6f}\t{ch[2]:.6f}\t{mode}")
