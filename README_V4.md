@@ -311,13 +311,19 @@ round24 round26` ⇒ **exit 0**（420→437 行，多出的 17 行全是骨盒�
 （①由 M5 的**旧表述**「scale 0.08 vs 0.16 两次导出对撞」抓到 —— 性质换成逐字节协变后它一度只活在注释里，
 本轮补了一支变异针才把它重新请进尺；②由本轮的逐字节协变抓到）：
 
-1. `physics.tsv` 关节平移限位 `pos_min/pos_max` 漏乘 scale（[mmd2max/export_obj.py:1628-1634](file:///C:/Users/Administrator/Desktop/mmd2max_v4_src_2026-11-03/mmd2max/export_obj.py#L1628)）：
-   位置乘了、限位没乘 ⇒ 「允许移动的范围」相对骨架缩小 1/scale 倍。这一处的修法现在有一支**常驻变异针**钉住
-   （改回 `convert_vec(jt.pos_min, 1.0)` ⇒ `克雷薇_physics.tsv` 第 170193 字节 + `sample_physics.tsv` 第 1330 字节双红）。
+1. `physics.tsv` 关节平移限位 `pos_min/pos_max` 漏乘 scale（`mmd2max/export_obj.py` 里
+   `pmin/pmax = convert_vec(jt.pos_min/pos_max, scale)` 那两行）：
+   位置乘了、限位没乘 ⇒ 「允许移动的范围」相对骨架缩小 1/scale 倍。钉住它的是**常驻**的蜕变契约
+   —— `tests/test_metamorphic.py` 把 `joint_pos_min_x/y/z` 与 `joint_pos_max_x/y/z` 一起列进
+   `physics#JOINT` 的 `length` 列，所以「PMX 长度 ×2 配 scale ÷2 ⇒ 逐字节相同」当场咬得住。
+   变异探针（`test_runs/probe_m5_mutate.py` 的针 F，把 `scale` 改回 `1.0` 重放这个 bug）实测 RED，
+   那一轮报的第一处差异在 `克雷薇_physics.tsv` 第 170193 字节、`sample_physics.tsv` 第 1330 字节
+   —— **这两个字节数是当轮读数，不是判据**：探针本身在 `test_runs/`（不进交付包），重跑一遍数就变。
 2. **零长骨阈值与占位尾写成「若干个 PMX 单位」**（`scale*0.001 / scale*0.1 / scale*0.05`）：
    那是作者画法不是物理量 —— 同一根无名骨在香菱上尾长 0.76563cm、在克雷薇上 0.8763cm，
    而单位协变要求它俩逐字节相同。改成 `_DEGENERATE_EPS_CM = 0.05` / `_STUB_LEN_CM = 0.8`
-   （`export_obj.py:944-957`，用在 `:282` 与 `:368`）。换之前先量谱
+   （两个常量定义在 `export_obj.py` 的 `_RADIUS_CAP_CM` / `_WIDTH_MIN_CM` 紧下面，用它们的
+   站点是 `build_bones` 与 `_build_skeleton_from_kept` 各一处）。换之前先量谱
    （`test_runs/probe_stub_spectrum.py`）：两具模型 × 两个站点在 **0.002~0.3cm 整个窗内
    「判为零长的根数」一动不动**（香菱 56 / 9，克雷薇 48 / 8），最短真骨 0.993587cm
    ⇒ 0.05cm 落在安全窗正中，这次换单位**不翻任何一根骨的分类**。
@@ -341,7 +347,9 @@ round24 round26` ⇒ **exit 0**（420→437 行，多出的 17 行全是骨盒�
 
 - **PMX 自带 roll/扭转轴 —— 审计做完了，结论是「这条路在香菱这类模型上没有数据」**（任务 #57 关闭）：
   骨记录里确实有「轴固定化 Fixed Axis(0x0400)」和「局部轴 Local Axis(0x0800，存 X·Z，Y=Z×X)」两组
-  作者手填的数据，v4 的解析器也已经读到（`mmd2max/pmx.py:406`，向量含 NaN/Inf 直接 abort）。
+  作者手填的数据，v4 的解析器也已经读到（`mmd2max/pmx.py` 骨记录里的 `fixed_axis` / `local_x` /
+  `local_z` 三个字段，连同 `Bone.has_local_axis`；这三条轴向量与骨位置、末端偏移一起在
+  `_finite` / `_all_finite` 那几行校验，含 NaN/Inf 直接 abort）。
   但**读到 ≠ 有**：`tools/axis_audit.py` 实测香菱 356 根骨 ⇒ 局部轴 **0** 条、轴固定化 **4** 条，
   而这 4 条全在 `左腕捩 / 左手捩 / 右腕捩 / 右手捩` 上 —— 扭转骨属 extended 类，压根不进
   `bones.tsv`（321 行里 0 行含「捩」）。所以「拿作者填的轴向当每根 Biped 骨的 roll 独立真值」
