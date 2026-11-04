@@ -412,6 +412,9 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
     widths = []
     if widths_path.is_file():
         _, widths = parse_table(widths_path.read_text(encoding="utf-8"))
+    # 附属骨方向回读（#66）的第二份输入：biped_map 说明哪些行被 Biped 节点接管。
+    # 路径同样取自 CFG，所以 Max 建骨时用的那张映射表就是这边剔行用的那张。
+    _, biped_map = parse_table(Path(cfg["MMD2MAX_MAP"]).read_text(encoding="utf-8"))
     try:
         rows = build_spec(
             model=stem,
@@ -419,6 +422,8 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
             limbs=limbs,
             skin_expect=skin_expect,
             widths=widths,
+            bones=bones,
+            biped_map=biped_map,
             morph_count=int(meta["morph_count"]),
             skin=cfg["MMD2MAX_SKIN"] == "true",
             foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",

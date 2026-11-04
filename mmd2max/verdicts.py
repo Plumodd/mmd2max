@@ -419,6 +419,74 @@ def box_targets(limbs: list[dict[str, str]],
     return foot, hands
 
 
+# 附属骨（BoneGeometry）方向回读的短骨门限：|tail-head| 小于它的骨在 PMX 里只是显示
+# stub（香菱 右手首 0.38cm，而左手首 3.26cm），方向本身没意义，两侧一起不量。
+# **这个数在 .ms 里还有一份字面量**（mmd2maxVerifyAccessoryDirs 的 `length want < 1.0`）：
+# 两边不是同一条门限，规格表就会多出一条永远没人报的行（或反过来，报告里冒出没判的行），
+# 两种都是红的 —— 契约测试拿字面量对撞，改一边就报。
+ACCESSORY_STUB_CM = 1.0
+
+
+def _bone_point(bone: dict[str, str], prefix: str, index: int) -> tuple[float, float, float]:
+    """把 bones.tsv 一行的 head_x/y/z 或 tail_x/y/z 读成三个厘米数。
+
+    缺列 = 两份导出产物分叉，必须抛：静默当 (0,0,0) 会把一根真骨读成零长 stub，
+    于是这一行从规格表里消失，而没人会注意到「这具模型的附属骨没被验收」。
+    """
+    out: list[float] = []
+    for axis in "xyz":
+        key = f"{prefix}_{axis}"
+        if key not in bone:
+            raise ValueError(f"骨骼表第 {index} 行（{bone.get('bone_name')!r}）没有 {key} 列："
+                             "附属骨方向回读没有尺。这六列是导出侧必写的")
+        raw = bone[key]
+        try:
+            out.append(float(raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"骨骼表第 {index} 行的 {key} 不是数字：{raw!r}") from None
+    return out[0], out[1], out[2]
+
+
+def accessory_dir_targets(bones: list[dict[str, str]],
+                          biped_map: list[dict[str, str]]) -> list[str]:
+    """附属骨方向回读的主体清单（`行号|骨名`），顺序 = bones.tsv 的行序。
+
+    一根骨要被量，必须同时满足两条，两条都是**输入文件**里的事实，不是 Max 的自述
+    （拿被验收的一方自己的输出当判据 = 本项目反复交底的那条老教训）：
+
+    1. 它没有复用 Biped 节点：行号不在 biped_map 的 `bone_index` 里。
+       .ms 的 mmd2maxCreateBones 对映射行 append 的是 Biped 节点本身，那批骨的朝向由
+       struct_dir / box_rb 两组终局复核管（Biped 的「方向」是 #dir/#scale 的事，
+       不是 transform.row1），不能混进这个通道。
+    2. |tail-head| ≥ `ACCESSORY_STUB_CM`：短骨方向没意义。
+
+    为什么主体是「行号|骨名」而不是骨名：Max 那边重名会自动加后缀（`.name = bone_name`
+    失败/改名后 nodes[i].name 已经不是表里那个词），两边就对不上账；行号是表的位置，
+    唯一且两边同源，而名字留在后面只为人读日志时认得出是哪根骨。
+    """
+    mapped: set[int] = set()
+    for item in biped_map:
+        raw = item.get("bone_index")
+        try:
+            mapped.add(int(str(raw).strip()))
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Biped 映射表有一行的 bone_index 读成整数失败：{raw!r}。"
+                "附属骨回读要靠它认出「哪些行被 Biped 节点接管」，这张表读不懂 = 这组判据没有尺") from None
+    subjects: list[str] = []
+    for index, bone in enumerate(bones):
+        if index in mapped:
+            continue
+        if "bone_name" not in bone:
+            raise ValueError(f"骨骼表第 {index} 行没有 bone_name 列：回读的主体拼不出来")
+        head = _bone_point(bone, "head", index)
+        tail = _bone_point(bone, "tail", index)
+        if math.dist(head, tail) < ACCESSORY_STUB_CM:
+            continue
+        subjects.append(f"{index}|{bone['bone_name']}")
+    return subjects
+
+
 def row(phase: str, check: str, subject: str, expected, tol,
         kind: str, when: str = "always") -> tuple[str, str, str, str, str, str, str]:
     """规格行 → 七个**字符串**字段（wire format 只搬文本，判定时再 float()）。
@@ -458,6 +526,7 @@ def _priced(model: str, table: dict, key):
 
 def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                skin_expect: SkinExpectation, widths: list[dict[str, str]],
+               bones: list[dict[str, str]], biped_map: list[dict[str, str]],
                morph_count: int, skin: bool = True,
                foot_reach: bool = True, rollback: bool = False) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
@@ -479,6 +548,11 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     `widths` 同样是**必填**的（可以是空表）：骨盒回读那一组（M4c）的尺来自这张表与
     limbs 的脚段。传空表 = 这具模型没有手部粗细表，Max 那边也读不到 widths.tsv，
     两边同时没有那些行；传了表却不给 Max（或反过来）由 `box_rb/nodes_measured` 判红。
+
+    `bones` + `biped_map` 也**必填**（#66 的附属骨方向回读）：前者给每根附属骨的
+    head/tail 当尺，后者说明「哪些行被 Biped 节点接管、因此不归这个通道量」。
+    两张表都是导出的输入，不是 Max 的输出 —— 这条判据证的正是「表里写的方向有没有
+    活着进到最后那个场景」，所以期望值不许来自场景自己。
 
     `rollback` 是快照回滚（M4d）的开关，值来自 `targets.ROLLBACK` → CFG 同一条路。
     它决定的是「有没有这条退路」，所以开与关之间规格表**整段**不同：关掉时那些行退成
@@ -714,6 +788,25 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     for check in ("on_biped", "on_bone"):
         rows.append(row("accessory", check, GLOBAL, None, None, "report"))
 
+    # ── 附属骨方向回读（#66）──────────────────────────────────────
+    # 上面那三行只数「挂上了谁」，数量对得上但每根骨**指哪**一个也没看。胸部骨那一刀
+    # 改的是 tail（从网格量出来的乳头点），所以这一组才是它的验收：期望 0 度 =
+    # 场景里那根骨的局部 X 轴与 bones.tsv 的 tail-head 重合，容差用已经定价的
+    # DIR_TOL_DEG（不新造一个数：`.ms` 那边超标的计数 MMD2MAX_DIRTOL 用的就是它）。
+    # `measurable` 的期望值来自两张输入表（行序减去被 Biped 接管的行、再剔短骨），
+    # 所以「Max 少走了一遍表」会红在这里，而不是变成一根也没量的绿灯。
+    dir_subjects = accessory_dir_targets(bones, biped_map)
+    for subject in dir_subjects:
+        rows.append(row("bone_rb", "dir_deg", subject, 0, DIR_TOL_DEG, "gate"))
+    rows.append(row("bone_rb", "measurable", GLOBAL, len(dir_subjects), 0, "gate"))
+    rows.append(row("bone_rb", "over_tol", GLOBAL, 0, 0, "gate"))
+    rows.append(row("bone_rb", "read_fail", GLOBAL, 0, 0, "gate"))
+    # 这四行是第一轮的新通道：没有来历的数字不许当尺（模块文档那条），
+    # 所以先 report —— 跑出读数、谁要卡它就拿那一轮的日志定价，再翻 gate。
+    for check in ("short_skipped", "worst_deg", "worst_bone",
+                  "pivot_max_cm", "pivot_max_bone"):
+        rows.append(row("bone_rb", check, GLOBAL, None, None, "report"))
+
     # ── 蒙皮（--no-skin 时整段跳过）──────────────────────────────
     when = "always" if skin else "if_present"
     rows.append(row("skin", "bones", GLOBAL, skin_expect.bones_skinned, 0, "gate",
@@ -879,6 +972,17 @@ FIXTURE_WIDTHS = "\t".join(("biped_target", "width")) + "\n" + "\n".join((
     "Bip001 R Hand\t3.6953",
 )) + "\n"
 
+# 附属骨方向回读（#66）的第二份 fixture：biped_map 决定「哪些行被 Biped 节点接管」，
+# 因此决定 bone_rb/dir_deg 该出几行。前 3 行按真导出那样映射，裙子A 不映射 ——
+# 于是 `accessory_dir_targets` 只认出第 3 行，CHANNELS 里就有这个通道。
+# 写空表的话这一组通道整体消失，契约测试只会看见「.ms 多报了没人判的行」。
+FIXTURE_BIPED_MAP = "\t".join(("bone_index", "biped_node", "pmx_bone_name")) + "\n" \
+    + "\n".join((
+        "0\tBip001\t全ての親",
+        "1\tBip001 L Foot\t左足",
+        "2\tBip001 L Toe0\t左つま先",
+    )) + "\n"
+
 CHANNELS: frozenset[tuple[str, str]] = frozenset(
     (r[0], r[1]) for r in build_spec(
         model=PRICED_MODEL, vertex_count=1,
@@ -895,5 +999,7 @@ CHANNELS: frozenset[tuple[str, str]] = frozenset(
                 "desired_len": "8.325677", "mode": "link"}],
         skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True,
         rollback=True,
+        bones=parse_table(FIXTURE_BONES)[1],
+        biped_map=parse_table(FIXTURE_BIPED_MAP)[1],
         widths=parse_table(FIXTURE_WIDTHS)[1])
 )

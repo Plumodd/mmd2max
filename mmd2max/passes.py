@@ -58,8 +58,12 @@ CONVERGE_MAX_ITERS = 3
 # 对调之后报出去的「宽」其实是人家的高；② #scale 本身也会挪动骨盒。
 # 于是任何一次挪动/缩放都必须在它之后重量一遍，否则「写入那一刻达成的截面」会被
 # 当成「最终场景的截面」，那正是 #37/#41 反复的形状。
-POSE_FACTS = ("box_rb", "foot_chain", "foot_yaw", "placement", "segment",
-              "struct_dir", "toe_snap")
+# bone_rb（#66）进这张表的理由和 box_rb 同一条，只是主语换成附属骨：附属骨建的时候
+# 方向当然是对的（createBone 直接吃 head/tail），可它挂在一个**会被转动的父级**下面 ——
+# 父级一次 setTransform，子骨的世界变换就跟着走（改挂那段正是靠「先记 worldTM、链接后
+# 写回去」才没飞散）。所以任何一次挪动 Biped 都必须在它之后重量附属骨方向。
+POSE_FACTS = ("bone_rb", "box_rb", "foot_chain", "foot_yaw", "placement",
+              "segment", "struct_dir", "toe_snap")
 
 
 class Pass(NamedTuple):
@@ -205,6 +209,12 @@ PASSES: tuple[Pass, ...] = (
           writes=("morpher",), optional=True),
     _pass("physics_build", "物理刚体与关节", requires=("accessory_build",),
           optional=True),
+    # 附属骨方向回读（#66）：最后一道，排在 saveMaxFile 之前（脚本里 mmd2maxMain 的
+    # 那一段）。物理代理改父级、改挂写回 worldTM 都已经发生完了，这一刻量到的
+    # transform.row1 就是存进 .max 的那个方向 —— 胸部骨那一刀的 tail 是从网格量出来的
+    # 乳头点，不回读就只有一句「建骨时传对了」。
+    _pass("bone_dir_verify", "附属骨方向回读（保存前）",
+          requires=("accessory_build",), writes=("bone_rb",)),
 )
 
 BY_ID: dict[str, Pass] = {p.id: p for p in PASSES}

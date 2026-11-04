@@ -593,6 +593,17 @@ fn mmd2maxScreenshot =
             + " 手指命中=" + (fingerNodes.count as string) \
             + " 取景点数=" + (handPts.count as string) \
             + " 框=" + ((handLo as string)) + ".." + ((handHi as string)))
+        /* 胸部特写（#66）：用户那句「胸部骨骼应该指向乳头」是一句**看图**的要求，
+           而 4.55cm 的骨在整场景那张 984px 的画面里只有二十几个像素，判不了。
+           取景按包围盒高度取比例：胸点在 z≈0.63~0.66h（香菱 101.7~105.2 / 160），
+           0.58~0.72 这一段两边各留 8% 余量，换角色不用改数 —— 与 neck/foot 那两组
+           同一套写法（都不认骨名，只认高度比例），所以这里也不许按名字去找那两根骨：
+           PMX 的胸骨名从「右胸」到 bustR 都有，写死名字就是给下一具模型埋一颗雷。
+           框宽沿用 neck 的 ±10cm：X 方向被手臂撑开是事实，但侧视/正视里要判的是
+           「这根骨从胸骨出发往哪走」，纵向比例才是可读性的来源。 */
+        local chestLo = [b.min.x - 10.0, b.min.y - 10.0, b.min.z + h * 0.58]
+        local chestHi = [b.max.x + 10.0, b.max.y + 10.0, b.min.z + h * 0.72]
+        mmd2maxLog ("chest 取景：框=" + ((chestLo as string)) + ".." + ((chestHi as string)))
         mmd2maxPrepareShot()
         try ( mmd2maxShotOne outDir baseName "front" #view_front b.min b.max ) catch ( mmd2maxLog ("front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "side" #view_left b.min b.max ) catch ( mmd2maxLog ("side 截图异常：" + (getCurrentException() as string)) )
@@ -610,7 +621,15 @@ fn mmd2maxScreenshot =
         try ( mmd2maxShotOne outDir baseName "bone_foot_side" #view_left footLo footHi ) catch ( mmd2maxLog ("bone_foot_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "bone_foot_front" #view_front footLo footHi ) catch ( mmd2maxLog ("bone_foot_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "bone_foot_top" #view_top topLo topHi ) catch ( mmd2maxLog ("bone_foot_top 截图异常：" + (getCurrentException() as string)) )
+        /* #66：胸部骨的指向只有在「只剩骨架」的近景里才读得清 —— 网格把 4.55cm 的
+           骨整个盖住，带网格那张顶多看出胸前有两个鼓包。 */
+        try ( mmd2maxShotOne outDir baseName "bone_chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_front 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOne outDir baseName "bone_chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxSetMeshHidden false ) catch ( mmd2maxLog ("显网格异常：" + (getCurrentException() as string)) )
+        /* #66 的带网格版：乳头点在网格里，骨尖落到点上才算「指向乳头」。
+           与上面 bone_chest_* 配对看 —— 只有一张时「骨在胸前」和「骨指着乳头」分不出来。 */
+        try ( mmd2maxShotOne outDir baseName "chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("chest_front 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOne outDir baseName "chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("chest_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "neck_side" #view_left neckLo neckHi ) catch ( mmd2maxLog ("neck_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "neck_front" #view_front neckLo neckHi ) catch ( mmd2maxLog ("neck_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "foot_side" #view_left footLo footHi ) catch ( mmd2maxLog ("foot_side 截图异常：" + (getCurrentException() as string)) )
@@ -4806,6 +4825,109 @@ fn mmd2maxLogAccessoryStats nodes =
     mmd2maxReport "accessory" "no_parent" "-" noParent
 )
 
+fn mmd2maxVerifyAccessoryDirs boneNodes =
+(
+    /* 附属骨方向回读（#66 的验收）。
+       为什么必须回读而不是「写入时当然对」：bones.tsv 的 tail-head 是这根骨该指哪的
+       唯一真值，胸部骨那一刀的 tail 更是**从网格量出来的乳头点**
+       （mmd2max/export_obj.py 的 _aim_breast_bones）。但建完骨之后还有三道能挪它的刀：
+       改挂（.parent 一设，Max 就把变换按父级重新解释，所以要写回 worldTM）、
+       物理代理改父级、以及任何后来者「顺手」转一下附属骨。写入那一刻的方向不描述
+       保存下来的场景 —— 和 M4b/M4c 把蒙皮与骨盒改成回读是同一件事。
+       短骨（|tail-head| < 1cm）不计：PMX 里那是显示 stub（香菱 右手首 0.38cm），
+       方向本身没意义。这个 1.0 与 结构向 复核同一条门限，Python 侧那份是
+       verdicts.ACCESSORY_STUB_CM —— 契约测试拿字面量对撞，改一边就红。
+       subject 用「行号|骨名」而不是骨名：4893 行改名重名时 Max 会自动加后缀，
+       那时 nodes[i].name 已经不是 bones.tsv 里那个词，两边就对不上账了；行号是
+       表的位置，唯一、两边同源，日志里也还能看见名字。
+       期望值不在这段脚本里（M2b：Max 只报数，判定在 Python 侧）。 */
+    local lines = mmd2maxReadTable MMD2MAX_BONES
+    local rows = mmd2maxRows lines
+    /* 行数必须与 boneNodes 一一对应：subject 里的行号就是从 boneNodes 的下标来的，
+       两边错位就是拿 A 骨的方向去验 B 骨（mmd2maxApplySkin 里同一道检查的理由）。 */
+    if rows.count != boneNodes.count do
+        throw ("附属骨回读：bones.tsv 有 " + (rows.count as string) + " 行，boneNodes 有 " \
+               + (boneNodes.count as string) + " 个，骨号对不上，读数全是垃圾")
+    local cName = mmd2maxColPos lines "bone_name"
+    local cHeadX = mmd2maxColPos lines "head_x"
+    local cHeadY = mmd2maxColPos lines "head_y"
+    local cHeadZ = mmd2maxColPos lines "head_z"
+    local cTailX = mmd2maxColPos lines "tail_x"
+    local cTailY = mmd2maxColPos lines "tail_y"
+    local cTailZ = mmd2maxColPos lines "tail_z"
+    local measured = 0
+    local overTol = 0
+    local readFail = 0
+    local stubs = 0
+    local worstAng = 0.0
+    local worstSubj = "-"
+    local pivotMax = 0.0
+    local pivotSubj = "-"
+    for i = 1 to boneNodes.count do
+    (
+        local nd = boneNodes[i]
+        /* 复用 Biped 节点的人形骨不在这里量：它们的朝向由 struct_dir / box_rb 那两组
+           终局复核管（Biped 骨盒的「方向」是 #dir/#scale 的事，不是 transform.row1）。 */
+        if (classOf nd) != BoneGeometry do continue
+        local p = rows[i]
+        if p.count < cTailZ do
+        (
+            readFail += 1
+            continue
+        )
+        local head = [(p[cHeadX] as float), (p[cHeadY] as float), (p[cHeadZ] as float)]
+        local tail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
+        local want = tail - head
+        if (length want) < 1.0 do
+        (
+            stubs += 1
+            continue
+        )
+        local tm = nd.transform
+        /* 骨骼的**长度轴是局部 X**（4862 行建骨时传的就是 head -> head+x*len，
+           第三参数 zaxis 只定滚转）。量错轴就是一条恒等式反过来的假红：
+           垂直于骨的那根轴与 tail-head 恒读 90 度。 */
+        local ang = mmd2maxVecAngleDeg tm.row1 want
+        if ang < 0.0 do
+        (
+            readFail += 1
+            continue
+        )
+        local subj = ((i - 1) as string) + "|" + (p[cName] as string)
+        local err = distance tm.translationpart head
+        measured += 1
+        mmd2maxReport "bone_rb" "dir_deg" subj ang
+        if ang > worstAng do
+        (
+            worstAng = ang
+            worstSubj = subj
+        )
+        if err > pivotMax do
+        (
+            pivotMax = err
+            pivotSubj = subj
+        )
+        if ang > MMD2MAX_DIRTOL do overTol += 1
+    )
+    /* 取景框之外也要能复盘：这行把「最大夹角在哪根骨」直接写进日志，
+       超标时不用先把 500 行报告 sort 一遍才知道去看哪根。 */
+    mmd2maxLog ("附属骨回读：量到=" + (measured as string) \
+        + " 短骨不计=" + (stubs as string) \
+        + " 读不到=" + (readFail as string) \
+        + " 夹角>" + (MMD2MAX_DIRTOL as string) + "度=" + (overTol as string) \
+        + " 最大夹角=" + (worstAng as string) + " 在=" + worstSubj \
+        + " 最大pivot偏差=" + (pivotMax as string) + " 在=" + pivotSubj)
+    mmd2maxReport "bone_rb" "measurable" "-" measured
+    mmd2maxReport "bone_rb" "short_skipped" "-" stubs
+    mmd2maxReport "bone_rb" "read_fail" "-" readFail
+    mmd2maxReport "bone_rb" "over_tol" "-" overTol
+    mmd2maxReport "bone_rb" "worst_deg" "-" worstAng
+    mmd2maxReport "bone_rb" "worst_bone" "-" worstSubj
+    mmd2maxReport "bone_rb" "pivot_max_cm" "-" pivotMax
+    mmd2maxReport "bone_rb" "pivot_max_bone" "-" pivotSubj
+    true
+)
+
 fn mmd2maxCreateBones =
 (
     /* lines = bones.tsv 的表对象 #(列名, 列号, 数据行)，rows = 其中的数据行。
@@ -6050,6 +6172,12 @@ fn mmd2maxMain =
     clearSelection()
     for obj in meshes do selectMore obj
     mmd2maxZoomFit()
+
+    /* 附属骨方向回读（#66）：排在保存之前、所有会挪骨的段落之后 —— 这一刻量到的就是
+       存进 .max 的那个场景。这一段只读不写（一个 setTransform 都没有），所以它对几何
+       是中性的；注册表里它是最后一道 pass。 */
+    mmd2maxVerifyAccessoryDirs boneNodes
+    mmd2maxReport "pass" "ran" "bone_dir_verify" 1
 
     mmd2maxLog ("保存：" + (MMD2MAX_OUTPUT as string))
     local saveStart = timeStamp()
