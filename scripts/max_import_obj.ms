@@ -296,6 +296,12 @@ fn mmd2maxZoomFit =
    否则「藏掉网格看骨架」会把骨架一起藏掉。 */
 global MMD2MAX_SHOTMESH = #()
 
+/* 每张图的取景填充率（#69），由 mmd2maxShotOne 逐个 append，抓完在 mmd2maxScreenshot
+   末尾汇总成两条计数。为什么用全局而不是让 ShotOne 自己返回：每一只 ShotOne 都包在
+   自己的 try 里（一张图坏不许拖垮整段），返回值会被那个 catch 吞成 undefined，
+   而「哪几张真的量到了」必须是这一段的读数 —— 少一张就是红，不是静默少一行。 */
+global MMD2MAX_SHOTFILL = #()
+
 fn mmd2maxShotMeshes =
 (
     local arr = #()
@@ -326,6 +332,7 @@ fn mmd2maxPrepareShot =
     try ( hide (getNodeByName "Grid") ) catch ()
     try ( select #() ) catch ()
     MMD2MAX_SHOTMESH = mmd2maxShotMeshes()
+    MMD2MAX_SHOTFILL = #()
     try ( viewport.SetShowEdgeFaces true )
     catch ( mmd2maxLog ("EdgeFaces 开关失败：" + (getCurrentException() as string)) )
     completeRedraw()
@@ -390,6 +397,71 @@ fn mmd2maxSaveDib bmp shotFile =
     done
 )
 
+fn mmd2maxShotFill viewKind lo hi =
+(
+    /* 取景填充率：这只框的**纵向**跨度投影到屏幕上占视口高度的百分之几。
+       #69 的验收就靠这个数：之前「特写」只能肉眼判，而肉眼判的是「图里有没有头」，
+       不是「4.55cm 的骨有几个像素」。世界点用 gw.transPoint 投到屏幕（探针实测可用，
+       返回屏幕坐标 [x, y, 深度]），纵向轴按视图取（正视/左视=Z，俯视=Y）。
+       投不出来返回 -1.0：宁可报一个刺眼的负数，也不要 try/catch 吞成「没有这行」。 */
+    local vAxis = 3
+    if viewKind == #view_top do vAxis = 2
+    local loA = #(lo.x, lo.y, lo.z)
+    local hiA = #(hi.x, hi.y, hi.z)
+    /* 取框的**纵向**那条棱的两个端点：另外两轴取中点，这样量到的是「这只框有多高」，
+       不是对角线。用 #(x,y,z) 数组而不是直接改 Point3 的下标 —— Point3 的 p[1]= 写回
+       在 Max 2022 里没验过，数组下标赋值是确定的。 */
+    local midA = #((loA[1] + hiA[1]) / 2.0, (loA[2] + hiA[2]) / 2.0, (loA[3] + hiA[3]) / 2.0)
+    midA[vAxis] = loA[vAxis]
+    local pLo = [midA[1], midA[2], midA[3]]
+    midA[vAxis] = hiA[vAxis]
+    local pHi = [midA[1], midA[2], midA[3]]
+    local sLo = undefined
+    local sHi = undefined
+    try ( sLo = gw.transPoint pLo; sHi = gw.transPoint pHi )
+    catch ( mmd2maxLog ("取景投影失败：" + (getCurrentException() as string)) )
+    if sLo == undefined or sHi == undefined do return -1.0
+    local dPx = distance [sLo.x, sLo.y, 0.0] [sHi.x, sHi.y, 0.0]
+    local winY = 0.0
+    try ( winY = gw.getWinSizeY() as float ) catch ()
+    if winY <= 0.0 do return -1.0
+    100.0 * dPx / winY
+)
+
+fn mmd2maxAspectBox viewKind lo hi =
+(
+    /* 把框的**水平**跨度按视口宽高比收紧到刚好装得下纵向跨度，纵向不动。
+       为什么：zoomToBounds 是拿框里最大的那一维去贴视口的（探针实测：香菱的胸带框
+       119cm 宽 × 19.7cm 高，投出来横向占 63%、纵向只剩 18%），所以只要水平被张开
+       的手臂撑宽，纵向放大率就被宽度绑架 —— 胸部骨 4.55cm 在图上只有 20px，
+       「骨指着乳头」这件事在像素上根本不存在（#66 只能靠回读数字，用户没法用眼睛验收）。
+       只由 mmd2maxShotOneTight 调用（颈部/胸部这种「按高度比例定义」的带），
+       按节点算出来的框（脚/手）不做：那种框的水平跨度就是内容本身，收紧会裁掉内容。
+       水平轴随视图变：正视=X、左视=Y、俯视=X；纵向对应 Z/Z/Y。 */
+    local hAxis = 1
+    local vAxis = 3
+    if viewKind == #view_left do hAxis = 2
+    if viewKind == #view_top do vAxis = 2
+    local winX = 0.0
+    local winY = 0.0
+    try ( winX = gw.getWinSizeX() as float; winY = gw.getWinSizeY() as float )
+    catch ( mmd2maxLog ("视口尺寸取不到：" + (getCurrentException() as string)) )
+    local loA = #(lo.x, lo.y, lo.z)
+    local hiA = #(hi.x, hi.y, hi.z)
+    if winX <= 0.0 or winY <= 0.0 do return #(lo, hi)
+    local vSpan = hiA[vAxis] - loA[vAxis]
+    local hSpan = hiA[hAxis] - loA[hAxis]
+    if vSpan <= 0.0 or hSpan <= 0.0 do return #(lo, hi)
+    local want = vSpan * (winX / winY)
+    if want >= hSpan do return #(lo, hi)
+    local mid = (loA[hAxis] + hiA[hAxis]) / 2.0
+    local newLo = #(lo.x, lo.y, lo.z)
+    local newHi = #(hi.x, hi.y, hi.z)
+    newLo[hAxis] = mid - want / 2.0
+    newHi[hAxis] = mid + want / 2.0
+    #([newLo[1], newLo[2], newLo[3]], [newHi[1], newHi[2], newHi[3]])
+)
+
 /* 把「当前活动视口」切到 viewKind 并按 [lo, hi] 这块世界范围取景。
    和 mmd2maxZoomFit 同一套 API，只是只作用于一个视口、且能框局部区域
    （特写：颈部 / 脚尖）。抓图前一定 completeRedraw()：探针实测不重绘时
@@ -410,7 +482,16 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
 (
     local shotFile = outDir + "\\" + baseName + "_" + tag + ".png"
     mmd2maxLog ("截图开始 " + tag + " -> " + shotFile)
+    /* 这里的 lo/hi 就是「这一张要取景的那只框」：要收紧的带由 mmd2maxShotOneTight
+       在**调进来之前**收好，所以取景与填充率天然量同一只框，中间没有任何改框的机会。 */
     mmd2maxFitView viewKind lo hi
+    /* 填充率排在取图之前：取景是这一段自己的事，DIB 取不到也得留下这一行 ——
+       否则「视口坏了」会伪装成「这段没跑」（when=if_present 就把它跳过了）。 */
+    local fill = mmd2maxShotFill viewKind lo hi
+    mmd2maxReport "shot_rb" "fill_pct" tag fill
+    append MMD2MAX_SHOTFILL fill
+    mmd2maxLog ("截图 " + tag + " 取景填充=" + (fill as string) + "% 框=" \
+        + ((lo as string)) + ".." + ((hi as string)))
     /* 两条打点：上一轮 ShotOne 抛「Call needs function or class, got: undefined」，
        连「截图开始」都没落进日志。真凶是前向引用 —— 这段曾经排在 mmd2maxLog 的
        定义之前，而 MAXScript 的裸调在解析期绑定（详见文件开头的日志三兄弟）。
@@ -445,6 +526,25 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
         mmd2maxLog ("截图 " + tag + " 落盘=" + (okShot as string) + " -> " + shotFile)
         okShot
     )
+)
+
+fn mmd2maxShotOneTight outDir baseName tag viewKind lo hi =
+(
+    /* 和 mmd2maxShotOne 唯一的差别：先把框的**水平**跨度按视口宽高比收紧，再交给他拍。
+       收完之后框的长宽比 = 视口的长宽比，zoomToBounds 无论贴哪一维，纵向放大率都一样
+       ⇒ 带高不再被手臂宽度绑架（为什么必须这样，见 mmd2maxAspectBox 那段）。
+       为什么不写成 ShotOne 的可选参数（`fn f a b /tight:false =`）：Max 2022 的
+       MAXScript 解析器**不认这个写法**，第 34 轮实跑在编译期就报
+       「-- Syntax error: at /, expected =」，整份脚本一行都不跑 —— 日志、error.txt、
+       报告全是空的，只剩一个读不到文字的 Auto-load 弹窗。单开一个函数除了绕开这条，
+       还把「哪几张紧」变成调用点上的名字：Python 侧的 verdicts.SHOT_TIGHT_TAGS
+       就是照着这个名字对账的。 */
+    local tightBox = mmd2maxAspectBox viewKind lo hi
+    local fitLo = tightBox[1]
+    local fitHi = tightBox[2]
+    mmd2maxLog ("截图 " + tag + " 紧框：" + ((lo as string)) + ".." + ((hi as string)) \
+        + " -> " + ((fitLo as string)) + ".." + ((fitHi as string)))
+    mmd2maxShotOne outDir baseName tag viewKind fitLo fitHi
 )
 
 fn mmd2maxScreenshot =
@@ -600,7 +700,9 @@ fn mmd2maxScreenshot =
            同一套写法（都不认骨名，只认高度比例），所以这里也不许按名字去找那两根骨：
            PMX 的胸骨名从「右胸」到 bustR 都有，写死名字就是给下一具模型埋一颗雷。
            框宽沿用 neck 的 ±10cm：X 方向被手臂撑开是事实，但侧视/正视里要判的是
-           「这根骨从胸骨出发往哪走」，纵向比例才是可读性的来源。 */
+           「这根骨从胸骨出发往哪走」，纵向比例才是可读性的来源 —— 所以这一只框交给
+           mmd2maxShotOneTight 去按视口宽高比收水平跨度（#69：上一轮实测这只框
+           119cm 宽 × 19.7cm 高，纵向只占画面的 18%，4.55cm 的胸骨在图上 20px）。 */
         local chestLo = [b.min.x - 10.0, b.min.y - 10.0, b.min.z + h * 0.58]
         local chestHi = [b.max.x + 10.0, b.max.y + 10.0, b.min.z + h * 0.72]
         mmd2maxLog ("chest 取景：框=" + ((chestLo as string)) + ".." + ((chestHi as string)))
@@ -623,21 +725,38 @@ fn mmd2maxScreenshot =
         try ( mmd2maxShotOne outDir baseName "bone_foot_top" #view_top topLo topHi ) catch ( mmd2maxLog ("bone_foot_top 截图异常：" + (getCurrentException() as string)) )
         /* #66：胸部骨的指向只有在「只剩骨架」的近景里才读得清 —— 网格把 4.55cm 的
            骨整个盖住，带网格那张顶多看出胸前有两个鼓包。 */
-        try ( mmd2maxShotOne outDir baseName "bone_chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_front 截图异常：" + (getCurrentException() as string)) )
-        try ( mmd2maxShotOne outDir baseName "bone_chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_side 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "bone_chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_front 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "bone_chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("bone_chest_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxSetMeshHidden false ) catch ( mmd2maxLog ("显网格异常：" + (getCurrentException() as string)) )
         /* #66 的带网格版：乳头点在网格里，骨尖落到点上才算「指向乳头」。
            与上面 bone_chest_* 配对看 —— 只有一张时「骨在胸前」和「骨指着乳头」分不出来。 */
-        try ( mmd2maxShotOne outDir baseName "chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("chest_front 截图异常：" + (getCurrentException() as string)) )
-        try ( mmd2maxShotOne outDir baseName "chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("chest_side 截图异常：" + (getCurrentException() as string)) )
-        try ( mmd2maxShotOne outDir baseName "neck_side" #view_left neckLo neckHi ) catch ( mmd2maxLog ("neck_side 截图异常：" + (getCurrentException() as string)) )
-        try ( mmd2maxShotOne outDir baseName "neck_front" #view_front neckLo neckHi ) catch ( mmd2maxLog ("neck_front 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "chest_front" #view_front chestLo chestHi ) catch ( mmd2maxLog ("chest_front 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "chest_side" #view_left chestLo chestHi ) catch ( mmd2maxLog ("chest_side 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "neck_side" #view_left neckLo neckHi ) catch ( mmd2maxLog ("neck_side 截图异常：" + (getCurrentException() as string)) )
+        try ( mmd2maxShotOneTight outDir baseName "neck_front" #view_front neckLo neckHi ) catch ( mmd2maxLog ("neck_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "foot_side" #view_left footLo footHi ) catch ( mmd2maxLog ("foot_side 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "foot_front" #view_front footLo footHi ) catch ( mmd2maxLog ("foot_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "foot_top" #view_top topLo topHi ) catch ( mmd2maxLog ("foot_top 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "hand_front" #view_front handLo handHi ) catch ( mmd2maxLog ("hand_front 截图异常：" + (getCurrentException() as string)) )
         try ( mmd2maxShotOne outDir baseName "hand_side" #view_left handLo handHi ) catch ( mmd2maxLog ("hand_side 截图异常：" + (getCurrentException() as string)) )
         mmd2maxRestoreShot()
+        /* 两条聚合读数（期望值由 Python 侧的 mmd2max.verdicts.SHOT_TAGS 定，这里只数自己
+           量到几个）：`tags` 少于名单 = 有某张图连取景都没跑到（那张图不存在，而报告里
+           只是少一行，看不出来）；`projection_fail` 是 gw.transPoint 没投出来的张数，
+           投不出来时 fill_pct 报的是 -1.0（刺眼，但不如这句人话好读）。 */
+        local fillFail = 0
+        for v in MMD2MAX_SHOTFILL do if v < 0.0 do fillFail += 1
+        mmd2maxReport "shot_rb" "tags" "-" MMD2MAX_SHOTFILL.count
+        mmd2maxReport "shot_rb" "projection_fail" "-" fillFail
+        local minFill = -1.0
+        if MMD2MAX_SHOTFILL.count > 0 do minFill = amin MMD2MAX_SHOTFILL
+        mmd2maxLog ("截图取景：量到=" + (MMD2MAX_SHOTFILL.count as string) \
+            + " 投不出=" + (fillFail as string) \
+            + " 最小纵向填充=" + (minFill as string) + "%")
+        /* ran 行排在还原之后：截图这一段包含「改视口显示 → 抓图 → 还原」，
+           还原没做完就不算收工。它也是整份报告的最后一段，所以 shot_rb 那些填充率
+           天然落在这一段里（注册表里 shot_capture 是最后一个 pass）。 */
+        mmd2maxReport "pass" "ran" "shot_capture" 1
         true
     )
 )

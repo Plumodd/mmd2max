@@ -517,7 +517,7 @@ def check_forward_reference(src: str) -> list[str]:
 
 
 def check_optional_params(src: str) -> list[str]:
-    """顶层 `fn` 的参数表里不许出现 `[...]`（MAXScript 的可选参数写法）。
+    """顶层 `fn` 的参数表里不许出现 `[...]` 或 `/name:`（MAXScript 的两种可选参数写法）。
 
     实跑证据（Max 2022，13:06 那轮，-U MAXScript 载入 2900 行装配脚本）：
         fn mmd2maxPlaceBipedNodes root lines rowIds targetNames passList [skipDir:false] =
@@ -526,6 +526,14 @@ def check_optional_params(src: str) -> list[str]:
     —— 和上面几条一样是编译期错误，只能靠静态拦。带类型的 `[x:boolean=false]` 按文档
     应当合法，但这条写法本项目从没验过，不值得再烧一轮实跑去试：
     要开关就加一个**位置参数**，调用点各写 true/false。
+
+    斜杠写法是同一类错误的第二个拼法（第 34 轮实跑，解析探针 probe_parse.txt）：
+        fn mmd2maxShotOne outDir baseName tag viewKind lo hi /tight:false =
+        -- Syntax error: at /, expected =
+    代价和 13:06 那轮一模一样：Auto-load 弹窗、日志与 error.txt 全空、整轮白跑。
+    文档里那个写法在 Max 2022 的解析器上就是不认，所以这里一并拦掉 —— 顺带说明
+    **调用点**的 `fileName:shotFile` / `pattern:"*"`（关键字实参，没有斜杠）是另一回事，
+    那些是本仓库实测跑通过的写法，不在本规则的射程里。
     """
     problems = []
     depth = 0
@@ -540,6 +548,13 @@ def check_optional_params(src: str) -> list[str]:
                     f"行 {index}: 函数参数表里写了可选参数 `{m.group(0)}` —— "
                     f"MAXScript 报「Syntax error: at [, expected =」，整份脚本编译不过"
                     f"（13:06 那轮就是这么烧掉的）；改成位置参数，调用点显式传值。")
+            slash = re.search(r"/\S*", head)
+            if slash:
+                problems.append(
+                    f"行 {index}: 函数参数表里写了斜杠可选参数 `{slash.group(0)}` —— "
+                    f"MAXScript 报「Syntax error: at /, expected =」，整份脚本编译不过"
+                    f"（第 34 轮 `/tight:false` 就是这么烧掉的）；改成位置参数，"
+                    f"或者为那个开关单开一个函数。")
         depth += _paren_delta(code)
     return problems
 

@@ -64,9 +64,9 @@ def is_bool_text(text: str) -> bool:
 def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
     """一行判据 + Max 的读数 → (状态, 说明)。
 
-    数值比对用 `abs(actual - expected) <= tol`；容许的「读数不是数字」只有一种：
-    布尔行（`端面覆盖=true`）。除此之外读不成数字就是 FAIL —— 让空串或 `-`
-    通过等于把那一行变成装饰。
+    数值比对用 `abs(actual - expected) <= tol`；`min` 行是单向的（`actual >= expected`，
+    超出没有代价）；容许的「读数不是数字」只有一种：布尔行（`端面覆盖=true`）。
+    除此之外读不成数字就是 FAIL —— 让空串或 `-` 通过等于把那一行变成装饰。
     """
     kind = row["kind"]
     if kind == "report":
@@ -74,6 +74,17 @@ def grade(row: dict[str, str], actual: str) -> tuple[str, str]:
             # 行报了但值是空的：Max 那侧的读数没算出来。让它通过等于这条判据是装饰。
             return FAIL, "只要求出现的行，值是空的"
         return PASS, f"只要求出现，读数={actual}"
+    if kind == "min":
+        # 单向门槛：低于 expected 才是缺陷，高于它没有代价（见 verdicts 模块文档）。
+        # 不许退化成 abs() 比较 —— 那样「拍得比要求更近」也会红。
+        try:
+            limit = float(row["expected"])
+            got = float(actual)
+        except ValueError:
+            return FAIL, f"门槛 {row['expected']}，但读数不是数字：{actual!r}"
+        if got >= limit:
+            return PASS, f"{got} ≥ 门槛 {limit}"
+        return FAIL, f"{got} < 门槛 {limit}：这一行的读数比要求的还低"
     if is_bool_text(row["expected"]):
         if actual.strip().lower() == row["expected"].strip().lower():
             return PASS, f"= {row['expected']}"
@@ -119,7 +130,7 @@ def read_pair(spec_path: Path, report_path: Path) -> tuple[
         return [], {}, [], problems
 
     for row in spec_rows:
-        if row["kind"] not in ("gate", "lock", "report"):
+        if row["kind"] not in ("gate", "lock", "report", "min"):
             problems.append(f"规格表有未知 kind：{row['kind']}（{row['phase']}/{row['check']}）")
         if row["when"] not in ("always", "if_present"):
             problems.append(f"规格表有未知 when：{row['when']}（{row['phase']}/{row['check']}）")
@@ -218,11 +229,12 @@ def check(base: Path, *, spec_path: Path | None = None,
                      f"({kind}) 期望={expected or '—'} 实报={actual or '—'} —— {note}")
 
     gate_lock = (by_kind.get(("gate", FAIL), 0) + by_kind.get(("lock", FAIL), 0)
+                 + by_kind.get(("min", FAIL), 0)
                  + by_kind.get(("orphan", FAIL), 0)
                  + by_kind.get(("timeline", FAIL), 0))
     lines.append(
         f"判据汇总：通过 {counts[PASS]}，失败 {counts[FAIL]}，未跑 {counts[SKIP]} "
-        f"（gate/lock 失败 {gate_lock}）；报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
+        f"（gate/lock/min 失败 {gate_lock}）；报告共 {len(look)} 行，规格 {len(spec_rows)} 行")
     # 时间轴问题单独说一句：它不是「某个数超差」，是「这一轮读数不描述最终场景」。
     # 混在 gate 里说，读的人会用「改一下容差」去处理一个顺序 bug。
     if by_kind.get(("timeline", FAIL), 0):

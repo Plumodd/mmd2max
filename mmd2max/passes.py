@@ -215,6 +215,14 @@ PASSES: tuple[Pass, ...] = (
     # 乳头点，不回读就只有一句「建骨时传对了」。
     _pass("bone_dir_verify", "附属骨方向回读（保存前）",
           requires=("accessory_build",), writes=("bone_rb",)),
+    # 截图（#69）：脚本里它排在 saveMaxFile 与全部回读之后 —— 「成功标记写在截图之前」
+    # 那段注释说的是同一件事：截图坏不许拖垮已经成功的装配，所以它是 optional。
+    # 它 requires bone_dir_verify 的物理理由不是「需要那两根骨」，而是**画面必须描述
+    # 保存下来的那个场景**：在最后一道几何写刀之前抓的图，判的是别的场景。
+    # 这一段的读数（fill_pct / tags / projection_fail）量的是取景本身 ——
+    # 「特写够不够特写」以前只能用眼睛判，而眼睛判的是「图里有没有头」。
+    _pass("shot_capture", "视口截图与取景填充率",
+          requires=("bone_dir_verify",), writes=("shot_rb",), optional=True),
 )
 
 BY_ID: dict[str, Pass] = {p.id: p for p in PASSES}

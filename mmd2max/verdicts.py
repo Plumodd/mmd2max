@@ -18,12 +18,17 @@ v3 的验收长成这样：Max 侧自己数 `成功=39 失败=0`、自己判断�
 `tools/check_verdicts.py` 再把两张表拼起来算状态。这样「尺」和「量出来的数」来自
 两个不同的进程，改坏任何一侧都会被另一侧发现。
 
-三种 kind
+四种 kind
 ---------
 - `gate` 真正的要求，超差 = FAIL（例：失败段数必须 0、盒隙必须接上）。
 - `lock` **已定价的缺陷**，钉住当前读数防止再退（例：`落位最大=5.6995`、`链向 断开=2 根`、
   Pelvis 落位偏差）。这类行不许被读成「达标」——它只保证「没变得更差」。
 - `report` 只要求「这一行必须出现」，不卡数值（例：可测骨数，随模型变）。
+- `min` 单向门槛：读数**至少**要到 expected 才算过（例：特写截图的取景填充率）。
+  为什么现有三种装不下它：gate 比的是 `abs(实报 - 期望) <= tol`，是**双向**的，
+  把填充率写成 gate + 大容差就等于没写（越大越能漂），写成 gate + 小容差又要求它
+  不许超过某个数 —— 而「拍得更近」从来不是缺陷。expected 之下才是缺陷。tol 对
+  `min` 行没有意义，固定写 0。
 
 `when=if_present` 的行（例：收尾重摆——没有任何骨被拽走时那一遍根本不该跑）缺失不算
 失败，但如果报了，仍然按 expected/tol 判。
@@ -67,7 +72,7 @@ REPORT_NAME = "MMD2MAX.REPORT"
 SPEC_HEADER = ("phase", "check", "subject", "expected", "tol", "kind", "when")
 REPORT_HEADER = ("phase", "check", "subject", "actual")
 
-KINDS = ("gate", "lock", "report")
+KINDS = ("gate", "lock", "report", "min")
 WHENS = ("always", "if_present")
 
 # 全模型范围的行为 "-"，Max 那边也写 "-"（两边同一个词，拼表才不需要映射）。
@@ -487,6 +492,72 @@ def accessory_dir_targets(bones: list[dict[str, str]],
     return subjects
 
 
+# ---------------------------------------------------------------------------
+# 截图取景（#69）：特写够不够特写，是一个数，不是一句「图里有头」
+# ---------------------------------------------------------------------------
+#
+# 名单 = .ms 的 mmd2maxScreenshot 里那些 `mmd2maxShotOne outDir baseName "<tag>"` 调用点，
+# 一个不多一个不少。契约测试拿 .ms 的字面量对撞这三份名单：改了那边不改这边，
+# 要么报告里冒出规格表不认识的行（orphan 判红），要么规格表多出一条永远没人报的行。
+# 为什么要给截图建判据：这一组的用途是**视觉验收**（#12/#26/#27/#37/#66 都靠它），
+# 而「取景有没有生效」原先没有任何读数 —— 第 33 轮实测胸带框纵向只占画面 18%，
+# 那张图判不了任何东西，但日志、报告、CHECK 全绿，因为没人要求过它是特写。
+SHOT_TAGS: tuple[str, ...] = (
+    "front", "side", "top",
+    "bone_front", "bone_side",
+    "bone_foot_side", "bone_foot_front", "bone_foot_top",
+    "bone_chest_front", "bone_chest_side",
+    "chest_front", "chest_side",
+    "neck_side", "neck_front",
+    "foot_side", "foot_front", "foot_top",
+    "hand_front", "hand_side",
+)
+
+# tight = 取景前按视口宽高比把框的**水平**跨度收到与纵向同比例（.ms 的 mmd2maxAspectBox）。
+# 只有「按包围盒高度比例定义」的两组带该紧：颈部与胸部 —— 它们的水平跨度是 ±10cm 的
+# 余量 + 被张开的手臂撑出来的 119cm，跟要判的东西（那一截带里的高矮）没关系。
+# 按节点算出来的框（脚/手）不紧：那种框的水平跨度就是内容本身，收紧会裁掉内容。
+# 这份名单必须与 .ms 调用点里 `tight:true` 那几个逐字相同（契约测试对撞）。
+SHOT_TIGHT_TAGS: tuple[str, ...] = (
+    "bone_chest_front", "bone_chest_side",
+    "chest_front", "chest_side",
+    "neck_side", "neck_front",
+)
+
+# 特写的最低纵向填充率（占视口高度的百分之几）。定价来自第 33 轮的实测：
+# 胸带框 119cm 宽 × 19.7cm 高，两个角 `gw.transPoint` 投出来纵向 85px / 474px = **18%**，
+# 4.55cm 的胸部骨在图上约 20px —— 「指着乳头」这句话在像素上不存在。
+# 按宽高比收过之后框的长宽比 = 视口的，zoomToBounds 两维同时贴，实测那一轮的横向填充
+# 是 517/820 = 63%，所以纵向也该到 63% 上下（4.55cm ≈ 69px）。45 这条线卡在
+# 「坏的 18%」和「预期的 63%」中间，两头都留一倍以上余量 —— 它不要求正好 63，
+# 只要求「别再悄悄退回去」。
+SHOT_MIN_FILL_PCT = 45.0
+
+# 非 tight 的那些张只要「投影成功」这个下限（.ms 投不出时报 -1.0，见 mmd2maxShotFill）。
+# 全身图的填充率取决于模型的比例（裙子摊开的角色和瘦高角色不一样），给它定一个
+# 「该占多少」没有物理理由，拿它当尺就是装饰。
+SHOT_MIN_FILL_FLOOR = 0.0
+
+
+def shot_fill_rows() -> list[tuple[str, ...]]:
+    """截图取景的规格行：每张图一行填充率 + 两条聚合计数。
+
+    `when` 全是 `if_present`：截图段只在 `MMD2MAX_SHOT` 打开时跑，而且它排在保存与成功
+    标记之后 —— 那段坏了不该把已经落盘的 .max 判成失败，但它一旦跑了，行数与填充率
+    就必须按上面这两份名单对账（少一张图 = 少一行读数，靠 `tags` 那条 gate 响）。
+    """
+    rows: list[tuple[str, ...]] = []
+    for tag in SHOT_TAGS:
+        floor = SHOT_MIN_FILL_PCT if tag in SHOT_TIGHT_TAGS else SHOT_MIN_FILL_FLOOR
+        rows.append(row("shot_rb", "fill_pct", tag, floor, 0, "min",
+                        when="if_present"))
+    rows.append(row("shot_rb", "tags", GLOBAL, len(SHOT_TAGS), 0, "gate",
+                    when="if_present"))
+    rows.append(row("shot_rb", "projection_fail", GLOBAL, 0, 0, "gate",
+                    when="if_present"))
+    return rows
+
+
 def row(phase: str, check: str, subject: str, expected, tol,
         kind: str, when: str = "always") -> tuple[str, str, str, str, str, str, str]:
     """规格行 → 七个**字符串**字段（wire format 只搬文本，判定时再 float()）。
@@ -806,6 +877,9 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     for check in ("short_skipped", "worst_deg", "worst_bone",
                   "pivot_max_cm", "pivot_max_bone"):
         rows.append(row("bone_rb", check, GLOBAL, None, None, "report"))
+
+    # ── 截图取景（#69）：特写够不够特写 ───────────────────────────
+    rows.extend(shot_fill_rows())
 
     # ── 蒙皮（--no-skin 时整段跳过）──────────────────────────────
     when = "always" if skin else "if_present"
