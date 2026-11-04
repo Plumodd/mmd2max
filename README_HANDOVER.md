@@ -1533,6 +1533,25 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       `判据汇总` 那行只在那里，Max 侧日志没有）。**开口记在这**：第 40 条那轮交付件（round76，512 PASS）
       的日志**不在本工作树** —— 这里 `test_runs/香菱/香菱_objrun.log` 装的是更早的 11-04 16:15 那份，
       所以「512 / 0 / 22」这组数在本树不可复核，要复现得回 Desktop 源树或重跑一次 `--drop-guides`。
+    - **包内自检抓到一条新的血缘缺口：冻结的顺序错了，而当时看不出来**。按 §8 自检（解包 → 用包里的代码
+      `run_model.py` 重导 → 与工作树夹具逐件 `cmp`）时，`MMD2MAX.CFG` 归一路径后**零行不同** —— 这本来
+      是「完全复现」的意思，其实是假绿：实跑（`--physics --shot`、非交互）之后我还跑过一次 gen-only 复核，
+      那一次把夹具里的 CFG 覆盖成 `INTERACTIVE=true` / `香菱.max`（没有 `_phys`）/ `MMD2MAX_PHYSICS` 空，
+      而我 02:09 冻结的正是那份被覆盖的。Max 日志第 7 行 `配置来自 …（43 项）` 只回声 12 个值，认不出
+      整份文件，所以**当场没有任何一条闸能说「这份 CFG 不是这一轮读的」**。处置分两步：
+      ① 用同一条 `build_cfg(suffix="phys", shot=True, physics=True, interactive=False)` 重建，与日志回声
+      逐项对上（43 项、`短骨门限=1.0`、`蒙皮=true`、`快照回滚=false`、规格/报告路径逐字相同），
+      重建件落盘为 `baselines/round77_MMD2MAX.CFG`，`sha256[:12]=caf81f10214a`（2216 字节，CRLF）；
+      被覆盖的那份是 `8ad81a99ee59`（2113 字节）—— 两个数不同就是同一件事的两个证据。
+      顺手查了规格表有没有同样问题：`verdicts_text` 在 phys 与 gen-only 两种开关下**逐字节相同**
+      （`24e52fcfa3e7`），所以 `round77_香菱_VERDICTS` 就是这一轮那份，无需重建。
+      ② 补一条闸（`obj_run.build_script` 里）：每次落盘 CFG 之后把**那份文件字节**的
+      `sha256[:12]` 连同键数打进驱动流 —— 指纹算落盘字节而不是内存正文，因为 `write_text` 在 Windows
+      上写 `\r\n`，而复核的人手里只有盘上那份；指纹**不写进 CFG 文件**，那是 Max 逐键读的数据，
+      加一条非键值的行等于给它加一条读法规则（规则 IV 的「只有一个来源」连格式也算）。
+      用例 `test_obj_run_guard.CfgContractTests.test_cfg_fingerprint_goes_to_the_driver_stream`
+      钉住「报的数必须等于落盘那份算出来的」。这条与第 39 条末尾、第 40 条「背书没有冻结件」是同一个形状：
+      **存下来的证据比这一轮晚一步或早一步，都不会报错，只会看起来正常。**
     - **时间轴冻结点 round52 → round77**（`baselines/round77_MMD2MAX.REPORT`，`tests/test_passes.py:FROZEN_REPORT`）：
       这次挪的形状与前两次（round26→33→52）**不一样** —— 前两次是「新 pass 第一次有读数」，挪完仍是超集；
       这次 phase 集合**少了** `foot_yaw`，因为规则 I 的新闸把恒等式退回日志，注册表不再声称写它。
@@ -1550,7 +1569,20 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       双击走的是**第一条**，旧说法会让人误以为三级探测的后两级在本机被验证过；§7「21 个 `.py`」与 §8
       「64 个文件 = 13+36+2+14 + 4」—— 后者自己就和 64 对不上，实测 `mmd2max/` 11 + `probes/` 35 +
       `scripts/` 1 + `tools/` 13 + 根 4 件 = **64**，两处都改成给现取的命令；`verdicts.py:877` 这个死行号 → 961。
-    - **套件与体检**：**716 条 OK（skip 1）**、`tools/check_ms.py` `[OK]`。本轮**没动** Desktop 上的源树。
+    - **重打包与包内自检（第 40 条那套流程复跑，`mmd2max_v4_test_2026-11-05.zip`）**：`git archive` 出来
+      **64 个内容件**（`mmd2max/` 11 含 configs 3 + `probes/` 35 + `scripts/` 1 + `tools/` 13 + 根 4；
+      zip 条目 69 里有 5 条是目录项，别把两者混成一个数）。解压到临时目录 → **只用包里的代码**
+      `tools/run_model.py <香菱.pmx>` 重导一遍 → 与工作树夹具 `cmp`：**同名 21 件里 19 件逐字节相同**，
+      差的两件（`MMD2MAX.CFG`、`mmd2max_run.ms`）都是**路径件**：`.ms` 归一绝对路径后只剩注入头那一行
+      （它写的就是 CFG 的绝对路径），CFG 归一后**零行不同** —— 「零行不同」这一条正是上面那节
+      说的假绿：它对上的那份 CFG 已经不是这一轮读过的配置。
+      也就是说包里这份代码与项目里这份**产出同一件东西**；只在夹具侧的 10 件全是 Max 轮产物
+      （`CHECK/REPORT/*_objrun.log/*.success.json/香菱_phys.max/无前缀 physics.tsv`），导出这一半本来不生成。
+      与金标准 `baselines/香菱_*.tsv` 那一代对撞走 `tools/check_baseline.py`：**6 张全部「数字不变」**
+      （`bones/weights/meta` 只差 M1 那一行表头；`biped_map/widths/limbs` 的差是线格式 v2 把图例行
+      挪到表头之后 —— 数据行逐位相同，这条闸按 `data_lines` 比，不按整文件 `cmp` 比）。
+    - **套件与体检**：**717 条 OK（skip 1）**、`tools/check_ms.py` `[OK]`。本轮**没动** Desktop 上的源树
+      （只读了 `Desktop\香菱\香菱.pmx` 一份输入）。
 
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。
