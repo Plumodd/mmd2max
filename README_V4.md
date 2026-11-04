@@ -33,8 +33,21 @@ v4 任何一步做砸了，回到 v3 目录跑 `tools/obj_run.py` 即可，不�
 
 **规则 I — 判据独立。** 任何检查只能拿「从 Max 回读的值」去比「从 spec 文件读进来的
 值」（spec 由 Python 从 PMX 生成）。检查函数**不许**调用写路径用过的那个求值函数。
-自动判法：`tools/check_ms.py` 新增一条静态规则 —— 名字匹配 `*Check*` / `*校验*` 的
-函数体里出现 `BoxWantDir` / `SegLen` / 任何 `Want*`/`Target*` 求值器 = 编译期报错。
+自动判法：`tools/check_ms.py:check_oracle_independence`，两层，因为**只按名字查会被两类
+极便宜的规避绕开**（第 99 轮把这条查法改了，原因写在下面）：
+
+1. 名字层：函数名像判据（`Check` / `Verify` / `Audit` / `Score` / `Valid` / `LogStruct` /
+   `Dump` + 中文语素，**不锚行首**）而体内出现像求值器的调用（`Want` / `Target` /
+   `Desired` / `Expect` / `BoxDir`）⇒ 报错；
+2. 数据流层：求值器的返回值 → 局部量 →（跨函数：实参**按位置**污染被调方的形参，返回值
+   污染调用方）→ 流进 `mmd2maxReport` 或任何最终会写报告的函数（汇点取一跳调用闭包，
+   因为包装层是这条规则最常见的藏身处）⇒ 报错。
+
+第 2 层才管得住第 1 层查不到的那一种：**把求值器的结果当参数传进去**。`mmd2maxLogStructDir`
+的名字里没有一个求值器语素、函数体里也没有求值器调用，按名字查它永远干净，而它的第三个
+实参就是 `mmd2maxBoxWantDir` 给的方向 —— 这正是 #26/#40/#41 那个恒等式 bug 换了个名字的形状。
+命中了就两选一：期望值改成从 spec 文件读（规则 IV 的数值单源），或者把这一行降级成日志
+（`verdicts.py` 里声明成 **lock** 的那几行例外 —— 锁的语义本来就是「只求不比上一轮差」）。
 
 **规则 II — 只报告不修的检查是非法的。** 每条判据要么登记「谁能修它」（某个 pass 的
 收敛目标），要么是终局不变量（不达标 ⇒ 退出码非 0）。v3 的 `盒隙 端面覆盖` 只打印不
@@ -365,13 +378,18 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
 
 用户会问的两件事，都不该以「改源码」作答：
 
-- **Python 版本**：要的是 **3.8+**，不是「只能 3.12」。实测（不是推断）：21 个 `.py` 全部过
+- **Python 版本**：要的是 **3.8+**，不是「只能 3.12」。实测（不是推断）：全仓 `.py`（口径用
+  `git ls-files "*.py" | wc -l` 现取，别在这里抄数）逐份过
   `ast.parse(feature_version=(3, 8))`，无 `match`、无 3.9+ API，最新的一条语法是海象 `:=`
-  （`tools/diff_round.py:60`、`mmd2max/semantic.py:510`），第三方库为零。`启动GUI.bat`
+  （`tools/diff_round.py` 的 `normalize` 推导式、`mmd2max/semantic.py` 的手指目标匹配 —— 只点名
+  不写行号，这两处一直在动，写过一次行号就再没人对上），第三方库为零。`启动GUI.bat`
   按 `py -3` → `python` → 开发机私有路径 的顺序探，每个候选先验 `version_info >= (3, 8)`
   再执行 —— 顺序不能反，Windows 的 `python` 可能是应用商店的占位别名，跑它会弹商店而不是报错；
-  三个都不行时打印安装提示并 `pause`，不让窗口一闪而过。本机实测走的是第三条（这台机
-  `py` / `python` 都不在 PATH），双击后 GUI 正常起窗。
+  三个都不行时打印安装提示并 `pause`，不让窗口一闪而过。**本机实测（第 99 轮复核，改掉了此前
+  那句「这台机 `py` / `python` 都不在 PATH」）**：`where py` → `%LOCALAPPDATA%\Programs\Python\Launcher\py.exe`、
+  `where python` → `…\Python312\python.exe`，两条都在 PATH 上，所以双击走的是**第一条**（`py -3`，
+  实测 `py -3 -V` = 3.12.10）。这一句值得单独改：那条旧说法会让人以为三级探测的后两级在本机
+  被验证过 —— 实际验证过的只有第一条，后两级是给「没装 py 启动器」的机器留的通路。
 - **3ds Max 装在哪**：`tools/obj_run.py:find_max_exe()` 按 环境变量 `MMD2MAX_MAX_EXE` →
   注册表 `HKLM/HKCU\SOFTWARE\Autodesk\3dsMax\<内部版本>\Installdir`（24.0 = 2022，年份 = 主版本 + 1998）
   → 各盘 `Program Files` / `Program Files (x86)` / `Programs` / `Software` 下的 `Autodesk\3ds Max *`
@@ -390,8 +408,10 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
 
 ## 8. 测试版打包：`git archive` + 一次独立导出自检
 
-一条命令，产物 **64 个文件** = `mmd2max/` 13 + `probes/` 36 + `scripts/` 2 + `tools/` 14 + 两份
-README + `启动GUI.bat` + `.gitignore`（第七十六轮实测约 0.6MB；字节数随文档增删会变，别拿它当校验，**文件数才是口径**）：
+一条命令（**包内容 = HEAD 内容**，口径现取，别抄数：`git ls-files | awk -F/ 'NF>1{print $1"/"}NF==1{print "(root)"}' | sort | uniq -c`
+—— 第 99 轮复核时它是 `mmd2max/` 11 + `probes/` 35 + `scripts/` 1 + `tools/` 13 + 根 4 件 = **64 个文件**。
+这一行原先写的是 13/36/2/14 + 4 = 69，自己就和它标称的「64」对不上；字节数与文件数都只当轮读数，
+真正不变的那条口径在下面第一个分点里（HEAD == 跑起来需要的东西）：
 
 ```
 git archive --format=zip -o ../mmd2max_v4_test_<日期>.zip HEAD
@@ -399,7 +419,7 @@ git archive --format=zip -o ../mmd2max_v4_test_<日期>.zip HEAD
 
 - **为什么不用手工挑文件**：`.gitignore` 已经把 `tests/ test_runs/ baselines/ outputs/` 全排除在外，
   所以「HEAD 里有什么」== 「跑起来需要什么」。手工挑会漏，漏了的那份要到别人机器上才红。
-- **`probes/` 留在包里**：它不参与运行，但 `export_obj.py:649`、`targets.py:53`、`verdicts.py:877`、
+- **`probes/` 留在包里**：它不参与运行，但 `export_obj.py:649`、`targets.py:53`、`verdicts.py:961`、
   `check_ms.py:38` 这些**注释里的证据**全指向它。删掉它，「这条数是谁量的」就变成死链 —— 而本项目
   最贵的错误全是「拿注释当证据」。
 - **自检必须是「解压出来的那份代码」跑的，不是项目里这份**：解到临时目录 → 用它
