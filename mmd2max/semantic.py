@@ -66,10 +66,8 @@ FINGER_DEFS = [
 FINGER_ALIASES = {"INDEX": ("人差指",)}  # 食指的常见异名
 
 SIDE_JP = {"L": "左", "R": "右"}
-SIDE_ALIASES = {
-    "L": ("L", "Left", "left", "LEFT", "左", "l"),
-    "R": ("R", "Right", "right", "RIGHT", "右", "r"),
-}
+# 左右只由语义 ID 的后缀（_L/_R）决定，PMX 侧的名字一律走 DEFINITIONS 的 ja/aliases；
+# 没有第二份「Left/left/l」别名表 —— 那种表只会被写进配置产物，匹配代码从不读它。
 
 # ---------------------------------------------------------------------------
 # Biped 侧定义：模式化，节数可变
@@ -219,6 +217,8 @@ def biped_name(semantic_id: str) -> str:
 # 把「Biped 目标节点名」与「角色」注入每个语义定义，使 JSON 配置成为唯一事实来源：
 #   - biped: 该语义骨在 Biped 中的目标节点名（空串=不参与 Biped 映射，作为附属 Bone）
 #   - role : skeleton=参与变形骨架 / control=控制骨(丢弃, 权重上提) / morph=表情驱动骨(丢弃)
+# 这段留在模块顶层而没折进 build_definitions()：biped_name() 的「配置优先」分支要读
+# DEFINITIONS 这个全局名，而 build_definitions() 正是在给它赋值 —— 挪进去就是自指。
 for _sid, _info in DEFINITIONS.items():
     _info["biped"] = biped_name(_sid)
     _info.setdefault("role", "skeleton")
@@ -242,25 +242,15 @@ def required_ids() -> list:
 
 
 def _load_json_pmx_names(include_extended: bool = False) -> set | None:
-    """运行时读取 configs/pmx_definition.json；不存在或损坏则返回 None。"""
-    path = CONFIG_DIR / "pmx_definition.json"
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    bones = data.get("bones")
-    if not isinstance(bones, dict):
+    """configs/pmx_definition.json 里的 PMX 名集合（含别名）；没有配置文件则返回 None。"""
+    bones = _config_bones()
+    if bones is None:
         return None
     names: set = set()
     for info in bones.values():
-        cat = info.get("cat", "optional")
-        if cat == "extended" and not include_extended:
+        if info["cat"] == "extended" and not include_extended:
             continue
-        ja = info.get("ja")
-        if ja:
-            names.add(ja)
+        names.add(info["ja"])
         for alias in info.get("aliases", []):
             names.add(alias)
     return names or None
@@ -285,22 +275,54 @@ def standard_pmx_names(include_extended: bool = False) -> set:
     return names
 
 
-def load_config_definitions() -> dict:
-    """加载骨骼语义定义：优先 configs/pmx_definition.json，缺失/损坏则回退到内置 DEFINITIONS。
+class ConfigUnusable(ValueError):
+    """`configs/pmx_definition.json` 在，但读不出一份能用的定义。
 
-    这样「映射配置」是单一事实来源——用户编辑 JSON 的 ja/aliases/cat/role/biped
-    字段即可改变骨骼分类与 Biped 映射，无需改代码。内置 DEFINITIONS 由 export_configs()
-    写回该 JSON，二者始终一致。
+    区别在「在」这两个字：缺文件是可以回落的状态（`export_configs()` 随时能重写，
+    内置 DEFINITIONS 就是它的来源）；文件在而读不出，回落到内置就等于**把用户改过的
+    那张映射表当成不存在** —— 程序照常跑、数字照常报，谁都看不出自己那一条改动没生效。
+    """
+
+
+def _config_bones() -> dict | None:
+    """读配置文件里的 bones 表；文件不存在返回 None，读不出可用的表则抛。
+
+    三个解析器曾经各写一遍「except: 回落」，所以修一处会漏两处（第 46 条审的就是这种
+    分叉），这里收成唯一入口。校验只认「能不能拿这张表干活」：`ja` 是匹配用的名字、
+    `cat` 是分类，缺任一条的那一行在进入映射时会整条被丢，映射表于是静默变短。
     """
     path = CONFIG_DIR / "pmx_definition.json"
     if not path.is_file():
-        return DEFINITIONS
+        return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return DEFINITIONS
-    bones = data.get("bones")
-    if not isinstance(bones, dict):
+    except Exception as exc:
+        raise ConfigUnusable(
+            f"{path} 解析失败（{exc.__class__.__name__}: {exc}）。删掉它可以改用内置定义；"
+            "留着它，你在这份文件里改的映射一条都不会生效。") from exc
+    bones = data.get("bones") if isinstance(data, dict) else None
+    if not isinstance(bones, dict) or not bones:
+        raise ConfigUnusable(
+            f"{path} 里没有非空的 bones 表（顶层类型 {type(data).__name__}）："
+            "这份配置不会改变任何映射，但它会被当成「配置已生效」。")
+    broken = [sid for sid, info in bones.items()
+              if not isinstance(info, dict) or not info.get("ja") or not info.get("cat")]
+    if broken:
+        raise ConfigUnusable(
+            f"{path} 有 {len(broken)} 条骨骼缺 ja 或 cat（前几个：{', '.join(str(s) for s in broken[:3])}）："
+            "这些条目在匹配时会被整条丢掉，骨骼分类与 Biped 映射会静默变短。")
+    return bones
+
+
+def load_config_definitions() -> dict:
+    """加载骨骼语义定义：有配置文件就用它，没有则用内置 DEFINITIONS。
+
+    这样「映射配置」是单一事实来源——用户编辑 JSON 的 ja/aliases/cat/role/biped
+    字段即可改变骨骼分类与 Biped 映射，无需改代码。内置 DEFINITIONS 由 export_configs()
+    写回该 JSON，二者始终一致。文件在但读不出可用定义时抛 `ConfigUnusable`，不静默回落。
+    """
+    bones = _config_bones()
+    if bones is None:
         return DEFINITIONS
     result: dict = {}
     for sid, info in bones.items():
@@ -793,7 +815,6 @@ def export_configs(directory: Path | None = None) -> dict:
         "center_nodes": BIPED_CENTER,
         "sided_patterns": BIPED_SIDED,
         "finger_index": BIPED_FINGERS,
-        "side_aliases": SIDE_ALIASES,
         "variable_links": [
             "Spine Links", "Neck Links", "Leg Links", "Fingers",
             "Finger Links", "Toes", "Toe Links", "Tail Links",

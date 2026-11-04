@@ -103,7 +103,6 @@ mmd2max_v4_src_2026-11-03/
 │   ├── diff_round.py     # ★ 两轮日志归一对比（判「重构有没有动几何」就靠它，别手搓 sed）
 │   ├── uia_dialog.py     # UIA 读写启动弹窗：按**确切按钮名** Invoke（Qt 弹窗没有子 HWND，坐标法点不准）
 │   ├── check_ms.py       # MAXScript 静态体检（保留字/括号/字符串/if-do-else/localTime/续行）
-│   ├── make_ascii_copy.py# 中文名导出件 → ASCII 副本
 │   └── desktop.py        # 窗口枚举/截图/剪贴板（ctypes，非必需）
 ├── tests/                # unittest + fixtures/sample_model（合成 PMX 由 make_sample.py 生成）
 ├── baselines/            # 各轮冻结件（日志 / CFG / 判据三张表），回归锁只指这里，不指 test_runs/
@@ -1089,6 +1088,44 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       `父scale=` 这一栏正是它把「残余是 pivot 落位、不是 scale」这件事读出来的 —— `scale.x` 与
       limbs 目标逐字相等，所以别再把这 0.0562 记在缩放头上。套件 627 条 OK（skip 2），
       `check_ms.py` 仍 66 条非阻塞结构债。
+
+37. **#56 收尾：坏配置必须中止 + 删两份「写了没人读」的东西（2026-11-04 15:10~15:23
+    第六十一轮，香菱 `--shot`，退出码 0，`.max` 落盘，无弹窗：529 PASS / 0 FAIL / 22 SKIP）**
+    - **改的是回落方向，不是回落与否**：`mmd2max/semantic.py` 里 `load_config_definitions()`
+      与 `_load_json_pmx_names()` 各自写过一遍 `except: 用内置 DEFINITIONS`（同一个文件的
+      两个解析器、两份 except —— 修一处必漏另一处）。现在收成唯一入口 `_config_bones()`
+      （`:287`）+ `class ConfigUnusable(ValueError)`（`:278`），分界线画在「文件在不在」：
+      **缺文件仍回落到内置**（`export_configs()` 随时能重写，内置就是它的来源，这是正常状态），
+      **文件在而读不出则抛** —— 截断的 JSON、顶层不是对象、没有非空 `bones`、条目缺 `ja`
+      或 `cat`，四种都不许静默当成「没配置」。理由只有一句：用户改过的那张映射表被无声忽略时，
+      程序照常跑、数字照常报，看不出自己那一条改动没生效。报错文本带文件名 + 坏条目数 +
+      前几个 ID，且明说「删掉它可以改用内置定义」，给的是出路不是栈。
+    - **两个消费者都要红，不是只修一个**：`test_valid_file_is_honoured` 同时断言
+      `load_config_definitions` 与 `standard_pmx_names` 读的是配置里的名字（`:142`），
+      `test_unparseable_file_aborts_instead_of_reverting` 对两个入口都跑一遍（`:153`）。
+      变异验证 `test_runs/mutate80.py` 五支全 RED：坏条目不数 / 空 `bones` 不算坏 /
+      只查 `ja` 不查 `cat` / 整张配置当不存在 / `except` 里 `return None`（旧行为），
+      还原后基线 GREEN。
+    - **新加的一条是给自己用的**：`test_shipped_configs_are_byte_identical_to_export_configs`
+      （`:184`）要求打包的三份 JSON 与 `export_configs()` 现写出来的**逐字节相同** ——
+      「配置是唯一事实来源」只对了一半，它同时是代码生成的产物，两边分叉 either 是手改打包件
+      （下次 export 无声覆盖）either 是改了代码没重写产物（用户对着旧表）。
+      **这条当场抓到自己的活**：删掉 `SIDE_ALIASES` 之后它立刻红（`mmd2max/configs/biped_definition.json`
+      里还留着那 18 行），跑一次 `python -m mmd2max.semantic` 重写产物才绿。
+    - **删掉的两件「写了没人读」**：① `SIDE_ALIASES`（`"L": ("L","Left","left","LEFT","左","l")`）
+      —— 只被 `export_configs` 写进 `biped_definition.json`，匹配代码从不读它；左右一律由语义
+      ID 后缀 `_L/_R` 决定，PMX 名字走 `ja`/`aliases`。留着一份「看着可编辑、编辑了不生效」的表
+      比没有更坏。② `tools/make_ascii_copy.py`（中文名导出件 → ASCII 副本）—— 无人调用，
+      且 `TEX_MAP` 硬编码了香菱的贴图名（`體.png → tex00.png`），换一具模型就失效；
+      现在两具模型的中文名全流程都是绿的，这条 GBK 规避路已经不需要了。原件在
+      `9da0ad0` 的历史里，需要时按名取回。
+    - **`for _sid, _info in DEFINITIONS.items()` 那段 import 期写字段（`:219~226`）留在原处**，
+      并注明为什么不能折进 `build_definitions()`：`biped_name()` 的「配置优先」分支要读
+      `DEFINITIONS` 这个全局名，而那一刻正在给它赋值 —— 挪进去就是自指（第一次调用直接 NameError）。
+      这是本轮唯一一条「审到但决定不改」的，别记成漏了。
+    - **中性是量出来的不是推出来的**：`tools/check_baseline.py 香菱` ⇒ 六张 TSV **数字逐位不变**
+      （`bones 321 / limbs 39 / meta 41 / weights 18892 / widths 12`），第 61 轮与冻结的
+      第 56 轮 `tools/diff_round.py` 归一后 502 行**无实质差异**。套件 627 → **634** 条 OK（skip 2）。
 
 **下一轮（换模型 / 继续验收）判读几件事**：
 1. 换任何新模型先跑 `tools/run_model.py <pmx>`，看 `limbs.tsv` 脚段第 17/18 列：**高必须 ≤ 段长**（`min(down/0.848, seg)`），且 L/R 差 ≤0.05cm；若宽 > 鞋网格 AABB 的横向跨度，就是第 20 条④ 那道「只许盒内网格投票」的闸被绕开了。

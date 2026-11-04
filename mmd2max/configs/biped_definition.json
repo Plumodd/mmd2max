@@ -32,24 +32,6 @@
     "RING": "3",
     "PINKY": "4"
   },
-  "side_aliases": {
-    "L": [
-      "L",
-      "Left",
-      "left",
-      "LEFT",
-      "左",
-      "l"
-    ],
-    "R": [
-      "R",
-      "Right",
-      "right",
-      "RIGHT",
-      "右",
-      "r"
-    ]
-  },
   "variable_links": [
     "Spine Links",
     "Neck Links",
