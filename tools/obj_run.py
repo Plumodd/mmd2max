@@ -249,7 +249,7 @@ CFG_KEYS = (
     # `global MMD2MAX_DIRTOL = 3.0` 搬到这里：写的一方必须是有测试的一方。
     *TARGET_CFG_KEYS,
     "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
-    "MMD2MAX_INTERACTIVE", "MMD2MAX_QUIET",
+    "MMD2MAX_INTERACTIVE",
 )
 
 # 允许是空串（= 该阶段整段跳过）的键；其余键为空一律在本函数里就拦掉。
@@ -293,7 +293,7 @@ def read_meta(base: Path, stem: str) -> dict:
 
 def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
               suffix: str | None = None, shot: bool = False,
-              physics: bool = False) -> tuple[dict, Path]:
+              physics: bool = False, interactive: bool = False) -> tuple[dict, Path]:
     """装配用的**全部**输入与开关，集中成一个 key→value 表，落到 <目录>/MMD2MAX.CFG。
 
     v3 的做法是在生成的 .ms 头部逐行注入 22 个 global。那带来一个查不出来的分裂：
@@ -329,8 +329,12 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_SKIN": "true" if skin else "false",
         "MMD2MAX_SHOT": "true" if shot else "false",
         "MMD2MAX_SHOTDIR": str(base / "shots"),
-        "MMD2MAX_INTERACTIVE": "false",
-        "MMD2MAX_QUIET": "true",
+        # 交互位 = 「这一轮有人盯着屏幕」。只有 --manual / --gen-only 会打开它：自动跑
+        # 点不掉弹窗，所以那边必须是 false（跑完自己 quitMax、重置场景不问人）。以前这个键
+        # 恒为 false，于是 .ms 里「保留现场给人看 / 重置前问一句」的分支一次也没跑到过，
+        # 而 --manual 的提示语写着「请手动在 Max 中查看」——脚本其实一跑完就把 Max 关了，
+        # 话是假的。（另一半短路 MMD2MAX_QUIET 恒为 true，已在本轮一并删掉。）
+        "MMD2MAX_INTERACTIVE": "true" if interactive else "false",
     }
     # 目标值（容差/开关）只有一个来源：mmd2max.targets。以前它们是 .ms 里的 `global X = 3.0`，
     # Python 侧看不见这些判据，也就没法校验（M2 的 verdicts 表要用的正是这几个数）。
@@ -430,11 +434,12 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
 
 def build_script(base: Path, stem: str, vertex_count: int,
                  skin: bool = True, suffix: str | None = None,
-                 shot: bool = False, physics: bool = True) -> str:
+                 shot: bool = False, physics: bool = True,
+                 interactive: bool = False) -> str:
     """生成 `mmd2max_run.ms`：只注入 CFG 路径，模板原样跟在后面。"""
     template = TEMPLATE.read_text(encoding="utf-8")
     cfg, cfg_path = build_cfg(base, stem, vertex_count, skin=skin, suffix=suffix,
-                              shot=shot, physics=physics)
+                              shot=shot, physics=physics, interactive=interactive)
     cfg_path.write_text(cfg_text(cfg), encoding="utf-8")
     # 规格表紧跟 CFG 落盘，路径取自 CFG 自己：两边指向不同文件的话，Max 读的那张表
     # 就不是 Python 用来判的那张，拼表时全靠运气。
@@ -711,6 +716,12 @@ def main() -> int:
     # --gen-only：只生成装配脚本并写出，绝不启动/轮询/杀 Max。用于「用户自己手动
     # 在 Max 里 File▸Run Script」的工作流——助手只交付脚本路径，不做任何进程操作。
     gen_only = "--gen-only" in sys.argv
+    # 交互位：这一轮**有人坐在屏幕前**，所以脚本可以问、也绝不自己退出。
+    # 上面两个 flag 都算：--manual 是「跑完给人看现场」，--gen-only 更硬 —— 脚本要
+    # 在用户自己那个 Max 里跑，而 mmd2maxPrepareScene 的第一刀就是 `resetMaxFile #noPrompt`，
+    # 非交互写法会把他没存的场景清干净且一声不吭。自动跑（两个 flag 都没有）必须保持
+    # false：点弹窗的是 UIA 那几条白名单名字，任何额外模态框都会把 -U MAXScript 挡死。
+    interactive = manual or gen_only
     log(f"skin={skin} physics={physics} shot={shot} manual={manual} gen_only={gen_only}")
 
     weights = base / f"{stem}_weights.tsv"
@@ -722,7 +733,8 @@ def main() -> int:
     log(f"权重文件 {weights} 顶点数 {vertex_count}")
 
     script_text = build_script(base, stem, vertex_count,
-                               skin=skin, suffix=suffix, shot=shot, physics=physics)
+                               skin=skin, suffix=suffix, shot=shot, physics=physics,
+                               interactive=interactive)
     name_part = stem if suffix is None else f"{stem}_{suffix}"
     # 用固定 ASCII 文件名：中文 .ms 路径经 -U MAXScript 启动时容易被按
     # 本地代码页(GBK)误解析，导致 "auto-load script error / line 1" 失败。
@@ -753,6 +765,8 @@ def main() -> int:
         log(f"已生成脚本（gen-only，不启动 Max）：{out_script}")
         log("请在 3ds Max 菜单 File ▸ Run Script 载入该脚本，或在 MAXScript 监听器执行：")
         log(f'  fileIn @"{out_script}"')
+        log("这一份按交互模式装好（MMD2MAX_INTERACTIVE=true）：场景里有东西会先问你要不要重置，"
+            "跑完也不会自己退出 Max。")
         return 0
 
     max_exe = find_max_exe()
@@ -779,6 +793,7 @@ def main() -> int:
         log(f"Max 现已独立运行，脚本保留于：{out_script}")
         log("请手动在 Max 中查看 / 截图 / 调试；如需重跑脚本，可在 MAXScript 监听器执行：")
         log(f'  fileIn @"{out_script}"')
+        log("交互模式（MMD2MAX_INTERACTIVE=true）：跑完不会自己 quitMax，Max 带着场景留着给你看。")
         return 0
 
     marker = base / f"{name_part}.success.json"

@@ -15,7 +15,7 @@
    tools/obj_run.py 写出的 MMD2MAX.CFG。文件里每一项（OBJ/BONES/WEIGHTS/VERTS/
    OUTPUT/MAP/MARKER/LOG/MORPHS/PHYSICS/LIMBS/WIDTHS/SPINE_LINKS/FINGERS/
    FINGER_LINKS/FOOTBOXFLAT/DIRTOL/ROLLTOL/TOETOL/GAPTOL/FOOTREACH/
-   SKIN/SHOT/SHOTDIR/QUIET/INTERACTIVE）都由 mmd2maxLoadCfg
+   SKIN/SHOT/SHOTDIR/INTERACTIVE）都由 mmd2maxLoadCfg
    读进来，缺文件、缺键、值不合法一律抛错中止，绝不退回默认值。
    MORPHS/PHYSICS/WIDTHS/SHOTDIR 允许是空串 = 该阶段整段跳过；LIMBS 及其余路径
    为空一律抛错（见 mmd2maxLoadCfg 的空路径校验，名单与 obj_run.py 的 CFG_EMPTY_OK 一致）。
@@ -59,7 +59,6 @@ global MMD2MAX_FOOTBOXFLAT
 global MMD2MAX_CONVERGE_MAX
 global MMD2MAX_SKIN
 global MMD2MAX_SHOT
-global MMD2MAX_QUIET
 global MMD2MAX_INTERACTIVE
 /* 装配目标值（M2 起由 mmd2max/targets.py 的 TARGETS 写进 CFG，这里只声明、不给默认值）。
    声明必须排在任何读取者之前：以前这几个数就写在声明行末尾，于是「这份脚本自己带着判据」，
@@ -80,11 +79,13 @@ global MMD2MAX_RBTRIG
    （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
 global MMD2MAX_CFGSUMMARY
 
-/* 下面四个开关：值一定来自 CFG（mmd2maxLoadCfg 已验过是 bool），所以这里**不再**
+/* 交互开关：值一定来自 CFG（mmd2maxLoadCfg 已验过是 bool），所以这里**不再**
    写 try/catch + 默认值。以前那种写法把「配置没读到」和「配置是 false」压成同一个
-   结果 —— 蒙皮被跳过、截图没抓，日志却一句错都没有。 */
-fn mmd2maxIsQuiet = MMD2MAX_QUIET
-
+   结果 —— 蒙皮被跳过、截图没抓，日志却一句错都没有。
+   MMD2MAX_QUIET 已在 #56 删掉：obj_run 恒写 true，于是它唯一的用处是把
+   mmd2maxPrepareScene 里的「要重置你的场景，问一声」永久短路 —— 一个只能为 true
+   的开关不是开关，是死代码，而且它挡住的正是「--gen-only 在用户自己的 Max 里
+   一句不问就 resetMaxFile，把没存的活儿清空」这条真事故路径。 */
 fn mmd2maxIsInteractive = MMD2MAX_INTERACTIVE
 
 /* 最外层错误处理器专用的交互判定，返回值一定是 bool。为什么不能直接用上面那个：
@@ -625,7 +626,11 @@ fn mmd2maxScreenshot =
 fn mmd2maxPrepareScene =
 (
     local doReset = true
-    if (not (mmd2maxIsQuiet())) and (mmd2maxIsInteractive()) and objects.count > 0 do
+    /* 只在「这一轮有人盯着屏幕」时问：自动跑（obj_run 默认）点不掉 queryBox，
+       弹窗会把整轮挂在无人值守的 Max 上 —— 所以 MMD2MAX_INTERACTIVE 必须是 false。
+       反过来 --manual / --gen-only 是人在场，场景里可能正存着用户自己的活儿，
+       resetMaxFile 不问一句就是把它清空。 */
+    if (mmd2maxIsInteractive()) and objects.count > 0 do
     (
         doReset = queryBox "脚本需要重置场景才能导入模型，是否继续？" title:"mmd2max"
     )
@@ -907,7 +912,6 @@ fn mmd2maxLoadCfg =
     MMD2MAX_RBTRIG = mmd2maxCfgNum "MMD2MAX_RBTRIG" 0.0 50.0
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
-    MMD2MAX_QUIET = mmd2maxCfgBool "MMD2MAX_QUIET"
     MMD2MAX_INTERACTIVE = mmd2maxCfgBool "MMD2MAX_INTERACTIVE"
     /* 分步拼接，不用行首 `+` 的跨行表达式：MAXScript 会把这种续行当成新语句。 */
     local cfgMsg = "配置来自 " + (path as string)
@@ -6026,12 +6030,14 @@ fn mmd2maxMain =
     if meshes.count > 0 do meshObj = meshes[1]
     if meshObj != undefined do
     (
-        local morphFile = ""
-        try ( morphFile = (MMD2MAX_MORPHS as string) ) catch ( morphFile = "" )
+        /* 直接读键，不再 try/catch 兜空串（#56）：MMD2MAX_MORPHS 是 CFG_KEYS 里的键，
+           mmd2maxLoadCfg 缺键即抛，所以「读不到」根本到不了这里；而 catch 会把
+           「配置丢了」压成「这一轮没有表情」——蒙皮照常、morph 静默不建、日志全绿。
+           空串仍然是合法值（= 这一轮不做表情），判据留在 if 上。 */
+        local morphFile = MMD2MAX_MORPHS as string
         if morphFile != "" do mmd2maxBuildMorpher meshObj morphFile
     )
-    local physFile = ""
-    try ( physFile = (MMD2MAX_PHYSICS as string) ) catch ( physFile = "" )
+    local physFile = MMD2MAX_PHYSICS as string
     if physFile != "" do
     (
         mmd2maxBuildPhysics boneNodes physFile

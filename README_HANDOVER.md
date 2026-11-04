@@ -156,13 +156,13 @@ Max 侧统一用 `mmd2maxReadTable` 读回来，取数一律 `mmd2maxColPos tbl 
 
 ## 4b. 配置单源：`MMD2MAX.CFG`（M1b + M2a + M2b + M3）
 
-生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 29 个输入与开关
+生成的 `mmd2max_run.ms` 只注入**一行**`global MMD2MAX_CFG = "<cfg 路径>"`，其余 30 个输入与开关
 全部从 `test_runs/<模型名>/MMD2MAX.CFG` 读（同样是线格式 v2：第 1 行 `key<TAB>value`）。
 键名 = MAXScript 全局名，两边同一套词，没有任何映射表可写错：
 
 `MMD2MAX_OBJ / BONES / WEIGHTS / MAP / LIMBS / WIDTHS / MORPHS / PHYSICS / OUTPUT / MARKER / LOG /
-VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTDIR / INTERACTIVE / QUIET`
-（以上 M1b）+ `DIRTOL / ROLLTOL / TOETOL / GAPTOL / FOOTREACH`（以上 M2a，见 `mmd2max/targets.py`）
+VERTS / SPINE_LINKS / FINGERS / FINGER_LINKS / FOOTBOXFLAT / SKIN / SHOT / SHOTDIR / INTERACTIVE`
+（以上 M1b；`QUIET` 已在 #56 删除 —— obj_run 恒写 true，它唯一的用处是把「重置场景前问一句」短路）+ `DIRTOL / ROLLTOL / TOETOL / GAPTOL / FOOTREACH`（以上 M2a，见 `mmd2max/targets.py`）
 + `VERDICTS / REPORT`（以上 M2b：两张判据表的路径，见 `mmd2max/verdicts.py`）
 + `CONVERGE_MAX`（以上 M3：收敛循环上限，唯一来源是 `passes.max_iters("converge")`，`.ms` 里那圈 `for`
   读它而不是写死 3 —— 循环次数与注册表分叉时 `audit_gate` 会直接报「超过注册表声明的上限」）
