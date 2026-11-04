@@ -5318,6 +5318,10 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             smsg = smsg + " 目标=" + (item[3] as string)
             smsg = smsg + " 实际=" + (got as string)
             smsg = smsg + " 误差=" + (err as string)
+            /* 带上父骨此刻的 #scale：`肢段 …  缩放后=` 是拟合那一刻的读数，这一行是最终
+               读数。两者不一致时，这列数是唯一能分开「有人后来改了 scale」与「pivot 被
+               别的骨带着走」（scale 没变但间距变了）的证据 —— 没有它只能猜。 */
+            smsg = smsg + " 父scale=" + ((mmd2maxBipedScale pnode) as string)
             mmd2maxLog smsg
             /* 报「实际量到的长度」而不是「我自己算的误差」：期望值由 Python 从 limbs
                的坐标列算（骨盆三段按髋中点，其余就是 desired_len），连 Max 这一侧
@@ -5934,7 +5938,11 @@ fn mmd2maxApplySkin meshes boneNodes =
                         hadPairs = true
                         local g = (pair[1] as integer)   -- 0-based 全局骨骼序号
                         local w = pair[2] as float
-                        if g >= 0 and g < boneNodes.count and globalToSkin[g + 1] > 0 do
+                        /* 权重正好 0.0 的不写：实测（海灯节 332 条）ReplaceVertexWeights
+                           收到 0.0 会把这条链路整条丢掉、回读连骨号都不留，写了等于没写，
+                           还会让写入侧的 蒙皮覆盖 计数虚高。导出侧已挡，这里再挡一层，
+                           两侧都不假设对方挡住了。 */
+                        if w > 0.0 and g >= 0 and g < boneNodes.count and globalToSkin[g + 1] > 0 do
                         (
                             local sid = globalToSkin[g + 1]
                             append ids sid
@@ -6195,6 +6203,7 @@ fn mmd2maxVerifySkin meshes boneNodes =
     local indexSeqBad = 0
     local pairsDropped = 0
     local linksExpected = 0
+    local zeroLinks = 0
     local vertsNoExp = 0
     for i = 1 to wlines.count do
     (
@@ -6217,12 +6226,23 @@ fn mmd2maxVerifySkin meshes boneNodes =
                     local w = pair[2] as float
                     if g >= 0 and g < boneNodes.count and globalToSkin[g + 1] > 0 then
                     (
-                        local sid = globalToSkin[g + 1]
-                        append ids sid
-                        append ws w
-                        wsum += w
-                        expLinks[sid] = expLinks[sid] + 1
-                        linksExpected += 1
+                        /* 权重正好 0.0 的对不进期望（与写入侧 mmd2maxApplySkin 同一条规则）：
+                           Max 的 Skin 不持有这种链路，把它算进期望就等于要场景里去挂一条
+                           挂不住的边 —— 海灯节就是这样的 332 条把 links_missing /
+                           link_diff_max / link_mismatch_bones / links_read 四行一起拖红的。
+                           单独计 zeroLinks 并报成 `zero_links`：这把尺盯着「权重表里又出现
+                           了 Max 存不下的对」（陈旧文件/手改表），不然那种事只会伪装成
+                           一次看不懂的链路缺失。 */
+                        if w > 0.0 then
+                        (
+                            local sid = globalToSkin[g + 1]
+                            append ids sid
+                            append ws w
+                            wsum += w
+                            expLinks[sid] = expLinks[sid] + 1
+                            linksExpected += 1
+                        )
+                        else zeroLinks += 1
                     )
                     else pairsDropped += 1
                 )
@@ -6286,6 +6306,7 @@ fn mmd2maxVerifySkin meshes boneNodes =
     mmd2maxReport "skin_rb" "unmodified_verts" "-" scan[3]
     mmd2maxReport "skin_rb" "index_seq_bad" "-" indexSeqBad
     mmd2maxReport "skin_rb" "pairs_dropped" "-" pairsDropped
+    mmd2maxReport "skin_rb" "zero_links" "-" zeroLinks
     mmd2maxReport "skin_rb" "verts_no_exp" "-" vertsNoExp
     mmd2maxReport "skin_rb" "links_expected" "-" linksExpected
     mmd2maxReport "skin_rb" "links_read" "-" scan[7]

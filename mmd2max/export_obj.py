@@ -211,7 +211,15 @@ def _worker_weights(payload):
     start, deform = payload
     out = []
     for weights in deform:
-        parts = [f"{bone}:{weight:.6f}" for bone, weight in weights if weight > 0.0]
+        parts = []
+        for bone, weight in weights:
+            text = f"{weight:.6f}"
+            # 「印出来是 0.000000」的权重不写成链路：Max 的 Skin 收到权重 0.0 会把这条
+            # 链路整条丢掉（海灯节实测：332 条 PMX 权重 <5e-7 的链路写进去、回读不到骨号），
+            # 于是 `skin_rb/links_missing` 为这些**本来就没有形变影响**的数变红。
+            # 现在权重表 = 「Max 能持有的链路集合」，两边同基，缺一条就是真缺一条。
+            if weight > 0.0 and text != "0.000000":
+                parts.append(f"{bone}:{text}")
         out.append("\t".join(parts))
     return start, out
 

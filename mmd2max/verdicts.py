@@ -49,6 +49,11 @@ v3 的验收长成这样：Max 侧自己数 `成功=39 失败=0`、自己判断�
 换一具 80 厘米的角色它必然超差 —— 那不是缺陷，是换了模型。所以每个锁都先问
 `model == PRICED_MODEL`：不是那一具就退化成 `report`（仍然要求这一行出现，只是不卡
 数字），等谁真跑了那具模型再把它定价。
+
+第二具模型上「按设计够不着」的读数走另一条路：`SEGMENT_LOCKS` 按模型名分键，命中的
+那一行从 `gate` 换成 `lock`（尺从输入表的目标值换成已定价的读数），没命中的模型**照旧
+走 gate** —— 段长的尺本来就每具模型都能从 limbs.tsv 数出来，退化成 report 等于放弃
+验收，而它并不需要放弃：要钉住的只有那一段。
 """
 from __future__ import annotations
 
@@ -166,6 +171,34 @@ PLACEMENT_RAY_TOL_CM = 0.01
 # 比 Max 的 pivot 回读噪声（~4e-06）大三个数量级，比人眼能看出的错位（~0.3cm）小。
 SEGMENT_TOL_CM = 0.05
 
+# 肢段长度：换到第二具模型上**实测到够不着**的那一段，按模型定价钉住（#76-B）。
+# 键 = 模型名，值 = {段主体: (定价读数, 容差)}。没被定价的模型/段仍走 gate，
+# 因为拿香菱的数字去判别的模型 = 一条永远过不去的闸。
+#
+# 香菱-海灯节 `Bip001 Spine1 -> Bip001 Neck` = 17.9546（PMX 是 17.898357，差 0.0562，
+# 比 gate 的 0.05 多出 0.0062 —— 就是这一条把那一轮判成唯一的 1 个 FAIL）。
+# 来历：读数在 baselines/round57_haideng_zerolinks.log（`实报=17.9546`）和
+# baselines/round59_香菱-海灯节_objrun.log（`实际=17.9546`）里各出现一次 —— 两轮的
+# DIR_TOL 不同、代码不同，读数一样，所以这个数不是某一轮的偶发。链条每一环都是读数：
+#   ① round59:254 `结构向 Bip001 Spine 轴1 … 差倾=-0.899286 … 夹角=0.898964` —— 0.899 度低于
+#      DIR_TOL(3.0)，转角 pass 按设计不去试它（所以日志里连「转角不做」那行都没有）。
+#   ② 第 58 轮把 DIR_TOL 压到 0.2 去试（baselines/round58_香菱-海灯节_objrun.log）：
+#      `转角1:Bip001 Spine 夹角=0.899181->0.899181`（抛错=0，但读数纹丝不动），另外多出
+#      13 条「转了没改善」的收敛 FAIL —— 够不到目标不是门控太松，是 Biped 不吃这根骨的转角。
+#   ③ round59:255 `结构向 Bip001 Spine1 … pivot偏差=0.176007` —— 0.899 度 × 12.079cm 的弧。
+#   ④ Neck 自己落位是准的（round59:236 `校验 Bip001 Neck … 偏差=7.6296e-06`），所以
+#      Spine1→Neck 的世界长度就是 PMX 长度加上那 0.176 的弧在这段方向上的投影 = 17.9546
+#      （+0.0562）。同一条弧的另一半落在上一段：round59:232 `Spine -> Spine1 实际=12.0747`
+#      （短 0.0043），两个符号、一个来历。
+# 两头只能取其一：要让这段长度等于 PMX，就得把 Spine1 的 pivot 从「沿父骨轴 12.079」挪到
+# PMX 目标（即离开父骨轴 0.176）—— 那会连带弄坏 Spine1 自己的结构向（现在 夹角=0.0）和
+# Biped 沿脊柱的弯曲。定价的是这条世界长度：容差 0.001 比原来的 gate(0.05) 严 50 倍，
+# 钉的是「别漂」（同一段在 8 个轮次里都读 17.9546，漂过 1 个末位就该有人来看），
+# 不是「达标」。
+SEGMENT_LOCKS: dict[str, dict[str, tuple[float, float]]] = {
+    "香菱-海灯节": {"Bip001 Spine1 -> Bip001 Neck": (17.9546, 0.001)},
+}
+
 # 骨盆子段的量法：Biped 的 Pelvis pivot 只跟 COM 走，而骨盆闭环把 COM 抬到**两髋中点**
 # （不是 PMX 腰），所以 Pelvis→{L Thigh, R Thigh, Spine} 这三段能达到的长度是
 # 「子骨目标位到髋中点的距离」，不是 limbs 的 PMX 腰→子骨长度（腿根 9.03 / 脊柱 6.49）。
@@ -223,11 +256,18 @@ GAP_COVERED_TRUE = "true"
 # 存在 —— 写入侧的自述证明不了场景。现在 Max 从**场景**读回一份数，Python 从**输入文件**
 # 算出一份期望，两边来自不同进程，这才是验收。
 #
-# 两条规则必须与 .ms 逐字同语义，否则第一轮就会假 FAIL：
+# 三条规则必须与 .ms 逐字同语义，否则第一轮就会假 FAIL：
 #  1. 参与蒙皮的骨 = `skin_flag != "0"` 的行，Skin 里的骨号按表里的行序从 1 开始累加
 #     （mmd2maxApplySkin 的 globalToSkin）。
 #  2. 链路按**骨号出现次数**计，不按权重大小计（M4f C2：≲1e-8 的权重会被存成 0.0，
 #     骨号还在；按权重数就会少数链路）。
+#  3. 但权重**正好 0.0** 的对不计入期望：那条链路 Max 根本不持有（海灯节实测 332 条
+#     PMX 权重 <5e-7 的对，印成 `0.000000` 交给 Skin，回读连骨号都没有，于是
+#     `links_missing` / `link_diff_max` / `link_mismatch_bones` / `links_read` 四行为
+#     一批「对形变没有任何影响」的数变红）。规则 2 管的是「 tiny 但非零的权重还在骨号里」，
+#     规则 3 管的是「零权重的骨号压根不在场景里」—— 两条不冲突，量的是不同的东西。
+#     导出侧（export_obj._worker_weights）现在也不会再发这种对；`skin_rb/zero_links`
+#     就是专门盯着「权重表里又冒出这种对」的那把尺。
 LINK_SUBJECT_SUFFIXES = (" Toe0", " Foot")
 
 
@@ -235,6 +275,7 @@ class SkinExpectation(NamedTuple):
     """一次蒙皮的期望值，全部从输入文件算出，一个都不来自 Max。"""
 
     links_expected: int
+    zero_links: int
     verts_no_exp: int
     bones_skinned: int
     # 看得见的那几根（脚尖/足首）：(Max 里的节点名, 期望链路数)，按骨号顺序。
@@ -305,13 +346,21 @@ def skin_expectation(bones: list[dict[str, str]],
 
     counts = [0] * (skin_id + 1)
     links = 0
+    zero_links = 0
     verts_no_exp = 0
     for pairs in weights_rows:
         touched = 0
-        for bone, _weight in pairs:
+        for bone, weight in pairs:
             sid = global_to_skin.get(bone + 1)
             if sid is None:
                 continue          # 指向不蒙皮的骨/越界：由 pairs_dropped 那条 gate 兜
+            if weight <= 0.0:
+                # 权重 0.0 的链路 Max 存不下（写进去连骨号都不留，见 export_obj
+                # 的 _worker_weights 注释）：它不进期望链路，单独计一条 `zero_links`。
+                # 导出侧现在不会再发这种对，所以这一格读回非 0 就是「权重表里冒出了
+                # 一条 Max 持不住的链路」—— 陈旧文件或有人手改表，红得有名有姓。
+                zero_links += 1
+                continue
             counts[sid] += 1
             links += 1
             touched += 1
@@ -319,7 +368,8 @@ def skin_expectation(bones: list[dict[str, str]],
             verts_no_exp += 1
     by_bone = tuple((nm, counts[sid]) for sid, nm in enumerate(skinned, start=1)
                     if nm.endswith(LINK_SUBJECT_SUFFIXES))
-    return SkinExpectation(links_expected=links, verts_no_exp=verts_no_exp,
+    return SkinExpectation(links_expected=links, zero_links=zero_links,
+                           verts_no_exp=verts_no_exp,
                            bones_skinned=skin_id, links_by_bone=by_bone)
 
 
@@ -901,11 +951,20 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     # 侧解析目标值错一位、或骨盆闭环没按同一个锚点走，都会在这里露出来。
     # 指节按 if_present：导出侧写了 5×3 而 Biped 的指槽建不出那么多是可能的。
     anchor = hip_anchor(limbs)
+    priced_segments = SEGMENT_LOCKS.get(model, {})
     for limb in limbs:
         when = "if_present" if "Finger" in limb["child_target"] else "always"
-        rows.append(row("segment", "len_cm", pair(limb),
-                        segment_expectation(limb, anchor),
-                        SEGMENT_TOL_CM, "gate", when=when))
+        subject = pair(limb)
+        price = priced_segments.get(subject)
+        if price is None:
+            rows.append(row("segment", "len_cm", subject,
+                            segment_expectation(limb, anchor),
+                            SEGMENT_TOL_CM, "gate", when=when))
+        else:
+            # 这一段在这个模型上够不着 PMX 值（来历见 SEGMENT_LOCKS）：改成钉住读数，
+            # 行还在、还是必经，只是尺从「输入表的目标长度」换成「已定价的读数」。
+            rows.append(row("segment", "len_cm", subject, price[0], price[1],
+                            "lock", when=when))
 
     # ── 落位偏差：每个测到的节点一行 ─────────────────────────────
     # 19 个点是 .ms 里的字面量清单（契约测试对撞），按模型可能缺 Neck 之类 → if_present。
@@ -1023,10 +1082,12 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     #     unmodified_verts 的期望是 `verts_no_exp` 而不是 0 —— 权重表里本来就没有链路的
     #     顶点确实不该被写入，硬写 0 等于拿一条不成立的尺去判（#19 那类「永远过不去的
     #     gate」）。而一旦 Max 那边的 verts_no_exp 与这边不一致，这条就会跟着红。
-    #  ② 「解析有没有分叉」：index_seq_bad / pairs_dropped / verts_no_exp / links_expected。
-    #     这四条量的都是 Max 那份 weights.tsv 解析器 —— 期望 0（前两）或这边的计数（后两）。
-    #     权重指向 skin_flag=0 的骨会被丢掉（pairs_dropped），那是真缺陷：那一块网格从此
-    #     不会跟着动，所以它是 gate 而不是 report。
+    #  ② 「解析有没有分叉」：index_seq_bad / pairs_dropped / verts_no_exp / links_expected /
+    #     zero_links。这几条量的都是 Max 那份 weights.tsv 解析器 —— 期望 0（前两）或这边的
+    #     计数（后三）。权重指向 skin_flag=0 的骨会被丢掉（pairs_dropped），那是真缺陷：
+    #     那一块网格从此不会跟着动，所以它是 gate 而不是 report。
+    #     zero_links 期望同样是 0：导出侧已经把「印出来是 0.000000」的对挡在表外，
+    #     表里再出现这种对 = 有人拿旧文件或手改的文件喂 Max，那条链路 Max 一定不持有。
     #  ③ 「场景里的权重对不对」：zero_verts / dom_mismatch / weight_err_max / sum_err_max /
     #     links_read / links_missing / link_diff_max / link_mismatch_bones，外加脚尖与足首
     #     各一根骨的链路数（#35 的可见读数：Toe0 从 0 变 74、Foot 从 377 降到 363）。
@@ -1036,6 +1097,8 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                     skin_expect.verts_no_exp, 0, "gate", when=when))
     rows.append(row("skin_rb", "index_seq_bad", GLOBAL, 0, 0, "gate", when=when))
     rows.append(row("skin_rb", "pairs_dropped", GLOBAL, 0, 0, "gate", when=when))
+    rows.append(row("skin_rb", "zero_links", GLOBAL, skin_expect.zero_links, 0, "gate",
+                    when=when))
     rows.append(row("skin_rb", "verts_no_exp", GLOBAL,
                     skin_expect.verts_no_exp, 0, "gate", when=when))
     rows.append(row("skin_rb", "links_expected", GLOBAL,
