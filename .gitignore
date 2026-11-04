@@ -7,7 +7,8 @@
 test_runs/
 outputs/
 
-# 455 条单元测试：开发期资产，本地跑（tools/check_ms.py 那份静态体检随仓库分发）
+# 单元测试（条数以 `cd tests && python -m unittest discover` 的 `Ran N tests` 为准，别在这里抄数）：
+# 开发期资产，本地跑（tools/check_ms.py 那份静态体检随仓库分发）
 tests/
 
 # v2 时期的工作笔记（本项目是 v3，历史结论已并进 README_HANDOVER.md）

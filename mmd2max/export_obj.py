@@ -49,7 +49,10 @@ from mmd2max.coords import (convert_vec, max_delta as coords_max_delta, obj_delt
 
 
 def fmt(value: float) -> str:
-    return f"{value:.6f}"
+    # 舍入到零就统一写 "0.000000"：IEEE 的 -0.0 与 −1e-9 都会印成 "-0.000000"，
+    # 同一个零两种文本 —— 镜像把 +0 翻成 −0 时，逐字节对撞会白红一次。
+    text = f"{value:.6f}"
+    return text[1:] if text == "-0.000000" else text
 
 
 # 脚尖改绑（#35）。源 PMX 常把整只鞋（含脚尖）绑在足首上、給 つま先 留 0 个顶点
@@ -276,7 +279,7 @@ def build_bones(model, scale: float):
 
         def far_enough(a, b):
             return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) \
-                >= (scale * 0.001) ** 2
+                >= _DEGENERATE_EPS_CM ** 2
 
         if not far_enough(head, tail):
             for child_index in range(count):
@@ -284,7 +287,7 @@ def build_bones(model, scale: float):
                     tail = convert_vec(model.bones[child_index].position, scale)
                     break
         if not far_enough(head, tail):
-            tail = (head[0], head[1], head[2] + max(scale * 0.1, 0.001))
+            tail = (head[0], head[1], head[2] + _STUB_LEN_CM)
 
         heads.append(head)
         tails.append(tail)
@@ -362,8 +365,8 @@ def _build_skeleton_from_kept(model, scale: float, kept: list,
             tail = tails_full[old]
         # 仅在首尾重合（零长度）时做最小修正，避免把所有中线骨强制拉成竖直
         if (tail[0] - head[0]) ** 2 + (tail[1] - head[1]) ** 2 + (tail[2] - head[2]) ** 2 \
-                < (scale * 0.001) ** 2:
-            tail = (head[0], head[1], head[2] + max(scale * 0.05, 0.001))
+                < _DEGENERATE_EPS_CM ** 2:
+            tail = (head[0], head[1], head[2] + _STUB_LEN_CM / 2.0)
         heads.append(head)
         tails.append(tail)
         ancestor = _nearest_kept(model, old_to_new, kept_set,
@@ -927,12 +930,44 @@ def _center_neck(heads, biped_mapping, old_to_new, positions=None,
     return abs(dy)
 
 
+# 下面两条阈值是**导出单位（厘米）**里的绝对量，不跟 scale 缩。
+# 上一轮我（被蜕变测试带偏）把它们改成「PMX 单位 × scale」，实测把香菱打崩了：
+# 香菱的 auto scale = 7.6563（1 个 PMX 单位 = 7.66cm），于是 2.5cm 的上限被放大成
+# 239cm、0.02cm 的下限放大成 1.91cm —— widths.tsv 从 12 行掉到 10 行，
+# `Bip001 R Hand` 的粗细从 3.6953 涨到 58.3399（手掌+邻指全进了样本）。
+# 之所以该钉在厘米而不是 PMX 单位：`auto_scale` 把角色**固定成 160cm 高**，
+# 所以导出单位是跨模型稳定的物理量；PMX 单位反而每个模型不一样（20 单位的模型和
+# 1875 单位的模型差近 100 倍）。代价要说清楚：这两条让「scale 翻倍 ⇒ 一切线性」在
+# scale 这个**人造输入**上不成立。M5 因此不再要求「scale 翻倍 ⇒ 一切线性」（那条在产品里
+# 是假的，上一轮就是被它推着改了这两条常量、把香菱改崩），改钉**单位协变**：PMX 长度翻倍 +
+# scale 减半 ⇒ 产物逐字节相同。厘米绝对量在那条下天然成立（见 tests/test_metamorphic.py）。
+_RADIUS_CAP_CM = 2.5      # 顶点到骨轴的最大计入垂距（导出厘米）
+_WIDTH_MIN_CM = 0.02      # 细到低于这条的段不算粗细（导出厘米）
+
+# 零长度骨的判据与占位尾长度同样钉在导出厘米上（理由与上面两条一致）。
+# 之前它们写成 `scale * 0.001` / `scale * 0.1` / `scale * 0.05`，也就是「若干个 PMX
+# 单位」—— 那是作者画法，不是物理量：香菱（1 单位 = 7.66cm）占位尾 0.76563cm，
+# 克雷薇（1 单位 = 8.76cm）占位尾 0.8763cm，同一根无名骨在两具模型上长得不一样，
+# 而单位协变要求它俩**逐字节相同**。取值依据见 test_runs/probe_stub_spectrum.py 量的谱：
+# 两具模型里「判为零长」的根数在 0.002cm ~ 0.3cm 整个区间内都不变（真骨最短 0.99cm，
+# 重合的那些要么精确为 0，要么是 0.000008cm 的浮点尾巴），所以 0.05cm 落在安全窗正中。
+# 占位尾取 0.8cm / 0.4cm = 今天两具模型实测值的中间，且远低于 `_RADIUS_CAP_CM`，
+# 所以 `length * 0.9` 仍然顶不到粗细上限。
+_DEGENERATE_EPS_CM = 0.05   # 首尾距离小于这条 = 零长度骨（导出厘米）
+_STUB_LEN_CM = 0.8          # 占位尾：往 +z 撑多长（导出厘米）
+
+
 def _bone_radius(positions, scale: float, ph, ch):
     """估计某段骨骼周围网格的「半径」（顶点到轴线垂距的中位数）。
 
     用途：Biped 默认手脚很粗，直接套在 MMD 网格上会明显大一圈
     （用户截图：手指骨比手指还粗）。用网格实测半径算目标粗细，
     Max 端据此收缩非长度轴。
+
+    `cap` 与下面 `_width_rows` 的下限都是**导出厘米**里的绝对量：`auto_scale` 保证角色
+    恒为 160cm 高，所以厘米是跨模型稳定的，而 PMX 单位不是（不同模型差近 100 倍）。
+    上一轮把这两条改成「PMX 单位 × scale」，香菱（auto scale 7.6563）实测把手掌算进
+    了手的粗细（3.6953 → 58.3399）—— 已回滚，理由见常量定义处的注释。
     """
     ax = [ch[i] - ph[i] for i in range(3)]
     length = (ax[0] ** 2 + ax[1] ** 2 + ax[2] ** 2) ** 0.5
@@ -942,7 +977,7 @@ def _bone_radius(positions, scale: float, ph, ch):
     # 采样窗口卡在 10%~90% 段长：太靠两端会把相邻关节的球体算进来。
     # 半径上限取 max(2.5, 0.9×段长)：手指这种细骨必须收紧，否则邻指/手掌的顶点
     # 会把「中位数」抬高好几倍（早期版本就是这样把 1.5cm 的手指算成 6.2cm）。
-    cap = max(2.5, length * 0.9)
+    cap = max(_RADIUS_CAP_CM, length * 0.9)
     samples = []
     for p in positions:
         v = convert_vec(p, scale)
@@ -991,7 +1026,12 @@ def _width_rows(scale: float, old_to_new: dict, heads: list, tails: list,
             continue
         ni = old_to_new[old]
         r = _bone_radius(positions, scale, heads[ni], tails[ni])
-        if r is None or r <= 0.02:
+        # 下限 0.02 是**导出厘米**（= 0.2mm）：比这还细的段量不出粗细，丢掉。
+        # 它是绝对的，所以 widths.tsv 的行集会随 scale 变 —— 这是设计，不是缺陷：
+        # 生产里 scale 由 `auto_scale` 钉成「角色 160cm 高」，厘米是稳定量纲。
+        # 上一轮反过来把它改成「PMX 单位 × scale」，香菱实测掉了两根 Finger3、
+        # 手掌算进手的粗细（3.6953 → 58.3399），已回滚。
+        if r is None or r <= _WIDTH_MIN_CM:
             continue
         lines.append(f"{target}\t{r * 2.0:.4f}")
         count += 1
@@ -1585,14 +1625,21 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
     for ji, jt in enumerate(model.joints):
         pos = convert_vec(jt.position, scale)
         rot = jt.rotation
+        # 平移限位（pos_min/pos_max）是**同单位的长度**（PMX 厘米），曾经漏乘 scale ——
+        # M5 蜕变测试拿 scale=0.08 与 0.16 两次导出对撞抓到的：位置乘了、限位没乘，
+        # 于是「允许移动的范围」相对骨架缩小 1/scale 倍。与刚体尺寸那条同族：
+        # 凡是长度，必须在同一张表里乘同一个 scale，否则单看一份产物完全自洽。
+        # 轴向也要走 convert_vec：Max 端的注释里这两个三元组按 Max 的 x/y/z 读。
+        pmin = convert_vec(jt.pos_min, scale)
+        pmax = convert_vec(jt.pos_max, scale)
         lines.append(
             "JOINT\t" + "\t".join([
                 str(ji), jt.name, str(jt.joint_type),
                 str(jt.rigid_a), str(jt.rigid_b),
                 fmt(pos[0]), fmt(pos[1]), fmt(pos[2]),
                 fmt(rot[0]), fmt(rot[1]), fmt(rot[2]),
-                fmt(jt.pos_min[0]), fmt(jt.pos_min[1]), fmt(jt.pos_min[2]),
-                fmt(jt.pos_max[0]), fmt(jt.pos_max[1]), fmt(jt.pos_max[2]),
+                fmt(pmin[0]), fmt(pmin[1]), fmt(pmin[2]),
+                fmt(pmax[0]), fmt(pmax[1]), fmt(pmax[2]),
                 fmt(jt.rot_min[0]), fmt(jt.rot_min[1]), fmt(jt.rot_min[2]),
                 fmt(jt.rot_max[0]), fmt(jt.rot_max[1]), fmt(jt.rot_max[2]),
                 fmt(jt.pos_spring[0]), fmt(jt.pos_spring[1]), fmt(jt.pos_spring[2]),
