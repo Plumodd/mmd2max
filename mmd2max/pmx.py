@@ -242,6 +242,38 @@ def _finite(values: tuple[float, ...]) -> bool:
     return all(math.isfinite(v) for v in values)
 
 
+def _all_finite(value) -> bool:
+    """递归查嵌套结构里的每个 float。
+
+    变形的十一种类型项形状各不相同（vec3 / vec3+vec4 / 十一段材质偏移 / vec3+vec3），
+    逐类型手写检查正是最容易漏一类的那种写法 —— 而漏掉的那一类会把 NaN 一路带到
+    Morpher 与 MassFX 里，变成「数值通道全 NaN、日志却全绿」。
+    """
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, (tuple, list)):
+        return all(_all_finite(item) for item in value)
+    return True
+
+
+# 骨 / 变形 / 刚体 / 关节的名字要原样落进 TSV 的某一列（bones.tsv 第 2 列、morphs.tsv
+# 的 morph_name / morph_name_en、rigid.tsv、joints.tsv）。
+_TSV_UNSAFE = ("\t", "\r", "\n", "\0")
+
+
+def _tsv_safe(name: str, label: str) -> str:
+    """名字里带制表符或换行 ⇒ 整行列错位：判据读到的是「别的名字」或「别的数字」。
+
+    必须在解析层拦，理由与 `_parse_tail` 的末尾不变式相同 —— 错位的后果落在离根因很远
+    的位置（比如某个骨盒读数莫名其妙 FAIL），而这里是一处早抛、错误信息带名字本身。
+    控制字符在 MMD 里没有任何合法用途（MMD 的骨名框根本输不进去），所以不做转义。
+    """
+    for char in _TSV_UNSAFE:
+        if char in name:
+            raise PMXError(f"{label}含非法控制字符 {char!r}：{name[:40]!r}")
+    return name
+
+
 def load_pmx(path: str | Path) -> PMXModel:
     source = Path(path).expanduser().resolve()
     if not source.is_file():
@@ -283,6 +315,8 @@ def load_pmx(path: str | Path) -> PMXModel:
                 raise PMXError(f"顶点 {vertex_index} 坐标含非法值（NaN/Inf）")
             if not _finite(normal):
                 raise PMXError(f"顶点 {vertex_index} 法线含非法值（NaN/Inf）")
+            if not _finite(uv):
+                raise PMXError(f"顶点 {vertex_index} UV 含非法值（NaN/Inf）")
             deform = r.u8()
             weights: list[tuple[int, float]] = []
             if deform == 0:  # BDEF1
@@ -370,7 +404,7 @@ def load_pmx(path: str | Path) -> PMXModel:
             if mat_indices % 3:
                 raise PMXError(f"材质「{mat_name}」的索引数 {mat_indices} 不是 3 的倍数")
             material_index_total += mat_indices
-            if not _finite(diffuse) or not _finite(specular) or not _finite(ambient):
+            if not _all_finite((diffuse, specular, specular_power, ambient)):
                 raise PMXError(f"材质「{mat_name}」的颜色含非法值（NaN/Inf）")
             materials.append(Material(
                 mat_name, mat_name_en, diffuse, specular, specular_power,
@@ -380,14 +414,11 @@ def load_pmx(path: str | Path) -> PMXModel:
         if material_index_total != index_count:
             raise PMXError(
                 f"材质面索引总和 {material_index_total} 与总面索引数 {index_count} 不一致")
-        if any(not _finite(d) for m in materials for d in (m.diffuse, m.specular, m.ambient)):
-            # 二次保险（上面已检查，这里保留防御性约束）
-            pass
 
         bones: list[Bone] = []
         for _ in range(_count(r, "骨骼", 1_000_000)):
-            bone_name = r.text(encoding)
-            bone_name_en = r.text(encoding)
+            bone_name = _tsv_safe(r.text(encoding), "骨骼名")
+            bone_name_en = _tsv_safe(r.text(encoding), f"骨骼「{bone_name}」的英文名")
             position = r.vec3()
             parent_index = r.index(header.bone_index_size, True)
             layer = r.i32()
@@ -428,6 +459,11 @@ def load_pmx(path: str | Path) -> PMXModel:
                         r.vec3()
             if not _finite(position):
                 raise PMXError(f"骨骼「{bone_name}」坐标含非法值（NaN/Inf）")
+            if not _all_finite((tail_offset, inherit_weight, ik_angle_limit)):
+                # 末端偏移就是骨长/骨向的来源（`_limb_rows` 的 desired_len 由它算），
+                # 继承权重与 IK 角度上限一起进 bones.tsv：NaN 从这三处任一进入，
+                # 数值通道就少一个数，而写入侧不会有任何一行报错。
+                raise PMXError(f"骨骼「{bone_name}」的末端偏移/继承权重/IK 上限含非法值（NaN/Inf）")
             for label, axis in (("轴固定", fixed_axis),
                                 ("局部 X", local_x), ("局部 Z", local_z)):
                 if axis is not None and not _finite(axis):
@@ -481,7 +517,7 @@ def _parse_tail(r: Reader, stream: BinaryIO, file_size: int,
     morphs = _parse_morphs(r, header)
     _parse_display_frames(r, header)
     rigid_bodies = _parse_rigid_bodies(r, header, bone_count)
-    joints = _parse_joints(r, header)
+    joints = _parse_joints(r, header, len(rigid_bodies))
     position = stream.tell()
     if position != file_size:
         raise PMXError(
@@ -508,8 +544,8 @@ def _parse_morphs(r: Reader, header: Header) -> list:
     """
     out: list = []
     for _ in range(_count(r, "变形", 100_000)):
-        name_jp = r.text(header.encoding)
-        name_en = r.text(header.encoding)
+        name_jp = _tsv_safe(r.text(header.encoding), "变形名")
+        name_en = _tsv_safe(r.text(header.encoding), f"变形「{name_jp}」的英文名")
         panel = r.u8()
         mtype = r.u8()
         count = _count(r, "变形项目", 1_000_000)
@@ -569,6 +605,8 @@ def _parse_morphs(r: Reader, header: Header) -> list:
             # 已经错位。旧版在这里按「32 字节/项」保守丢弃，会把错位藏起来、
             # 让错误在离根因很远的位置才爆，所以改成直接报错。
             raise PMXError(f"变形「{name_jp}」的类型未定义：{mtype}（合法范围 0..10）")
+        if not _all_finite(items) or not _all_finite(group_refs):
+            raise PMXError(f"变形「{name_jp}」（类型 {mtype}）的偏移量含非法值（NaN/Inf）")
         out.append(Morph(name_jp, name_en, panel, mtype, items, group_refs))
     return out
 
@@ -598,8 +636,8 @@ def _parse_rigid_bodies(r: Reader, header: Header, bone_count: int) -> list:
     """
     out: list = []
     for _ in range(_count(r, "刚体", 100_000)):
-        name_jp = r.text(header.encoding)
-        name_en = r.text(header.encoding)
+        name_jp = _tsv_safe(r.text(header.encoding), "刚体名")
+        name_en = _tsv_safe(r.text(header.encoding), f"刚体「{name_jp}」的英文名")
         bone_index = r.index(header.bone_index_size, True)
         group = r.u8()
         nocollide_mask = r.unpack("H")[0]
@@ -617,18 +655,21 @@ def _parse_rigid_bodies(r: Reader, header: Header, bone_count: int) -> list:
             r.u8()  # reserved
         if bone_index < -1 or bone_index >= bone_count:
             raise PMXError(f"刚体「{name_jp}」引用了不存在的骨骼索引 {bone_index}")
+        if not _all_finite((size, position, rotation, mass, move_damping,
+                            rotation_damping, repulsion, friction)):
+            raise PMXError(f"刚体「{name_jp}」的形状/位置/物理参数含非法值（NaN/Inf）")
         out.append(RigidBody(name_jp, name_en, bone_index, group, nocollide_mask,
                             shape, size, position, rotation, mass, move_damping,
                             rotation_damping, repulsion, friction, physics_mode))
     return out
 
 
-def _parse_joints(r: Reader, header: Header) -> list:
+def _parse_joints(r: Reader, header: Header, rigid_count: int) -> list:
     """解析关节段（6DOF 弹簧约束）。rigid A/B 使用 rigid_index_size。"""
     out: list = []
     for _ in range(_count(r, "关节", 100_000)):
-        name_jp = r.text(header.encoding)
-        name_en = r.text(header.encoding)
+        name_jp = _tsv_safe(r.text(header.encoding), "关节名")
+        name_en = _tsv_safe(r.text(header.encoding), f"关节「{name_jp}」的英文名")
         jtype = r.u8()
         rigid_a = r.index(header.rigid_index_size, True)
         rigid_b = r.index(header.rigid_index_size, True)
@@ -640,6 +681,16 @@ def _parse_joints(r: Reader, header: Header) -> list:
         rot_max = r.vec3()
         pos_spring = r.vec3()
         rot_spring = r.vec3()
+        # 刚体下标越界不报错的话，Max 那边建弹簧时拿到的是一个不存在的节点：整条物理
+        # 链静默少一环，而 `#` 统计行仍报「关节 N 个已导出」。刚体的骨引用早就查过界，
+        # 同一类事实不该两头口径不同。
+        for label, rindex in (("A", rigid_a), ("B", rigid_b)):
+            if not (0 <= rindex < rigid_count):
+                raise PMXError(f"关节「{name_jp}」的刚体{label} 索引 {rindex} 越界"
+                               f"（刚体共 {rigid_count} 个）")
+        if not _all_finite((position, rotation, pos_min, pos_max,
+                            rot_min, rot_max, pos_spring, rot_spring)):
+            raise PMXError(f"关节「{name_jp}」的约束向量含非法值（NaN/Inf）")
         out.append(Joint(name_jp, name_en, jtype, rigid_a, rigid_b, position,
                         rotation, pos_min, pos_max, rot_min, rot_max,
                         pos_spring, rot_spring))
