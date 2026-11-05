@@ -6,7 +6,10 @@ v3 的完整缺陷史在 `README_HANDOVER.md`（第七节那条时间轴，条�
 回滚开关：v3 目录 `C:\Users\Administrator\Desktop\mmd2max_v3_src_2026-11-01` 仍是完整的源码 +
 `.git`（提交 `d4949f6` 已全部推到 `Plumodd/mmd2max`，工作树干净），`C:\Users\Administrator\Desktop\mmd2max_v3.zip`
 是同一份成品的压缩包。2026-11-04 清理时它的 `test_runs/` 产物（693MB）与 v1/v2 两棵树、三份 v2 zip
-一起进了 `C:\Users\Administrator\Desktop\_旧版本_待删_2026-11-04\`（**移动**，不是删除，随时能搬回来）。
+一起进了 `Desktop\_旧版本_待删_2026-11-04\`（当时是**移动隔离**，不是删除）；2026-11-05 用户点头之后
+那个目录已**整目录删除**（2.1G / 344 件，含 `香菱-海灯节.max` 263MB 与 v1/v2 两棵源码树）⇒ 那几份旧物
+从此不在磁盘上，回滚只有一条路可走：**v3 那棵树与 v3.zip**，它们与 `Desktop\香菱`、`Desktop\test2`
+两份 `.pmx` 输入都逐条 `ls` 过还在（`d4949f6` 仍是 v3 的 HEAD）。
 v4 任何一步做砸了，回到 v3 目录跑 `tools/obj_run.py` 即可，不需要在 v4 里修；产物缺失用
 `tools/run_model.py` 重生成，一条命令的事。
 
