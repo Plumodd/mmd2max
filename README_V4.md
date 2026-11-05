@@ -334,7 +334,7 @@ round24 round26` ⇒ **exit 0**（420→437 行，多出的 17 行全是骨盒�
 （33 行 `tail_z` +0.034370 / 2 行 +0.017185），另 2 行是 #66 胸部指向乳头（原先由白名单代管，这次冻进基线，
 所以 `BONE_TAIL_OVERRIDES` 清空）；其余 5 张（biped_map 53 / limbs 39 / meta 41 / weights 18892 / widths 12）
 **逐行相同**。基线换代规程写进 `tools/check_baseline.py` 的注释：旧一代整份留在 `baselines/gen17/`
-（`baselines/` 被 gitignore，就地覆盖等于永久丢血缘）。
+（版本控制只放行 `baselines/round*` 那批读数件，`gen17/` 仍在 ignore 里 —— 就地覆盖等于永久丢血缘）。
 
 盲区也说清楚，别把这三条读成「单位问题从此有人管」：阈值那条性质**看不见**（分类不翻 ⇒ 产物无差异，
 实测 GREEN）；`_WIDTH_MIN_CM` 乘 scale 也**看不见**（没有半径落进 0.02~0.153cm 那道缝，实测 GREEN）——
@@ -414,7 +414,7 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
 
 ---
 
-## 8. 测试版打包：`git archive` + 一次独立导出自检
+## 8. 测试版打包：`git archive` + 一次独立导出自检（**2026-11-05 起停**：项目转长期，交付形态改成仓库本身，见交接第 42 条；下面这一节留作「最后一次自检读到什么」的记录）
 
 一条命令（**包内容 = HEAD 内容**，口径现取，别抄数：`git ls-files | awk -F/ 'NF>1{print $1"/"}NF==1{print "(root)"}' | sort | uniq -c`
 —— 第 99 轮复核时它是 `mmd2max/` 11 + `probes/` 35 + `scripts/` 1 + `tools/` 13 + 根 4 件 = **64 个文件**。
@@ -425,8 +425,10 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
 git archive --format=zip -o ../mmd2max_v4_test_<日期>.zip HEAD
 ```
 
-- **为什么不用手工挑文件**：`.gitignore` 已经把 `tests/ test_runs/ baselines/ outputs/` 全排除在外，
-  所以「HEAD 里有什么」== 「跑起来需要什么」。手工挑会漏，漏了的那份要到别人机器上才红。
+- **为什么不用手工挑文件**：口径是「HEAD 里有什么」== 「这套东西 + 它的判据」，`.gitignore` 现排除
+  `test_runs/ outputs/`、金标准 `baselines/香菱_*.tsv`、`baselines/genNN/`、`baselines/shots_*`。
+  **`tests/` 与 `baselines/round*` 从第 42 条起随仓库分发** —— 验收层不在克隆里 = 换一台机器 0 条判据
+  而且不报错。手工挑会漏，漏了的那份要到别人机器上才红。
 - **`probes/` 留在包里**：它不参与运行，但 `export_obj.py:649`、`targets.py:53`、`verdicts.py:961`、
   `check_ms.py:38` 这些**注释里的证据**全指向它。删掉它，「这条数是谁量的」就变成死链 —— 而本项目
   最贵的错误全是「拿注释当证据」。

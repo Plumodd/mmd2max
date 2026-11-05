@@ -45,8 +45,9 @@ META_RENAMES = {("foot_pitch", "0"): ("foot_box_flat", "true")}
 # 已定价的**几何**变更白名单（只对 bones.tsv 生效，逐条打印，绝不静默放过）。
 # v4 #66「胸部骨指向乳头」与本轮的「占位尾改钉导出厘米」都已经在基线里了，所以这里
 # 清空 —— 留着会在每次运行时打印一条「old -> new」而两边其实是同一个数，那是假警报。
-# 上一代基线（第十七轮 + #66 之前）没有删：整套复制在 baselines/gen17/ 里，
-# 因为 baselines/ 被 .gitignore 排除，就地覆盖等于永久丢掉那条血缘。
+# 上一代基线（第十七轮 + #66 之前）没有删：整套复制在 baselines/gen17/ 里 ——
+# 版本控制只放行 `baselines/round*` 那批读数件（见 .gitignore 的 `baselines/*` + `!baselines/round*`），
+# `gen17/` 与金标准 tsv 仍在 ignore 里（不随克隆走），就地覆盖等于永久丢掉那条血缘。
 #   换代对撞实测（gen17 → 本轮，去掉表头后逐行比）：只有 `香菱_bones.tsv` 变 **37 行**，
 #   其余 5 张（biped_map 53 / limbs 39 / meta 41 / weights 18892 / widths 12）**逐行相同**。
 #   这 37 行分两笔账，别混成一笔：
