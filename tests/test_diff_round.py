@@ -12,10 +12,15 @@ import unittest
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 import diff_round                                       # noqa: E402
+from tests import required_files                       # noqa: E402
 
+# 这四份是**仓库里的**基线读数件（`baselines/round*` 已进版本控制）⇒ 缺件走
+# `required_files.require()` 报红，不再 skipUnless：一条永不因为「文件没了」而响的锁，
+# 和一条被人删掉的锁，在结果里长得一模一样。
 RE17 = PROJECT_ROOT / "baselines" / "round17_objrun.log"
 RE18 = PROJECT_ROOT / "baselines" / "round18_objrun.log"
 RE19 = PROJECT_ROOT / "baselines" / "round19_objrun.log"
@@ -201,23 +206,22 @@ class RealLogTests(unittest.TestCase):
                              f"{name} 指向 {path.parent}：实跑目录会被下一轮覆盖，"
                              "锁住它的测试就变成了「随本轮变化」的读数")
 
-    @unittest.skipUnless(RE18.is_file() and RE19.is_file(), "需要 baselines/round18 与 round19 日志")
     def test_m1b_round_changed_nothing_but_the_cfg_line(self):
         import re
+        required_files.require(RE18, RE19)
         problems = diff_round.substantive(diff_round.normalized(RE18),
                                           diff_round.normalized(RE19),
                                           [re.compile(r"^配置:")])
         self.assertEqual(problems, [], "M1b 必须是几何中性：除配置行外不许有任何实质差异")
 
-    @unittest.skipUnless(RE17.is_file() and RE19.is_file(), "需要 baselines/round17 与 round19 日志")
     def test_m1_and_m1b_together_changed_nothing(self):
         import re
+        required_files.require(RE17, RE19)
         problems = diff_round.substantive(diff_round.normalized(RE17),
                                           diff_round.normalized(RE19),
                                           [re.compile(r"^配置:")])
         self.assertEqual(problems, [], "M1（线格式 v2）+ M1b（配置单源）合计必须几何中性")
 
-    @unittest.skipUnless(RE19.is_file() and RE20.is_file(), "需要 baselines/round19 与 round20 日志")
     def test_m2a_round_changed_nothing_but_the_cfg_line(self):
         """M2a（五个容差搬进 CFG）必须几何中性：除配置汇总行外一行都不许多。
 
@@ -226,20 +230,20 @@ class RealLogTests(unittest.TestCase):
         但 `累计误差=` 这类读数绝不在这行里，所以放行范围放大到前缀不放过任何读数。
         """
         import re
+        required_files.require(RE19, RE20)
         problems = diff_round.substantive(diff_round.normalized(RE19),
                                           diff_round.normalized(RE20),
                                           [re.compile(r"^配置")])
         self.assertEqual(problems, [], "M2a 必须是几何中性：五个容差进 CFG 不许改变任何读数")
 
-    @unittest.skipUnless(RE17.is_file() and RE20.is_file(), "需要 baselines/round17 与 round20 日志")
     def test_m1_through_m2a_changed_nothing_but_the_cfg_line(self):
         import re
+        required_files.require(RE17, RE20)
         problems = diff_round.substantive(diff_round.normalized(RE17),
                                           diff_round.normalized(RE20),
                                           [re.compile(r"^配置")])
         self.assertEqual(problems, [], "M1+M1b+M2a 四步重构合计必须几何中性")
 
-    @unittest.skipUnless(RE20.is_file() and RE22.is_file(), "需要 baselines/round20 与 round22 日志")
     def test_m2b_and_m2c_changed_nothing(self):
         """判据拆成两张表 + Python 侧判闸（M2b/M2c）必须几何中性。
 
@@ -252,6 +256,7 @@ class RealLogTests(unittest.TestCase):
         这行必然分叉 —— 除它以外没有任何实质差异。
         """
         import re
+        required_files.require(RE20, RE22)
         problems = diff_round.substantive(diff_round.normalized(RE20),
                                           diff_round.normalized(RE22),
                                           [re.compile(r"^配置")])

@@ -16,11 +16,13 @@ import unittest
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 import check_verdicts                                       # noqa: E402
 import obj_run                                              # noqa: E402
 from mmd2max import passes, verdicts                        # noqa: E402
+from tests import required_files                            # noqa: E402
 
 LIMBS = [{"parent_target": "Bip001 L Foot", "child_target": "Bip001 L Toe0",
           "desired_len": "11.228109", "mode": "foot",
@@ -663,9 +665,8 @@ class FrozenRoundReplayTests(unittest.TestCase):
     FROZEN_REPORT = PROJECT_ROOT / "baselines" / "round22_MMD2MAX.REPORT"
     FROZEN_CHECK = PROJECT_ROOT / "baselines" / "round22_MMD2MAX.CHECK"
 
-    @unittest.skipUnless(FROZEN.is_file() and FROZEN_REPORT.is_file()
-                         and FROZEN_CHECK.is_file(), "需要 baselines/round22 三张表")
     def test_the_frozen_round_replays_exactly_the_frozen_verdicts(self):
+        required_files.require(self.FROZEN, self.FROZEN_REPORT, self.FROZEN_CHECK)
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             # 复制而不是就地判：check() 会把 CHECK 写回 base，判据测试不许动基线文件
@@ -691,14 +692,17 @@ class FrozenRoundReplayTests(unittest.TestCase):
         differ = {k: (got[k], want[k]) for k in want if got[k] != want[k]}
         self.assertEqual(differ, {}, "离线判出的逐行状态和实跑当时落盘的不一致")
 
-    @unittest.skipUnless(FROZEN.is_file() and FROZEN_REPORT.is_file(),
-                         "需要 baselines/round22 三张表")
     def test_the_frozen_report_is_a_real_max_artifact(self):
         """冻结的报告必须是 **Max 写的**：UTF-8 BOM + CRLF 是它的指纹。
 
         `createFile … encoding:#utf8` 落 BOM，Python 侧永远不写。报告若哪天变成
         无 BOM，说明它被人在中间改过（或被 Python 覆盖写），那这张表的证据价值就没了。
+
+        这个断言现在还得靠 `.gitattributes` 里 `baselines/round* -text` 才成立：仓库若按
+        文本处理这份报告，检出就会按那台机的 `core.autocrlf` 改写行尾，于是「是不是 Max
+        直接写的那份」变成看 git 配置脸色 —— 证据件的字节不该由克隆它的那台机决定。
         """
+        required_files.require(self.FROZEN_REPORT)
         raw = self.FROZEN_REPORT.read_bytes()
         self.assertTrue(raw.startswith(b"\xef\xbb\xbf"),
                         "报告没有 BOM：这不是 Max 直接写出来的那份")

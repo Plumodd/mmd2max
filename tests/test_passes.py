@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
 import obj_run                                              # noqa: E402
 from mmd2max import passes, verdicts                          # noqa: E402
+from tests import required_files                             # noqa: E402
 
 SCRIPT = (PROJECT_ROOT / "scripts" / "max_import_obj.ms").read_text(encoding="utf-8")
 
@@ -428,8 +429,8 @@ class FrozenRoundCollisionTests(unittest.TestCase):
 
     FROZEN_REPORT = PROJECT_ROOT / "baselines" / "round77_MMD2MAX.REPORT"
 
-    @unittest.skipUnless(FROZEN_REPORT.is_file(), "需要 baselines/round77 的报告")
     def test_the_frozen_round_order_matches_the_registry(self):
+        required_files.require(self.FROZEN_REPORT)
         _, rows = verdicts.parse_table(
             self.FROZEN_REPORT.read_text(encoding="utf-8-sig"))
         rows = [r for r in rows if r.get("phase")]
@@ -440,8 +441,8 @@ class FrozenRoundCollisionTests(unittest.TestCase):
         self.assertEqual(changed, [],
                          "真报告的行序与注册表声明的时间轴分叉：先讲清是谁错了")
 
-    @unittest.skipUnless(FROZEN_REPORT.is_file(), "需要 baselines/round77 的报告")
     def test_the_frozen_round_timeline_is_clean(self):
+        required_files.require(self.FROZEN_REPORT)
         _, rows = verdicts.parse_table(
             self.FROZEN_REPORT.read_text(encoding="utf-8-sig"))
         problems = passes.audit([r for r in rows if r.get("phase")])

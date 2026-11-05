@@ -24,11 +24,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from mmd2max import passes, targets, verdicts              # noqa: E402
+from tests import required_files                           # noqa: E402
 
 SCRIPT = (PROJECT_ROOT / "scripts" / "max_import_obj.ms").read_text(encoding="utf-8")
 EXPORT_DIR = PROJECT_ROOT / "test_runs" / "香菱"
 # 锁的数字全来自这一轮实跑；源码注释只能说明「为什么」，不能证明「数是抄来的还是
-# 量来的」。基线日志才是这两个数字来源的凭据（baselines/ 不进仓库，缺时跳过）。
+# 量来的」。基线日志才是这两个数字来源的凭据 —— 它现在在仓库里，所以缺件走
+# `required_files.require()` 报红（以前只能 skip，见那个模块的 docstring）。
 PRICED_LOG = PROJECT_ROOT / "baselines" / "round20_objrun.log"
 # 第二具模型的定价轮（#76-B 的颈段）：锁的数字必须能在**它自己那具模型**的冻结日志里读到。
 # 用第 59 轮（方向容差=3.0，即出厂设置下第一轮全绿）而不是第 57 轮：57 轮的 Max 侧日志被
@@ -699,8 +701,7 @@ class PricedLockTests(unittest.TestCase):
         这一条拦的是「抄一个新数字进来就直接跑」——那种数字下一轮永远读起来对，
         因为它就是从这一轮抄的。注释只能说明「为什么」，日志才证明「量到过」。
         """
-        if not PRICED_LOG.is_file():
-            self.skipTest(f"缺少定价轮的基线日志：{PRICED_LOG}")
+        required_files.require(PRICED_LOG)
         log = PRICED_LOG.read_text(encoding="utf-8")
         numbers = []
         for check, values in verdicts.CONVERGE_LOCKS.items():
@@ -730,10 +731,7 @@ class PricedLockTests(unittest.TestCase):
         `段校验 … 实际=` 那一行的读数本身 —— 定价的是量到的长度，不是谁写的解释。
         并且同一个数要在**两份**出厂容差的冻结件里都出现：单轮读数不叫定价，叫抄噪声。
         """
-        missing = [p.name for p in (SEGMENT_PRICED_LOG, SEGMENT_FIRST_STDOUT)
-                   if not p.is_file()]
-        if missing:
-            self.skipTest(f"缺少定价凭据：{'、'.join(missing)}")
+        required_files.require(SEGMENT_PRICED_LOG, SEGMENT_FIRST_STDOUT)
         log = SEGMENT_PRICED_LOG.read_text(encoding="utf-8")
         # 定价轮必须跑在出厂容差下：拿实验轮（DIR_TOL 被压小）的读数当「正常读数」，
         # 锁钉的就是一个只有把容差改小才会出现的场景。
@@ -774,8 +772,7 @@ class PricedLockTests(unittest.TestCase):
         每个键是一行的定位串，值是那一行里必须同时出现的字段 —— 分开 grep 会放行
         「两个数来自不同行」的拼接，那和抄错数没区别。
         """
-        if not (SEGMENT_PRICED_LOG.is_file() and SEGMENT_FORCED_LOG.is_file()):
-            self.skipTest("缺少 #76-B 的冻结日志（正常轮 + DIR_TOL 实验轮）")
+        required_files.require(SEGMENT_PRICED_LOG, SEGMENT_FORCED_LOG)
         normal = SEGMENT_PRICED_LOG.read_text(encoding="utf-8")
         forced = SEGMENT_FORCED_LOG.read_text(encoding="utf-8")
         # ①③④：出厂容差那一轮的三条读数 —— 0.899 度的结构向、它造成的 pivot 偏差、
@@ -1429,8 +1426,7 @@ class RealExportTests(unittest.TestCase):
         不是它自己的读数 —— 拿读数比读数就成了恒等式。对不上就说明两边的输入（坐标列
         /门槛/中点）已经分叉，那三行 gate 会从「永远红」变成「永远测不到真缺陷」。
         """
-        if not PRICED_LOG.is_file():
-            self.skipTest(f"缺少定价轮日志：{PRICED_LOG}")
+        required_files.require(PRICED_LOG)
         rows = key(self.rows())
         targets = dict(re.findall(
             r"段校验 Bip001 Pelvis -> (.+?) 目标=([0-9.eE+-]+)",
