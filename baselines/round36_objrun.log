@@ -1,0 +1,34 @@
+[10:03:36] skin=True physics=False shot=True manual=False gen_only=False
+[10:03:36] 权重文件 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱_weights.tsv 顶点数 18892
+[10:03:37] 已生成脚本 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\mmd2max_run.ms
+[10:03:37] 判据规格 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.VERDICTS：495 行
+[10:03:37] 3ds Max：C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe（2022）
+[10:03:37] 3dsmax pid=33904（-U MAXScript 执行 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\mmd2max_run.ms）
+[10:03:55]   | 输出: C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱.max
+[10:03:55]   | 期望顶点数: 18892
+[10:03:55]   | 2026/11/4 10:03:54  配置来自 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.CFG（32 项） 顶点 18892 脊柱 3 手指 5x3 脚盒压平轴=true 胸带=96.5653..114.393 蒙皮=true 方向容差=3.0 扭转容差=1.0 趾落位容差=0.5 盒隙容差=0.5 脚链拉伸=true 快照回滚=false 回滚触发=0.05 收敛上限=3 规格=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.VERDICTS 报告=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.REPORT
+[10:03:55]   | 2026/11/4 10:03:55  场景已重置。
+[10:03:55]   | 2026/11/4 10:03:55  导入 OBJ：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\model.obj
+[10:03:55]   | 2026/11/4 10:03:55  无法修改 OBJ 导入器选项，沿用 Max 当前设置（请确认未启用 Weld）。
+[10:04:00]   | 2026/11/4 10:03:59    蒙皮覆盖 Bip001 R Foot 顶点=366
+[10:04:00]   | 2026/11/4 10:03:59    蒙皮覆盖 Bip001 R Toe0 顶点=74
+[10:04:00]   | 2026/11/4 10:04:00    回读进度：5000/18892
+[10:04:00]   | 2026/11/4 10:04:00    回读进度：10000/18892
+[10:04:00]   | 2026/11/4 10:04:00    回读进度：15000/18892
+[10:04:00]   | 2026/11/4 10:04:00  蒙皮回读：18892/18892 顶点，未写入=0，零权重=0（补前 0，补救重写 0），主控不符=0，缺失链路=0，链路 期望/回读=26742/26742，最大权重误差=0.0，耗时 1.219 秒
+[10:04:05]   | 2026/11/4 10:03:59    蒙皮覆盖 Bip001 R Toe0 顶点=74
+[10:04:05]   | 2026/11/4 10:04:00    回读进度：5000/18892
+[10:04:05]   | 2026/11/4 10:04:00    回读进度：10000/18892
+[10:04:05]   | 2026/11/4 10:04:00    回读进度：15000/18892
+[10:04:05]   | 2026/11/4 10:04:00  蒙皮回读：18892/18892 顶点，未写入=0，零权重=0（补前 0，补救重写 0），主控不符=0，缺失链路=0，链路 期望/回读=26742/26742，最大权重误差=0.0，耗时 1.219 秒
+[10:04:05]   | 2026/11/4 10:04:02  WM3_MC_BuildFromNode 类型：Primitive 可用=true
+[10:04:22]   | 2026/11/4 10:04:21  截图 hand_side 取景填充=63.1964% 框=[31.7878,-10.2016,77.2343]..[53.0626,9.53362,95.8596]
+[10:04:22]   | 2026/11/4 10:04:21  截图 hand_side 视口已缩放
+[10:04:22]   | 2026/11/4 10:04:21  截图 hand_side 取图 class=BitMap
+[10:04:22]   | 2026/11/4 10:04:21  截图 hand_side 落盘=true -> C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\shots\香菱_hand_side.png
+[10:04:22]   | 2026/11/4 10:04:21  截图取景：量到=19 投不出=0 最小纵向填充=53.2267%
+[10:04:22]   | 2026/11/4 10:04:21  非交互模式：quitMax() 正常退出（避免上层 taskkill /F 累积崩溃计数）。
+[10:04:22] 成功标记已出现（.max 已落盘），继续等视口截图抓完、Max 自行退出
+[10:04:27] 3ds Max 已正常退出（崩溃计数未被污染）
+[10:04:27] 完成：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱.max
+[10:04:27] 判据校验中止：规格表有未知 kind：max（shot_rb/chest_band_lo）

@@ -1,0 +1,822 @@
+﻿phase	check	subject	actual
+pass	ran	scene_prepare	1
+pass	ran	mesh_import	1
+pass	ran	biped_create	1
+fit	segment_count	-	38
+fit	failed_segments	-	0
+fit	cum_len_err_cm	-	0.121234
+pass	ran	fit_segments	1
+pass	ran	apply_widths	1
+pose	placed_nodes	-	29
+pose	failed_nodes	-	0
+pose	missing_nodes	-	0
+pose	hip_residual_cm	-	2.6226e-06
+pass	ran	pose_initial	1
+pass	ran	ankle_recheck	1
+pass	ran	toe_box	1
+converge	raised	1	0
+converge	not_improved	1	5
+converge	dir_over	1	10
+converge	place_sum_cm	1	151.146
+converge	place_max_cm	1	6.82899
+converge	raised	2	0
+converge	not_improved	2	3
+converge	dir_over	2	8
+converge	place_sum_cm	2	67.0805
+converge	place_max_cm	2	6.82899
+converge	raised	3	0
+converge	not_improved	3	5
+converge	dir_over	3	10
+converge	place_sum_cm	3	63.5269
+converge	place_max_cm	3	6.82899
+converge	iters	-	3
+converge	exit_reason	-	ceiling
+converge	gate_satisfied	-	false
+pass	ran	converge	1
+thigh_roll	knee_err_cm	Bip001 L Thigh	0.0399167
+thigh_roll	ankle_err_cm	Bip001 L Thigh	0.000499242
+thigh_roll	knee_err_cm	Bip001 R Thigh	0.0402236
+thigh_roll	ankle_err_cm	Bip001 R Thigh	7.04143e-06
+pass	ran	thigh_roll	1
+pose_end	placed_nodes	-	29
+pose_end	failed_nodes	-	0
+pose_end	missing_nodes	-	0
+rotate_end	raised	-	0
+rotate_end	not_improved	-	4
+pass	ran	finish_pose	1
+toe_snap	residual_after_roll_cm	Bip001 L Toe0	0.0
+toe_snap	residual_after_roll_cm	Bip001 R Toe0	4.76837e-07
+pass	ran	toe_snap_roll	1
+pass	ran	foot_reach	1
+toe_snap	residual_after_reach_cm	Bip001 L Toe0	1.06624e-06
+toe_snap	residual_after_reach_cm	Bip001 R Toe0	1.96605e-06
+pass	ran	toe_snap_reach	1
+pass	ran	toe_box_final	1
+pass	ran	figure_exit	1
+foot_yaw	bone_yaw_deg	Bip001 L Foot	7.62939e-06
+foot_yaw	toe_yaw_deg	Bip001 L Foot	0.0
+foot_chain	chain_angle_deg	Bip001 L Foot -> Bip001 L Toe0	17.6536
+foot_chain	gap_cm	Bip001 L Foot -> Bip001 L Toe0	2.86102e-06
+foot_chain	gap_covered	Bip001 L Foot -> Bip001 L Toe0	true
+foot_yaw	bone_yaw_deg	Bip001 R Foot	7.62939e-06
+foot_yaw	toe_yaw_deg	Bip001 R Foot	0.0
+foot_chain	chain_angle_deg	Bip001 R Foot -> Bip001 R Toe0	17.6536
+foot_chain	gap_cm	Bip001 R Foot -> Bip001 R Toe0	9.53674e-07
+foot_chain	gap_covered	Bip001 R Foot -> Bip001 R Toe0	true
+foot_chain	broken_roots	-	2
+foot_chain	gap_unconnected	-	0
+pass	ran	foot_chain_check	1
+segment	len_cm	Bip001 L Clavicle -> Bip001 L UpperArm	9.01933
+segment	len_cm	Bip001 L UpperArm -> Bip001 L Forearm	21.4152
+segment	len_cm	Bip001 L Forearm -> Bip001 L Hand	18.259
+segment	len_cm	Bip001 R Clavicle -> Bip001 R UpperArm	9.01933
+segment	len_cm	Bip001 R UpperArm -> Bip001 R Forearm	21.4152
+segment	len_cm	Bip001 R Forearm -> Bip001 R Hand	18.259
+segment	len_cm	Bip001 Pelvis -> Bip001 L Thigh	7.71081
+segment	len_cm	Bip001 L Thigh -> Bip001 L Calf	39.9101
+segment	len_cm	Bip001 L Calf -> Bip001 L Foot	41.7
+segment	len_cm	Bip001 L Foot -> Bip001 L Toe0	15.1037
+segment	len_cm	Bip001 Pelvis -> Bip001 R Thigh	7.71081
+segment	len_cm	Bip001 R Thigh -> Bip001 R Calf	39.9101
+segment	len_cm	Bip001 R Calf -> Bip001 R Foot	41.7
+segment	len_cm	Bip001 R Foot -> Bip001 R Toe0	15.1037
+segment	len_cm	Bip001 L Finger0 -> Bip001 L Finger01	2.5715
+segment	len_cm	Bip001 L Finger01 -> Bip001 L Finger02	2.05253
+segment	len_cm	Bip001 L Finger1 -> Bip001 L Finger11	2.52068
+segment	len_cm	Bip001 L Finger11 -> Bip001 L Finger12	2.00641
+segment	len_cm	Bip001 L Finger2 -> Bip001 L Finger21	2.87731
+segment	len_cm	Bip001 L Finger21 -> Bip001 L Finger22	2.40379
+segment	len_cm	Bip001 L Finger3 -> Bip001 L Finger31	2.81011
+segment	len_cm	Bip001 L Finger31 -> Bip001 L Finger32	2.18339
+segment	len_cm	Bip001 L Finger4 -> Bip001 L Finger41	2.2326
+segment	len_cm	Bip001 L Finger41 -> Bip001 L Finger42	1.50505
+segment	len_cm	Bip001 R Finger0 -> Bip001 R Finger01	2.5715
+segment	len_cm	Bip001 R Finger01 -> Bip001 R Finger02	2.05253
+segment	len_cm	Bip001 R Finger1 -> Bip001 R Finger11	2.52068
+segment	len_cm	Bip001 R Finger11 -> Bip001 R Finger12	2.00641
+segment	len_cm	Bip001 R Finger2 -> Bip001 R Finger21	2.87731
+segment	len_cm	Bip001 R Finger21 -> Bip001 R Finger22	2.40379
+segment	len_cm	Bip001 R Finger3 -> Bip001 R Finger31	2.81011
+segment	len_cm	Bip001 R Finger31 -> Bip001 R Finger32	2.18339
+segment	len_cm	Bip001 R Finger4 -> Bip001 R Finger41	2.2326
+segment	len_cm	Bip001 R Finger41 -> Bip001 R Finger42	1.505
+segment	len_cm	Bip001 Pelvis -> Bip001 Spine	9.05555
+segment	len_cm	Bip001 Spine -> Bip001 Spine1	12.0747
+segment	len_cm	Bip001 Spine1 -> Bip001 Neck	17.9546
+segment	len_cm	Bip001 Neck -> Bip001 Head	7.71011
+pass	ran	segment_check	1
+placement	pos_err_cm	Bip001 Head	0.0
+placement	pos_err_cm	Bip001 Neck	7.6296e-06
+placement	pos_err_cm	Bip001 Spine	4.76837e-07
+placement	pos_err_cm	Bip001 Pelvis	6.82899
+placement	pos_err_cm	Bip001 L Clavicle	0.0
+placement	ray_err_cm	Bip001 L UpperArm	9.53674e-07
+placement	pos_err_cm	Bip001 L UpperArm	1.28878
+placement	pos_err_cm	Bip001 L Forearm	1.20461
+placement	pos_err_cm	Bip001 L Hand	0.362528
+placement	pos_err_cm	Bip001 R Clavicle	0.0
+placement	ray_err_cm	Bip001 R UpperArm	2.86102e-06
+placement	pos_err_cm	Bip001 R UpperArm	1.28879
+placement	pos_err_cm	Bip001 R Forearm	1.20185
+placement	pos_err_cm	Bip001 R Hand	0.362536
+placement	pos_err_cm	Bip001 L Thigh	0.0307541
+placement	pos_err_cm	Bip001 L Calf	0.0399106
+placement	pos_err_cm	Bip001 L Foot	0.000499823
+placement	pos_err_cm	Bip001 R Thigh	0.0307541
+placement	pos_err_cm	Bip001 R Calf	0.0398705
+placement	pos_err_cm	Bip001 R Foot	0.00049861
+pass	ran	placement_check	1
+struct_dir	measurable	-	51
+struct_dir	over_tol	-	14
+struct_dir	short_skipped	-	0
+pass	ran	struct_dir_check	1
+box_rb	width_cm	Bip001 L Foot	5.71081
+box_rb	height_cm	Bip001 L Foot	8.7534
+box_rb	length_cm	Bip001 L Foot	18.6914
+box_rb	len_axis	Bip001 L Foot	2
+box_rb	span_want_cm	Bip001 L Foot	20.4658
+box_rb	width_cm	Bip001 L Toe0	3.63855
+box_rb	height_cm	Bip001 L Toe0	3.4674
+box_rb	length_cm	Bip001 L Toe0	0.572202
+box_rb	len_axis	Bip001 L Toe0	1
+box_rb	span_want_cm	Bip001 L Toe0	0.572202
+box_rb	width_cm	Bip001 R Foot	5.71082
+box_rb	height_cm	Bip001 R Foot	8.7534
+box_rb	length_cm	Bip001 R Foot	18.6914
+box_rb	len_axis	Bip001 R Foot	2
+box_rb	span_want_cm	Bip001 R Foot	20.4658
+box_rb	width_cm	Bip001 R Toe0	3.63855
+box_rb	height_cm	Bip001 R Toe0	3.4674
+box_rb	length_cm	Bip001 R Toe0	0.572202
+box_rb	len_axis	Bip001 R Toe0	1
+box_rb	span_want_cm	Bip001 R Toe0	0.572203
+box_rb	hand_scale_cm	Bip001 L Hand	5.0194
+box_rb	hand_box_cm	Bip001 L Hand	3.00846
+box_rb	hand_scale_cm	Bip001 L Finger0	2.167
+box_rb	hand_box_cm	Bip001 L Finger0	0.990373
+box_rb	hand_scale_cm	Bip001 L Finger1	1.4384
+box_rb	hand_box_cm	Bip001 L Finger1	0.657385
+box_rb	hand_scale_cm	Bip001 L Finger2	1.9202
+box_rb	hand_box_cm	Bip001 L Finger2	0.877579
+box_rb	hand_scale_cm	Bip001 L Finger3	1.6815
+box_rb	hand_box_cm	Bip001 L Finger3	0.768488
+box_rb	hand_scale_cm	Bip001 L Finger4	1.2839
+box_rb	hand_box_cm	Bip001 L Finger4	0.586774
+box_rb	hand_scale_cm	Bip001 R Hand	5.0195
+box_rb	hand_box_cm	Bip001 R Hand	3.00852
+box_rb	hand_scale_cm	Bip001 R Finger0	2.1671
+box_rb	hand_box_cm	Bip001 R Finger0	0.990419
+box_rb	hand_scale_cm	Bip001 R Finger1	1.4384
+box_rb	hand_box_cm	Bip001 R Finger1	0.657385
+box_rb	hand_scale_cm	Bip001 R Finger2	1.92
+box_rb	hand_box_cm	Bip001 R Finger2	0.877488
+box_rb	hand_scale_cm	Bip001 R Finger3	1.6813
+box_rb	hand_box_cm	Bip001 R Finger3	0.768396
+box_rb	hand_scale_cm	Bip001 R Finger4	1.2838
+box_rb	hand_box_cm	Bip001 R Finger4	0.586729
+box_rb	nodes_measured	-	16
+box_rb	read_fail	-	0
+pass	ran	box_verify	1
+accessory	on_biped	-	32
+accessory	on_bone	-	491
+accessory	no_parent	-	0
+pass	ran	accessory_build	1
+mesh	vertex_count	-	24921
+skin	bones	-	575
+skin	written_vertices	-	24921
+skin	failed_vertices	-	0
+pass	ran	skin_apply	1
+skin_rb	links	Bip001 L Foot	0
+skin_rb	links	Bip001 R Foot	0
+skin_rb	links	Bip001 R Toe0	0
+skin_rb	links	Bip001 L Toe0	0
+skin_rb	verts_read	-	24921
+skin_rb	read_fail	-	0
+skin_rb	unmodified_verts	-	0
+skin_rb	index_seq_bad	-	0
+skin_rb	pairs_dropped	-	0
+skin_rb	zero_links	-	0
+skin_rb	verts_no_exp	-	0
+skin_rb	links_expected	-	45533
+skin_rb	links_read	-	45533
+skin_rb	links_missing	-	0
+skin_rb	name_mismatch	-	0
+skin_rb	zero_verts_pre	-	0
+skin_rb	repaired	-	0
+skin_rb	zero_verts	-	0
+skin_rb	dom_mismatch	-	0
+skin_rb	weight_err_max	-	1.19209e-07
+skin_rb	sum_err_max	-	1.19209e-07
+skin_rb	link_diff_max	-	0
+skin_rb	link_mismatch_bones	-	0
+skin_rb	elapsed_s	-	2.133
+pass	ran	skin_verify	1
+morpher	blocks	-	60
+morpher	built	-	60
+morpher	with_target	-	60
+morpher	with_name	-	60
+pass	ran	morpher_build	1
+bone_rb	dir_deg	3|上半身3	0.0
+bone_rb	dir_deg	7|左目	0.0
+bone_rb	dir_deg	8|右目	0.0
+bone_rb	dir_deg	17|繩	0.0
+bone_rb	dir_deg	25|左親指先	0.0
+bone_rb	dir_deg	29|左人指先	0.0
+bone_rb	dir_deg	33|左中指先	0.0
+bone_rb	dir_deg	37|左薬指先	0.0
+bone_rb	dir_deg	41|左小指先	0.0
+bone_rb	dir_deg	49|右親指先	0.0
+bone_rb	dir_deg	53|右人指先	0.0
+bone_rb	dir_deg	57|右中指先	0.0
+bone_rb	dir_deg	61|右薬指先	0.0
+bone_rb	dir_deg	65|右小指先	0.0
+bone_rb	dir_deg	66|牙下	0.0
+bone_rb	dir_deg	67|牙上	0.0
+bone_rb	dir_deg	68|左側髮_1	0.0279765
+bone_rb	dir_deg	69|左側髮_2	0.0279765
+bone_rb	dir_deg	70|左側髮_3	0.0
+bone_rb	dir_deg	71|右側髮_1	0.0
+bone_rb	dir_deg	72|右側髮_2	0.0279765
+bone_rb	dir_deg	73|右側髮_3	0.0
+bone_rb	dir_deg	74|前髮2_1	0.0
+bone_rb	dir_deg	75|前髮2_2	0.0
+bone_rb	dir_deg	76|前髮2_3	0.0
+bone_rb	dir_deg	77|前髮1_1	0.0
+bone_rb	dir_deg	78|前髮1_2	0.0
+bone_rb	dir_deg	79|前髮1_3	0.0
+bone_rb	dir_deg	80|左辮_1	0.0
+bone_rb	dir_deg	81|左辮_2	0.0
+bone_rb	dir_deg	82|左辮_3	0.0
+bone_rb	dir_deg	83|左辮_4	0.0
+bone_rb	dir_deg	84|左辮_5	0.0
+bone_rb	dir_deg	85|右辮_1	0.0
+bone_rb	dir_deg	86|右辮_2	0.0
+bone_rb	dir_deg	87|右辮_3	0.0
+bone_rb	dir_deg	88|右辮_4	0.0
+bone_rb	dir_deg	89|右辮_5	0.0
+bone_rb	dir_deg	90|帽	0.0
+bone_rb	dir_deg	91|包_1	0.0
+bone_rb	dir_deg	92|包_2	0.0
+bone_rb	dir_deg	93|包_3	0.0279765
+bone_rb	dir_deg	94|包_4	0.0279765
+bone_rb	dir_deg	95|包_5	0.0
+bone_rb	dir_deg	96|尾	0.0
+bone_rb	dir_deg	99|センター先	0.0
+bone_rb	dir_deg	100|下半身先	0.0
+bone_rb	dir_deg	101|右つま先ＩＫ先	0.0
+bone_rb	dir_deg	102|右足ＩＫ先	0.0
+bone_rb	dir_deg	103|左つま先ＩＫ先	0.0
+bone_rb	dir_deg	104|左足ＩＫ先	0.0
+bone_rb	dir_deg	105|wt_0_0	0.0
+bone_rb	dir_deg	106|wt_0_1	0.0
+bone_rb	dir_deg	107|wt_0_2	0.0
+bone_rb	dir_deg	108|wt_0_3	0.0
+bone_rb	dir_deg	109|wt_0_4	0.0
+bone_rb	dir_deg	110|wt_0_5	0.0
+bone_rb	dir_deg	111|wt_0_6	0.0
+bone_rb	dir_deg	112|wt_0_7	0.0
+bone_rb	dir_deg	113|wt_0_8	0.0
+bone_rb	dir_deg	114|wt_0_9	0.0
+bone_rb	dir_deg	115|wt_0_10	0.0197823
+bone_rb	dir_deg	116|wt_0_11	0.0
+bone_rb	dir_deg	117|wt_0_12	0.0
+bone_rb	dir_deg	118|wt_0_13	0.0
+bone_rb	dir_deg	119|wt_0_14	0.0
+bone_rb	dir_deg	120|wt_0_15	0.0
+bone_rb	dir_deg	121|wt_0_16	0.0197823
+bone_rb	dir_deg	122|wt_0_17	0.0
+bone_rb	dir_deg	123|wt_0_18	0.0
+bone_rb	dir_deg	124|wt_0_19	0.0
+bone_rb	dir_deg	125|wt_0_20	0.0
+bone_rb	dir_deg	126|wt_0_21	0.0
+bone_rb	dir_deg	127|wt_0_22	0.0
+bone_rb	dir_deg	128|wt_0_23	0.0
+bone_rb	dir_deg	129|wt_1_0	0.0
+bone_rb	dir_deg	130|wt_1_1	0.0
+bone_rb	dir_deg	131|wt_1_2	0.0
+bone_rb	dir_deg	132|wt_1_3	0.0197823
+bone_rb	dir_deg	133|wt_1_4	0.0
+bone_rb	dir_deg	134|wt_1_5	0.0
+bone_rb	dir_deg	135|wt_1_6	0.0
+bone_rb	dir_deg	136|wt_1_7	0.0
+bone_rb	dir_deg	137|wt_1_8	0.0
+bone_rb	dir_deg	138|wt_1_9	0.0197823
+bone_rb	dir_deg	139|wt_1_10	0.0
+bone_rb	dir_deg	140|wt_1_11	0.0
+bone_rb	dir_deg	141|wt_1_12	0.0
+bone_rb	dir_deg	142|wt_1_13	0.0
+bone_rb	dir_deg	143|wt_1_14	0.0197823
+bone_rb	dir_deg	144|wt_1_15	0.0
+bone_rb	dir_deg	145|wt_1_16	0.0
+bone_rb	dir_deg	146|wt_1_17	0.0
+bone_rb	dir_deg	147|wt_1_18	0.0
+bone_rb	dir_deg	148|wt_1_19	0.0197823
+bone_rb	dir_deg	149|wt_1_20	0.0
+bone_rb	dir_deg	150|wt_1_21	0.0197823
+bone_rb	dir_deg	151|wt_1_22	0.0
+bone_rb	dir_deg	152|wt_1_23	0.0
+bone_rb	dir_deg	153|wt_2_0	0.0
+bone_rb	dir_deg	154|wt_2_1	0.0
+bone_rb	dir_deg	155|wt_2_2	0.0
+bone_rb	dir_deg	156|wt_2_3	0.0
+bone_rb	dir_deg	157|wt_2_4	0.0
+bone_rb	dir_deg	158|wt_2_5	0.0
+bone_rb	dir_deg	159|wt_2_6	0.0
+bone_rb	dir_deg	160|wt_2_7	0.0
+bone_rb	dir_deg	161|wt_2_8	0.0
+bone_rb	dir_deg	162|wt_2_9	0.0
+bone_rb	dir_deg	163|wt_2_10	0.0
+bone_rb	dir_deg	164|wt_2_11	0.0
+bone_rb	dir_deg	165|wt_2_12	0.0
+bone_rb	dir_deg	166|wt_2_13	0.0
+bone_rb	dir_deg	167|wt_2_14	0.0
+bone_rb	dir_deg	168|wt_2_15	0.0197823
+bone_rb	dir_deg	169|wt_2_16	0.0
+bone_rb	dir_deg	170|wt_2_17	0.0
+bone_rb	dir_deg	171|wt_2_18	0.0
+bone_rb	dir_deg	172|wt_2_19	0.0
+bone_rb	dir_deg	173|wt_2_20	0.0
+bone_rb	dir_deg	174|wt_2_21	0.0
+bone_rb	dir_deg	175|wt_2_22	0.0
+bone_rb	dir_deg	176|wt_2_23	0.0
+bone_rb	dir_deg	177|wt_3_0	0.0
+bone_rb	dir_deg	178|wt_3_1	0.0
+bone_rb	dir_deg	179|wt_3_2	0.0
+bone_rb	dir_deg	180|wt_3_3	0.0
+bone_rb	dir_deg	181|wt_3_4	0.0
+bone_rb	dir_deg	182|wt_3_5	0.0
+bone_rb	dir_deg	183|wt_3_6	0.0
+bone_rb	dir_deg	184|wt_3_7	0.0
+bone_rb	dir_deg	185|wt_3_8	0.0
+bone_rb	dir_deg	186|wt_3_9	0.0
+bone_rb	dir_deg	187|wt_3_10	0.0
+bone_rb	dir_deg	188|wt_3_11	0.0
+bone_rb	dir_deg	189|wt_3_12	0.0197823
+bone_rb	dir_deg	190|wt_3_13	0.0
+bone_rb	dir_deg	191|wt_3_14	0.0
+bone_rb	dir_deg	192|wt_3_15	0.0197823
+bone_rb	dir_deg	193|wt_3_16	0.0197823
+bone_rb	dir_deg	194|wt_3_17	0.0
+bone_rb	dir_deg	195|wt_3_18	0.0
+bone_rb	dir_deg	196|wt_3_19	0.0
+bone_rb	dir_deg	197|wt_3_20	0.0
+bone_rb	dir_deg	198|wt_3_21	0.0
+bone_rb	dir_deg	199|wt_3_22	0.0
+bone_rb	dir_deg	200|wt_3_23	0.0
+bone_rb	dir_deg	201|wt_4_0	0.0
+bone_rb	dir_deg	202|wt_4_1	0.0
+bone_rb	dir_deg	203|wt_4_2	0.0
+bone_rb	dir_deg	204|wt_4_3	0.0
+bone_rb	dir_deg	205|wt_4_4	0.0
+bone_rb	dir_deg	206|wt_4_5	0.0
+bone_rb	dir_deg	207|wt_4_6	0.0
+bone_rb	dir_deg	208|wt_4_7	0.0
+bone_rb	dir_deg	209|wt_4_8	0.0
+bone_rb	dir_deg	210|wt_4_9	0.0197823
+bone_rb	dir_deg	211|wt_4_10	0.0197823
+bone_rb	dir_deg	212|wt_4_11	0.0
+bone_rb	dir_deg	213|wt_4_12	0.0
+bone_rb	dir_deg	214|wt_4_13	0.0
+bone_rb	dir_deg	215|wt_4_14	0.0197823
+bone_rb	dir_deg	216|wt_4_15	0.0
+bone_rb	dir_deg	217|wt_4_16	0.0
+bone_rb	dir_deg	218|wt_4_17	0.0
+bone_rb	dir_deg	219|wt_4_18	0.0
+bone_rb	dir_deg	220|wt_4_19	0.0
+bone_rb	dir_deg	221|wt_4_20	0.0
+bone_rb	dir_deg	222|wt_4_21	0.0
+bone_rb	dir_deg	223|wt_4_22	0.0
+bone_rb	dir_deg	224|wt_4_23	0.0
+bone_rb	dir_deg	225|wt_5_0	0.0
+bone_rb	dir_deg	226|wt_5_1	0.0
+bone_rb	dir_deg	227|wt_5_2	0.0
+bone_rb	dir_deg	228|wt_5_3	0.0
+bone_rb	dir_deg	229|wt_5_4	0.0
+bone_rb	dir_deg	230|wt_5_5	0.0
+bone_rb	dir_deg	231|wt_5_6	0.0
+bone_rb	dir_deg	232|wt_5_7	0.0
+bone_rb	dir_deg	233|wt_5_8	0.0
+bone_rb	dir_deg	234|wt_5_9	0.0
+bone_rb	dir_deg	235|wt_5_10	0.0
+bone_rb	dir_deg	236|wt_5_11	0.0
+bone_rb	dir_deg	237|wt_5_12	0.0
+bone_rb	dir_deg	238|wt_5_13	0.0
+bone_rb	dir_deg	239|wt_5_14	0.0
+bone_rb	dir_deg	240|wt_5_15	0.0197823
+bone_rb	dir_deg	241|wt_5_16	0.0
+bone_rb	dir_deg	242|wt_5_17	0.0
+bone_rb	dir_deg	243|wt_5_18	0.0
+bone_rb	dir_deg	244|wt_5_19	0.0
+bone_rb	dir_deg	245|wt_5_20	0.0
+bone_rb	dir_deg	246|wt_5_21	0.0
+bone_rb	dir_deg	247|wt_5_22	0.0
+bone_rb	dir_deg	248|wt_5_23	0.0
+bone_rb	dir_deg	249|wt_6_0	0.0
+bone_rb	dir_deg	250|wt_6_1	0.0197823
+bone_rb	dir_deg	251|wt_6_2	0.0
+bone_rb	dir_deg	252|wt_6_3	0.0
+bone_rb	dir_deg	253|wt_6_4	0.0197823
+bone_rb	dir_deg	254|wt_6_5	0.0
+bone_rb	dir_deg	255|wt_6_6	0.0
+bone_rb	dir_deg	256|wt_6_7	0.0
+bone_rb	dir_deg	257|wt_6_8	0.0
+bone_rb	dir_deg	258|wt_6_9	0.0
+bone_rb	dir_deg	259|wt_6_10	0.0
+bone_rb	dir_deg	260|wt_6_11	0.0
+bone_rb	dir_deg	261|wt_6_12	0.0
+bone_rb	dir_deg	262|wt_6_13	0.0
+bone_rb	dir_deg	263|wt_6_14	0.0
+bone_rb	dir_deg	264|wt_6_15	0.0
+bone_rb	dir_deg	265|wt_6_16	0.0
+bone_rb	dir_deg	266|wt_6_17	0.0
+bone_rb	dir_deg	267|wt_6_18	0.0
+bone_rb	dir_deg	268|wt_6_19	0.0
+bone_rb	dir_deg	269|wt_6_20	0.0
+bone_rb	dir_deg	270|wt_6_21	0.0
+bone_rb	dir_deg	271|wt_6_22	0.0
+bone_rb	dir_deg	272|wt_6_23	0.0
+bone_rb	dir_deg	273|wt_7_0	0.0197823
+bone_rb	dir_deg	274|wt_7_1	0.0
+bone_rb	dir_deg	275|wt_7_2	0.0
+bone_rb	dir_deg	276|wt_7_3	0.0
+bone_rb	dir_deg	277|wt_7_4	0.0
+bone_rb	dir_deg	278|wt_7_5	0.0197823
+bone_rb	dir_deg	279|wt_7_6	0.0
+bone_rb	dir_deg	280|wt_7_7	0.0
+bone_rb	dir_deg	281|wt_7_8	0.0
+bone_rb	dir_deg	282|wt_7_9	0.0
+bone_rb	dir_deg	283|wt_7_10	0.0
+bone_rb	dir_deg	284|wt_7_11	0.0
+bone_rb	dir_deg	285|wt_7_12	0.0
+bone_rb	dir_deg	286|wt_7_13	0.0
+bone_rb	dir_deg	287|wt_7_14	0.0
+bone_rb	dir_deg	288|wt_7_15	0.0197823
+bone_rb	dir_deg	289|wt_7_16	0.0
+bone_rb	dir_deg	290|wt_7_17	0.0
+bone_rb	dir_deg	291|wt_7_18	0.0
+bone_rb	dir_deg	292|wt_7_19	0.0
+bone_rb	dir_deg	293|wt_7_20	0.0
+bone_rb	dir_deg	294|wt_7_21	0.0
+bone_rb	dir_deg	295|wt_7_22	0.0
+bone_rb	dir_deg	296|wt_7_23	0.0
+bone_rb	dir_deg	297|wt_8_0	0.0197823
+bone_rb	dir_deg	298|wt_8_1	0.0
+bone_rb	dir_deg	299|wt_8_2	0.0
+bone_rb	dir_deg	300|wt_8_3	0.0
+bone_rb	dir_deg	301|wt_8_4	0.0
+bone_rb	dir_deg	302|wt_8_5	0.0
+bone_rb	dir_deg	303|wt_8_6	0.0
+bone_rb	dir_deg	304|wt_8_7	0.0
+bone_rb	dir_deg	305|wt_8_8	0.0
+bone_rb	dir_deg	306|wt_8_9	0.0
+bone_rb	dir_deg	307|wt_8_10	0.0
+bone_rb	dir_deg	308|wt_8_11	0.0197823
+bone_rb	dir_deg	309|wt_8_12	0.0
+bone_rb	dir_deg	310|wt_8_13	0.0
+bone_rb	dir_deg	311|wt_8_14	0.0
+bone_rb	dir_deg	312|wt_8_15	0.0
+bone_rb	dir_deg	313|wt_8_16	0.0
+bone_rb	dir_deg	314|wt_8_17	0.0
+bone_rb	dir_deg	315|wt_8_18	0.0
+bone_rb	dir_deg	316|wt_8_19	0.0
+bone_rb	dir_deg	317|wt_8_20	0.0
+bone_rb	dir_deg	318|wt_8_21	0.0
+bone_rb	dir_deg	319|wt_8_22	0.0
+bone_rb	dir_deg	320|wt_8_23	0.0
+bone_rb	dir_deg	321|wt_9_0	0.0
+bone_rb	dir_deg	322|wt_9_1	0.0
+bone_rb	dir_deg	323|wt_9_2	0.0
+bone_rb	dir_deg	324|wt_9_3	0.0
+bone_rb	dir_deg	325|wt_9_4	0.0
+bone_rb	dir_deg	326|wt_9_5	0.0
+bone_rb	dir_deg	327|wt_9_6	0.0
+bone_rb	dir_deg	328|wt_9_7	0.0
+bone_rb	dir_deg	329|wt_9_8	0.0
+bone_rb	dir_deg	330|wt_9_9	0.0
+bone_rb	dir_deg	331|wt_9_10	0.0
+bone_rb	dir_deg	332|wt_9_11	0.0
+bone_rb	dir_deg	333|wt_9_12	0.0
+bone_rb	dir_deg	334|wt_9_13	0.0
+bone_rb	dir_deg	335|wt_9_14	0.0
+bone_rb	dir_deg	336|wt_9_15	0.0
+bone_rb	dir_deg	337|wt_9_16	0.0
+bone_rb	dir_deg	338|wt_9_17	0.0
+bone_rb	dir_deg	339|wt_9_18	0.0
+bone_rb	dir_deg	340|wt_9_19	0.0
+bone_rb	dir_deg	341|wt_9_20	0.0
+bone_rb	dir_deg	342|wt_9_21	0.0
+bone_rb	dir_deg	343|wt_9_22	0.0197823
+bone_rb	dir_deg	344|wt_9_23	0.0
+bone_rb	dir_deg	345|wt_10_0	0.0
+bone_rb	dir_deg	346|wt_10_1	0.0
+bone_rb	dir_deg	347|wt_10_2	0.0197823
+bone_rb	dir_deg	348|wt_10_3	0.0
+bone_rb	dir_deg	349|wt_10_4	0.0
+bone_rb	dir_deg	350|wt_10_5	0.0
+bone_rb	dir_deg	351|wt_10_6	0.0
+bone_rb	dir_deg	352|wt_10_7	0.0
+bone_rb	dir_deg	353|wt_10_8	0.0
+bone_rb	dir_deg	354|wt_10_9	0.0
+bone_rb	dir_deg	355|wt_10_10	0.0
+bone_rb	dir_deg	356|wt_10_11	0.0
+bone_rb	dir_deg	357|wt_10_12	0.0
+bone_rb	dir_deg	358|wt_10_13	0.0
+bone_rb	dir_deg	359|wt_10_14	0.0
+bone_rb	dir_deg	360|wt_10_15	0.0
+bone_rb	dir_deg	361|wt_10_16	0.0
+bone_rb	dir_deg	362|wt_10_17	0.0
+bone_rb	dir_deg	363|wt_10_18	0.0
+bone_rb	dir_deg	364|wt_10_19	0.0
+bone_rb	dir_deg	365|wt_10_20	0.0
+bone_rb	dir_deg	366|wt_10_21	0.0197823
+bone_rb	dir_deg	367|wt_10_22	0.0
+bone_rb	dir_deg	368|wt_10_23	0.0
+bone_rb	dir_deg	369|wt_11_0	0.0
+bone_rb	dir_deg	370|wt_11_1	0.0
+bone_rb	dir_deg	371|wt_11_2	0.0
+bone_rb	dir_deg	372|wt_11_3	0.0
+bone_rb	dir_deg	373|wt_11_4	0.0
+bone_rb	dir_deg	374|wt_11_5	0.0
+bone_rb	dir_deg	375|wt_11_6	0.0
+bone_rb	dir_deg	376|wt_11_7	0.0
+bone_rb	dir_deg	377|wt_11_8	0.0
+bone_rb	dir_deg	378|wt_11_9	0.0
+bone_rb	dir_deg	379|wt_11_10	0.0
+bone_rb	dir_deg	380|wt_11_11	0.0
+bone_rb	dir_deg	381|wt_11_12	0.0
+bone_rb	dir_deg	382|wt_11_13	0.0
+bone_rb	dir_deg	383|wt_11_14	0.0
+bone_rb	dir_deg	384|wt_11_15	0.0
+bone_rb	dir_deg	385|wt_11_16	0.0
+bone_rb	dir_deg	386|wt_11_17	0.0
+bone_rb	dir_deg	387|wt_11_18	0.0
+bone_rb	dir_deg	388|wt_11_19	0.0
+bone_rb	dir_deg	389|wt_11_20	0.0
+bone_rb	dir_deg	390|wt_11_21	0.0
+bone_rb	dir_deg	391|wt_11_22	0.0
+bone_rb	dir_deg	392|wt_11_23	0.0
+bone_rb	dir_deg	393|wt_12_0	0.0197823
+bone_rb	dir_deg	394|wt_12_1	0.0
+bone_rb	dir_deg	395|wt_12_2	0.0197823
+bone_rb	dir_deg	396|wt_12_3	0.0279765
+bone_rb	dir_deg	397|wt_12_4	0.0
+bone_rb	dir_deg	398|wt_12_5	0.0
+bone_rb	dir_deg	399|wt_12_6	0.0
+bone_rb	dir_deg	400|wt_12_7	0.0
+bone_rb	dir_deg	401|wt_12_8	0.0279765
+bone_rb	dir_deg	402|wt_12_9	0.0
+bone_rb	dir_deg	403|wt_12_10	0.0
+bone_rb	dir_deg	404|wt_12_11	0.0
+bone_rb	dir_deg	405|wt_12_12	0.0
+bone_rb	dir_deg	406|wt_12_13	0.0
+bone_rb	dir_deg	407|wt_12_14	0.0
+bone_rb	dir_deg	408|wt_12_15	0.0
+bone_rb	dir_deg	409|wt_12_16	0.0
+bone_rb	dir_deg	410|wt_12_17	0.0
+bone_rb	dir_deg	411|wt_12_18	0.0
+bone_rb	dir_deg	412|wt_12_19	0.0
+bone_rb	dir_deg	413|wt_12_20	0.0
+bone_rb	dir_deg	414|wt_12_21	0.0
+bone_rb	dir_deg	415|wt_12_22	0.0197823
+bone_rb	dir_deg	416|wt_12_23	0.0
+bone_rb	dir_deg	417|wt_13_0	0.0
+bone_rb	dir_deg	418|wt_13_1	0.0197823
+bone_rb	dir_deg	419|wt_13_2	0.0
+bone_rb	dir_deg	420|wt_13_3	0.0
+bone_rb	dir_deg	421|wt_13_4	0.0
+bone_rb	dir_deg	422|wt_13_5	0.0
+bone_rb	dir_deg	423|wt_13_6	0.0
+bone_rb	dir_deg	424|wt_13_7	0.0
+bone_rb	dir_deg	425|wt_13_8	0.0
+bone_rb	dir_deg	426|wt_13_9	0.0
+bone_rb	dir_deg	427|wt_13_10	0.0197823
+bone_rb	dir_deg	428|wt_13_11	0.0
+bone_rb	dir_deg	429|wt_13_12	0.0
+bone_rb	dir_deg	430|wt_13_13	0.0
+bone_rb	dir_deg	431|wt_13_14	0.0
+bone_rb	dir_deg	432|wt_13_15	0.0
+bone_rb	dir_deg	433|wt_13_16	0.0
+bone_rb	dir_deg	434|wt_13_17	0.0
+bone_rb	dir_deg	435|wt_13_18	0.0
+bone_rb	dir_deg	436|wt_13_19	0.0
+bone_rb	dir_deg	437|wt_13_20	0.0
+bone_rb	dir_deg	438|wt_13_21	0.0
+bone_rb	dir_deg	439|wt_13_22	0.0
+bone_rb	dir_deg	440|wt_13_23	0.0
+bone_rb	dir_deg	441|wt_14_0	0.0
+bone_rb	dir_deg	442|wt_14_1	0.0
+bone_rb	dir_deg	443|wt_14_2	0.0
+bone_rb	dir_deg	444|wt_14_3	0.0279765
+bone_rb	dir_deg	445|wt_14_4	0.0
+bone_rb	dir_deg	446|wt_14_5	0.0
+bone_rb	dir_deg	447|wt_14_6	0.0
+bone_rb	dir_deg	448|wt_14_7	0.0
+bone_rb	dir_deg	449|wt_14_8	0.0
+bone_rb	dir_deg	450|wt_14_9	0.0
+bone_rb	dir_deg	451|wt_14_10	0.0
+bone_rb	dir_deg	452|wt_14_11	0.0
+bone_rb	dir_deg	453|wt_14_12	0.0
+bone_rb	dir_deg	454|wt_14_13	0.0
+bone_rb	dir_deg	455|wt_14_14	0.0
+bone_rb	dir_deg	456|wt_14_15	0.0
+bone_rb	dir_deg	457|wt_14_16	0.0
+bone_rb	dir_deg	458|wt_14_17	0.0
+bone_rb	dir_deg	459|wt_14_18	0.0
+bone_rb	dir_deg	460|wt_14_19	0.0
+bone_rb	dir_deg	461|wt_14_20	0.0
+bone_rb	dir_deg	462|wt_14_21	0.0
+bone_rb	dir_deg	463|wt_14_22	0.0
+bone_rb	dir_deg	464|wt_14_23	0.0
+bone_rb	dir_deg	465|wt_15_0	0.0
+bone_rb	dir_deg	466|wt_15_1	0.0
+bone_rb	dir_deg	467|wt_15_2	0.0
+bone_rb	dir_deg	468|wt_15_3	0.0
+bone_rb	dir_deg	469|wt_15_4	0.0
+bone_rb	dir_deg	470|wt_15_5	0.0
+bone_rb	dir_deg	471|wt_15_6	0.0
+bone_rb	dir_deg	472|wt_15_7	0.0
+bone_rb	dir_deg	473|wt_15_8	0.0
+bone_rb	dir_deg	474|wt_15_9	0.0
+bone_rb	dir_deg	475|wt_15_10	0.0
+bone_rb	dir_deg	476|wt_15_11	0.0
+bone_rb	dir_deg	477|wt_15_12	0.0
+bone_rb	dir_deg	478|wt_15_13	0.0
+bone_rb	dir_deg	479|wt_15_14	0.0
+bone_rb	dir_deg	480|wt_15_15	0.0
+bone_rb	dir_deg	481|wt_15_16	0.0
+bone_rb	dir_deg	482|wt_15_17	0.0
+bone_rb	dir_deg	483|wt_15_18	0.0
+bone_rb	dir_deg	484|wt_15_19	0.0
+bone_rb	dir_deg	485|wt_15_20	0.0
+bone_rb	dir_deg	486|wt_15_21	0.0
+bone_rb	dir_deg	487|wt_15_22	0.0
+bone_rb	dir_deg	488|wt_15_23	0.0
+bone_rb	dir_deg	489|wt_16_0	0.0
+bone_rb	dir_deg	490|wt_16_1	0.0
+bone_rb	dir_deg	491|wt_16_2	0.0
+bone_rb	dir_deg	492|wt_16_3	0.0
+bone_rb	dir_deg	493|wt_16_4	0.0
+bone_rb	dir_deg	494|wt_16_5	0.0279765
+bone_rb	dir_deg	495|wt_16_6	0.0
+bone_rb	dir_deg	496|wt_16_7	0.0
+bone_rb	dir_deg	497|wt_16_8	0.0
+bone_rb	dir_deg	498|wt_16_9	0.0
+bone_rb	dir_deg	499|wt_16_10	0.0279765
+bone_rb	dir_deg	500|wt_16_11	0.0
+bone_rb	dir_deg	501|wt_16_12	0.0
+bone_rb	dir_deg	502|wt_16_13	0.0
+bone_rb	dir_deg	503|wt_16_14	0.0279765
+bone_rb	dir_deg	504|wt_16_15	0.0
+bone_rb	dir_deg	505|wt_16_16	0.0
+bone_rb	dir_deg	506|wt_16_17	0.0
+bone_rb	dir_deg	507|wt_16_18	0.0
+bone_rb	dir_deg	508|wt_16_19	0.0279765
+bone_rb	dir_deg	509|wt_16_20	0.0279765
+bone_rb	dir_deg	510|wt_16_21	0.0
+bone_rb	dir_deg	511|wt_16_22	0.0
+bone_rb	dir_deg	512|wt_16_23	0.0
+bone_rb	dir_deg	513|wt_17_0	0.0
+bone_rb	dir_deg	514|wt_17_1	0.0
+bone_rb	dir_deg	515|wt_17_2	0.0
+bone_rb	dir_deg	516|wt_17_3	0.0
+bone_rb	dir_deg	517|wt_17_4	0.0
+bone_rb	dir_deg	518|wt_17_5	0.0
+bone_rb	dir_deg	519|wt_17_6	0.0
+bone_rb	dir_deg	520|wt_17_7	0.0
+bone_rb	dir_deg	521|wt_17_8	0.0
+bone_rb	dir_deg	522|wt_17_9	0.0
+bone_rb	dir_deg	523|wt_17_10	0.0
+bone_rb	dir_deg	524|wt_17_11	0.0
+bone_rb	dir_deg	525|wt_17_12	0.0
+bone_rb	dir_deg	526|wt_17_13	0.0
+bone_rb	dir_deg	527|wt_17_14	0.0
+bone_rb	dir_deg	528|wt_17_15	0.0
+bone_rb	dir_deg	529|wt_17_16	0.0
+bone_rb	dir_deg	530|wt_17_17	0.0
+bone_rb	dir_deg	531|wt_17_18	0.0
+bone_rb	dir_deg	532|wt_17_19	0.0
+bone_rb	dir_deg	533|wt_17_20	0.0
+bone_rb	dir_deg	534|wt_17_21	0.0
+bone_rb	dir_deg	535|wt_17_22	0.0
+bone_rb	dir_deg	536|wt_17_23	0.0
+bone_rb	dir_deg	537|左wt後_1	0.0
+bone_rb	dir_deg	538|左wt後_2	0.0
+bone_rb	dir_deg	539|左wt後_3	0.0197823
+bone_rb	dir_deg	540|左wt後_4	0.0
+bone_rb	dir_deg	541|左wt後_5	0.0
+bone_rb	dir_deg	542|左wt後_6	0.0
+bone_rb	dir_deg	543|左wt後_7	0.0197823
+bone_rb	dir_deg	544|左wt後_8	0.0
+bone_rb	dir_deg	545|左wt後_9	0.0
+bone_rb	dir_deg	546|おっぱい調整	0.0
+bone_rb	dir_deg	547|左胸上	0.0
+bone_rb	dir_deg	548|左胸上2	0.0
+bone_rb	dir_deg	549|左胸先	0.0
+bone_rb	dir_deg	550|左胸下	0.0
+bone_rb	dir_deg	551|左胸下先	0.0
+bone_rb	dir_deg	552|右胸上	0.0
+bone_rb	dir_deg	553|右胸上2	0.0
+bone_rb	dir_deg	554|右胸先	0.0
+bone_rb	dir_deg	555|右胸下	0.0
+bone_rb	dir_deg	556|右胸下先	0.0
+bone_rb	dir_deg	557|右wt後_1	0.0
+bone_rb	dir_deg	558|右wt後_2	0.0
+bone_rb	dir_deg	559|右wt後_3	0.0
+bone_rb	dir_deg	560|右wt後_4	0.0
+bone_rb	dir_deg	561|右wt後_5	0.0197823
+bone_rb	dir_deg	562|右wt後_6	0.0
+bone_rb	dir_deg	563|右wt後_7	0.0
+bone_rb	dir_deg	564|右wt後_8	0.0
+bone_rb	dir_deg	565|右wt後_9	0.0
+bone_rb	dir_deg	566|右目先	0.0
+bone_rb	dir_deg	567|左目先	0.0
+bone_rb	dir_deg	568|両目先	0.0
+bone_rb	dir_deg	569|右足D	0.0
+bone_rb	dir_deg	570|右ひざD	0.0
+bone_rb	dir_deg	571|右足首D	0.0
+bone_rb	dir_deg	572|左足D	0.0
+bone_rb	dir_deg	573|左ひざD	0.0
+bone_rb	dir_deg	574|左足首D	0.0
+bone_rb	measurable	-	521
+bone_rb	short_skipped	-	2
+bone_rb	read_fail	-	0
+bone_rb	over_tol	-	0
+bone_rb	worst_deg	-	0.0279765
+bone_rb	worst_bone	-	68|左側髮_1
+bone_rb	pivot_max_cm	-	1.66296e-05
+bone_rb	pivot_max_bone	-	78|前髮1_2
+pass	ran	bone_dir_verify	1
+shot_rb	chest_box_lo	x	-21.1504
+shot_rb	chest_box_hi	x	21.1504
+shot_rb	chest_box_lo	y	-27.5332
+shot_rb	chest_box_hi	y	13.1717
+shot_rb	chest_box_lo	z	103.551
+shot_rb	chest_box_hi	z	131.665
+shot_rb	neck_box_lo	x	-15.9999
+shot_rb	neck_box_hi	x	19.223
+shot_rb	neck_box_lo	y	-21.7921
+shot_rb	neck_box_hi	y	15.9598
+shot_rb	neck_box_lo	z	116.69
+shot_rb	neck_box_hi	z	149.548
+shot_rb	clip_bones_total	-	objects=650 认定为骨=576 Editable_mesh=61 Biped_Object=53 Dummy=13 BoneGeometry=523
+shot_rb	clip_hidden	front	0
+shot_rb	fill_pct	front	63.1185
+shot_rb	clip_hidden	side	0
+shot_rb	fill_pct	side	63.1812
+shot_rb	clip_hidden	top	0
+shot_rb	fill_pct	top	39.3399
+shot_rb	clip_hidden	bone_front	0
+shot_rb	fill_pct	bone_front	63.0123
+shot_rb	clip_hidden	bone_side	0
+shot_rb	fill_pct	bone_side	62.9066
+shot_rb	clip_hidden	bone_foot_side	566
+shot_rb	fill_pct	bone_foot_side	63.7478
+shot_rb	clip_hidden	bone_foot_front	566
+shot_rb	fill_pct	bone_foot_front	63.8549
+shot_rb	clip_hidden	bone_foot_top	566
+shot_rb	fill_pct	bone_foot_top	62.8483
+shot_rb	tight_h_lo	bone_chest_front	-21.1504
+shot_rb	tight_h_hi	bone_chest_front	21.1504
+shot_rb	clip_hidden	bone_chest_front	550
+shot_rb	fill_pct	bone_chest_front	63.1024
+shot_rb	tight_h_lo	bone_chest_side	-27.5332
+shot_rb	tight_h_hi	bone_chest_side	13.1717
+shot_rb	clip_hidden	bone_chest_side	550
+shot_rb	fill_pct	bone_chest_side	62.9967
+shot_rb	tight_h_lo	bone_chest_top	-21.1504
+shot_rb	tight_h_hi	bone_chest_top	21.1504
+shot_rb	clip_hidden	bone_chest_top	550
+shot_rb	fill_pct	bone_chest_top	62.9589
+shot_rb	tight_h_lo	chest_front	-21.1504
+shot_rb	tight_h_hi	chest_front	21.1504
+shot_rb	clip_hidden	chest_front	550
+shot_rb	fill_pct	chest_front	62.9962
+shot_rb	tight_h_lo	chest_side	-27.5332
+shot_rb	tight_h_hi	chest_side	13.1717
+shot_rb	clip_hidden	chest_side	550
+shot_rb	fill_pct	chest_side	62.8906
+shot_rb	tight_h_lo	chest_top	-21.1504
+shot_rb	tight_h_hi	chest_top	21.1504
+shot_rb	clip_hidden	chest_top	550
+shot_rb	fill_pct	chest_top	63.0214
+shot_rb	tight_h_lo	neck_side	-21.7921
+shot_rb	tight_h_hi	neck_side	15.9598
+shot_rb	clip_hidden	neck_side	540
+shot_rb	fill_pct	neck_side	63.0891
+shot_rb	tight_h_lo	neck_front	-15.9999
+shot_rb	tight_h_hi	neck_front	19.223
+shot_rb	clip_hidden	neck_front	540
+shot_rb	fill_pct	neck_front	63.05
+shot_rb	clip_hidden	foot_side	566
+shot_rb	fill_pct	foot_side	63.1041
+shot_rb	clip_hidden	foot_front	566
+shot_rb	fill_pct	foot_front	63.0651
+shot_rb	clip_hidden	foot_top	566
+shot_rb	fill_pct	foot_top	63.0262
+shot_rb	clip_hidden	hand_front	555
+shot_rb	fill_pct	hand_front	63.1093
+shot_rb	clip_hidden	hand_side	555
+shot_rb	fill_pct	hand_side	62.9299
+shot_rb	tags	-	21
+shot_rb	projection_fail	-	0
+pass	ran	shot_capture	1

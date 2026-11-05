@@ -1,5 +1,6 @@
-# 本仓库只放「跑起来需要的东西」：Python 包 + MAXScript + 启动器 + 交接文档。
-# 以下都是开发期资产或跑出来的产物，不进仓库。
+# 仓库里放的是「这套东西 + 它的判据」：Python 包、MAXScript、启动器、两份交接文档、
+# `tests/` 全部，加上 `baselines/` 里那些**读数件**（见下面那条）。
+# 不进仓库的只有两类：一轮实跑生成的**产物**，和从别人有版权的游戏模型导出来的**素材与金标准**。
 
 # 一轮实跑生成的模型产物：单个 .max 191MB 超 GitHub 单文件 100MB 硬上限（直接拒推）；
 # .obj / .mtl / textures 是从游戏 .pmx 抽出来的资源，不该由本仓库分发。
@@ -7,9 +8,10 @@
 test_runs/
 outputs/
 
-# 单元测试（条数以 `cd tests && python -m unittest discover` 的 `Ran N tests` 为准，别在这里抄数）：
-# 开发期资产，本地跑（tools/check_ms.py 那份静态体检随仓库分发）
-tests/
+# 单元测试（条数以 `cd tests && python -m unittest discover` 的 `Ran N tests` 为准，别在这里抄数）
+# **进仓库**（2026-11-05 口径变更，用户拍板转长期）：判据不进版本控制 = 换一台机器或新克隆一份
+# 就是 0 条判据，而 tests/ 里那些 `skipUnless` 会全体静默 skip —— 「缺证据不报错」正是本仓反复堵的
+# 那种默认值。tests/ 只有 `.py`，不含任何游戏资源，所以没有不进的理由。
 
 # v2 时期的工作笔记（本项目是 v3，历史结论已并进 README_HANDOVER.md）
 v2_改进落地说明.txt
@@ -21,6 +23,14 @@ __pycache__/
 *.py[cod]
 .tmp_help/
 
-# 金标准基线是从别人有版权的游戏模型里导出来的（骨名+骨位），
-# 和 test_runs/ 同一个理由：本地跑回归用，不进公开仓库。
-baselines/
+# 基线分两类，只进「闸要读的那一类」：
+#   进 —— `round*`：Max 与驱动**自己写出来的读数**（`*_objrun.log`、`*_driver.log`、
+#          `MMD2MAX.{CFG,REPORT,CHECK,VERDICTS}`、`*_success.json`）。它们是本项目行为的
+#          凭据，`tools/check_baseline.py` 说「数据逐位不变」、`tests/test_passes.py` 做时间轴
+#          对撞用的都是这些件；留在外面等于背书只活在一块盘上。
+#   不进 —— `香菱_*.tsv` 与 `gen17/`：骨名 + 骨位是从别人有版权的游戏模型导出来的金标准，
+#          和 `test_runs/` 同一个理由；`shots_round40/` 是游戏角色的渲染图，同理。
+# 必须写 `baselines/*` 而不是 `baselines/`：整目录被忽略之后，Git 不再进该目录找
+# 反向规则，下面那行 `!` 白名单会静默失效 —— 又是一个「看起来正常」的形状。
+baselines/*
+!baselines/round*

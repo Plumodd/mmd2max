@@ -1,0 +1,636 @@
+﻿phase	check	subject	actual
+pass	ran	scene_prepare	1
+pass	ran	mesh_import	1
+pass	ran	biped_create	1
+fit	segment_count	-	24
+fit	failed_segments	-	0
+fit	cum_len_err_cm	-	4.55379e-05
+pass	ran	fit_segments	1
+pass	ran	apply_widths	1
+pose	placed_nodes	-	25
+pose	failed_nodes	-	0
+pose	missing_nodes	-	0
+pose	hip_residual_cm	-	2.86102e-06
+pass	ran	pose_initial	1
+pass	ran	ankle_recheck	1
+pass	ran	toe_box	1
+converge	raised	1	0
+converge	not_improved	1	0
+converge	dir_over	1	5
+converge	place_sum_cm	1	70.5292
+converge	place_max_cm	1	4.49234
+converge	raised	2	0
+converge	not_improved	2	0
+converge	dir_over	2	5
+converge	place_sum_cm	2	11.6703
+converge	place_max_cm	2	1.45542
+converge	raised	3	0
+converge	not_improved	3	0
+converge	dir_over	3	5
+converge	place_sum_cm	3	11.6558
+converge	place_max_cm	3	1.45542
+converge	iters	-	3
+converge	exit_reason	-	ceiling
+converge	gate_satisfied	-	false
+pass	ran	converge	1
+thigh_roll	knee_err_cm	Bip001 L Thigh	2.74431
+thigh_roll	ankle_err_cm	Bip001 L Thigh	4.23975e-05
+thigh_roll	knee_err_cm	Bip001 R Thigh	2.74477
+thigh_roll	ankle_err_cm	Bip001 R Thigh	6.7554e-05
+pass	ran	thigh_roll	1
+pose_end	placed_nodes	-	25
+pose_end	failed_nodes	-	0
+pose_end	missing_nodes	-	0
+rotate_end	raised	-	0
+rotate_end	not_improved	-	0
+pass	ran	finish_pose	1
+toe_snap	residual_after_roll_cm	Bip001 L Toe0	5.3312e-07
+toe_snap	residual_after_roll_cm	Bip001 R Toe0	4.76837e-07
+pass	ran	toe_snap_roll	1
+pass	ran	foot_reach	1
+toe_snap	residual_after_reach_cm	Bip001 L Toe0	5.3312e-07
+toe_snap	residual_after_reach_cm	Bip001 R Toe0	4.76837e-07
+pass	ran	toe_snap_reach	1
+pass	ran	toe_box_final	1
+pass	ran	figure_exit	1
+foot_yaw	bone_yaw_deg	Bip001 L Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 L Foot	1.60863
+foot_chain	chain_angle_deg	Bip001 L Foot -> Bip001 L Toe0	38.6591
+foot_chain	gap_cm	Bip001 L Foot -> Bip001 L Toe0	0.0
+foot_chain	gap_covered	Bip001 L Foot -> Bip001 L Toe0	true
+foot_yaw	bone_yaw_deg	Bip001 R Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 R Foot	-1.60851
+foot_chain	chain_angle_deg	Bip001 R Foot -> Bip001 R Toe0	38.659
+foot_chain	gap_cm	Bip001 R Foot -> Bip001 R Toe0	4.76837e-07
+foot_chain	gap_covered	Bip001 R Foot -> Bip001 R Toe0	true
+foot_chain	broken_roots	-	2
+foot_chain	gap_unconnected	-	0
+pass	ran	foot_chain_check	1
+segment	len_cm	Bip001 L Clavicle -> Bip001 L UpperArm	7.77025
+segment	len_cm	Bip001 L UpperArm -> Bip001 L Forearm	20.6148
+segment	len_cm	Bip001 L Forearm -> Bip001 L Hand	16.309
+segment	len_cm	Bip001 R Clavicle -> Bip001 R UpperArm	7.77024
+segment	len_cm	Bip001 R UpperArm -> Bip001 R Forearm	20.6147
+segment	len_cm	Bip001 R Forearm -> Bip001 R Hand	16.309
+segment	len_cm	Bip001 Pelvis -> Bip001 L Thigh	6.38092
+segment	len_cm	Bip001 L Thigh -> Bip001 L Calf	31.9167
+segment	len_cm	Bip001 L Calf -> Bip001 L Foot	34.0853
+segment	len_cm	Bip001 L Foot -> Bip001 L Toe0	9.89657
+segment	len_cm	Bip001 Pelvis -> Bip001 R Thigh	6.38092
+segment	len_cm	Bip001 R Thigh -> Bip001 R Calf	31.9167
+segment	len_cm	Bip001 R Calf -> Bip001 R Foot	34.0853
+segment	len_cm	Bip001 R Foot -> Bip001 R Toe0	9.89655
+segment	len_cm	Bip001 L Finger0 -> Bip001 L Finger01	3.29943
+segment	len_cm	Bip001 L Finger1 -> Bip001 L Finger11	2.67283
+segment	len_cm	Bip001 L Finger2 -> Bip001 L Finger21	2.99654
+segment	len_cm	Bip001 R Finger0 -> Bip001 R Finger01	3.29943
+segment	len_cm	Bip001 R Finger1 -> Bip001 R Finger11	2.67282
+segment	len_cm	Bip001 R Finger2 -> Bip001 R Finger21	2.99653
+segment	len_cm	Bip001 Pelvis -> Bip001 Spine	11.9384
+segment	len_cm	Bip001 Spine -> Bip001 Spine1	15.213
+segment	len_cm	Bip001 Spine1 -> Bip001 Neck	20.4092
+segment	len_cm	Bip001 Neck -> Bip001 Head	6.40737
+pass	ran	segment_check	1
+placement	pos_err_cm	Bip001 Head	0.0
+placement	pos_err_cm	Bip001 Neck	0.0
+placement	pos_err_cm	Bip001 Spine	0.0
+placement	pos_err_cm	Bip001 Pelvis	7.82434e-06
+placement	pos_err_cm	Bip001 L Clavicle	0.0
+placement	ray_err_cm	Bip001 L UpperArm	7.63149e-06
+placement	pos_err_cm	Bip001 L UpperArm	1.45542
+placement	pos_err_cm	Bip001 L Forearm	0.75006
+placement	pos_err_cm	Bip001 L Hand	0.462645
+placement	pos_err_cm	Bip001 R Clavicle	0.0
+placement	ray_err_cm	Bip001 R UpperArm	0.0
+placement	pos_err_cm	Bip001 R UpperArm	1.45537
+placement	pos_err_cm	Bip001 R Forearm	0.750021
+placement	pos_err_cm	Bip001 R Hand	0.462646
+placement	pos_err_cm	Bip001 L Thigh	1.53498e-05
+placement	pos_err_cm	Bip001 L Calf	2.74431
+placement	pos_err_cm	Bip001 L Foot	4.29003e-05
+placement	pos_err_cm	Bip001 R Thigh	2.40519e-05
+placement	pos_err_cm	Bip001 R Calf	2.74477
+placement	pos_err_cm	Bip001 R Foot	6.77219e-05
+pass	ran	placement_check	1
+struct_dir	measurable	-	33
+struct_dir	over_tol	-	9
+struct_dir	short_skipped	-	0
+pass	ran	struct_dir_check	1
+box_rb	width_cm	Bip001 L Foot	5.51327
+box_rb	height_cm	Bip001 L Foot	9.89658
+box_rb	length_cm	Bip001 L Foot	9.11287
+box_rb	len_axis	Bip001 L Foot	1
+box_rb	span_want_cm	Bip001 L Foot	13.2983
+box_rb	width_cm	Bip001 L Toe0	6.57422
+box_rb	height_cm	Bip001 L Toe0	1.22323
+box_rb	length_cm	Bip001 L Toe0	7.57061
+box_rb	len_axis	Bip001 L Toe0	1
+box_rb	span_want_cm	Bip001 L Toe0	7.75218
+box_rb	width_cm	Bip001 R Foot	5.51329
+box_rb	height_cm	Bip001 R Foot	9.89658
+box_rb	length_cm	Bip001 R Foot	9.11286
+box_rb	len_axis	Bip001 R Foot	1
+box_rb	span_want_cm	Bip001 R Foot	13.2983
+box_rb	width_cm	Bip001 R Toe0	6.57422
+box_rb	height_cm	Bip001 R Toe0	1.22326
+box_rb	length_cm	Bip001 R Toe0	7.57058
+box_rb	len_axis	Bip001 R Toe0	1
+box_rb	span_want_cm	Bip001 R Toe0	7.75213
+box_rb	hand_scale_cm	Bip001 L Hand	3.7644
+box_rb	hand_box_cm	Bip001 L Hand	2.25625
+box_rb	hand_scale_cm	Bip001 L Finger0	2.7523
+box_rb	hand_box_cm	Bip001 L Finger0	1.25787
+box_rb	hand_scale_cm	Bip001 L Finger1	1.5741
+box_rb	hand_box_cm	Bip001 L Finger1	0.719403
+box_rb	hand_scale_cm	Bip001 L Finger2	1.8815
+box_rb	hand_box_cm	Bip001 L Finger2	0.859893
+box_rb	hand_scale_cm	Bip001 R Hand	3.7642
+box_rb	hand_box_cm	Bip001 R Hand	2.25614
+box_rb	hand_scale_cm	Bip001 R Finger0	2.7522
+box_rb	hand_box_cm	Bip001 R Finger0	1.25782
+box_rb	hand_scale_cm	Bip001 R Finger1	1.5743
+box_rb	hand_box_cm	Bip001 R Finger1	0.719495
+box_rb	hand_scale_cm	Bip001 R Finger2	1.8814
+box_rb	hand_box_cm	Bip001 R Finger2	0.859847
+box_rb	nodes_measured	-	12
+box_rb	read_fail	-	0
+pass	ran	box_verify	1
+accessory	on_biped	-	29
+accessory	on_bone	-	352
+accessory	no_parent	-	0
+pass	ran	accessory_build	1
+mesh	vertex_count	-	5894
+skin	bones	-	415
+skin	written_vertices	-	5894
+skin	failed_vertices	-	0
+pass	ran	skin_apply	1
+skin_rb	links	Bip001 L Foot	121
+skin_rb	links	Bip001 L Toe0	45
+skin_rb	links	Bip001 R Foot	121
+skin_rb	links	Bip001 R Toe0	45
+skin_rb	verts_read	-	5894
+skin_rb	read_fail	-	0
+skin_rb	unmodified_verts	-	0
+skin_rb	index_seq_bad	-	0
+skin_rb	pairs_dropped	-	0
+skin_rb	zero_links	-	0
+skin_rb	verts_no_exp	-	0
+skin_rb	links_expected	-	7999
+skin_rb	links_read	-	7999
+skin_rb	links_missing	-	0
+skin_rb	name_mismatch	-	0
+skin_rb	zero_verts_pre	-	0
+skin_rb	repaired	-	0
+skin_rb	zero_verts	-	0
+skin_rb	dom_mismatch	-	0
+skin_rb	weight_err_max	-	0.0
+skin_rb	sum_err_max	-	1.19209e-07
+skin_rb	link_diff_max	-	0
+skin_rb	link_mismatch_bones	-	0
+skin_rb	elapsed_s	-	0.462
+pass	ran	skin_verify	1
+morpher	blocks	-	7
+morpher	built	-	7
+morpher	with_target	-	7
+morpher	with_name	-	7
+pass	ran	morpher_build	1
+pass	ran	physics_build	1
+bone_rb	dir_deg	6|左目	0.0
+bone_rb	dir_deg	7|左目先	0.0
+bone_rb	dir_deg	8|右目	0.0
+bone_rb	dir_deg	9|右目先	0.0
+bone_rb	dir_deg	28|+HairS L A01	0.0279765
+bone_rb	dir_deg	29|+HairS R A01	0.0
+bone_rb	dir_deg	40|裙_0_0	0.0197823
+bone_rb	dir_deg	41|裙_0_1	0.0
+bone_rb	dir_deg	42|裙_0_2	0.0
+bone_rb	dir_deg	43|裙_0_3	0.0
+bone_rb	dir_deg	44|裙_0_4	0.0
+bone_rb	dir_deg	45|裙_0_5	0.0
+bone_rb	dir_deg	46|裙_0_6	0.0
+bone_rb	dir_deg	47|裙_0_7	0.0
+bone_rb	dir_deg	48|裙_0_8	0.0
+bone_rb	dir_deg	49|裙_0_9	0.0
+bone_rb	dir_deg	50|裙_0_10	0.0
+bone_rb	dir_deg	51|裙_0_11	0.0
+bone_rb	dir_deg	52|裙_0_12	0.0
+bone_rb	dir_deg	53|裙_0_13	0.0
+bone_rb	dir_deg	54|裙_0_14	0.0
+bone_rb	dir_deg	55|裙_0_15	0.0
+bone_rb	dir_deg	56|裙_0_16	0.0
+bone_rb	dir_deg	57|裙_0_17	0.0
+bone_rb	dir_deg	58|裙_0_18	0.0
+bone_rb	dir_deg	59|裙_0_19	0.0
+bone_rb	dir_deg	60|裙_0_20	0.0
+bone_rb	dir_deg	61|裙_0_21	0.0
+bone_rb	dir_deg	62|裙_0_22	0.0
+bone_rb	dir_deg	63|裙_0_23	0.0
+bone_rb	dir_deg	64|裙_0_24	0.0
+bone_rb	dir_deg	65|裙_1_0	0.0
+bone_rb	dir_deg	66|裙_1_1	0.0197823
+bone_rb	dir_deg	67|裙_1_2	0.0
+bone_rb	dir_deg	68|裙_1_3	0.0
+bone_rb	dir_deg	69|裙_1_4	0.0
+bone_rb	dir_deg	70|裙_1_5	0.0
+bone_rb	dir_deg	71|裙_1_6	0.0
+bone_rb	dir_deg	72|裙_1_7	0.0
+bone_rb	dir_deg	73|裙_1_8	0.0
+bone_rb	dir_deg	74|裙_1_9	0.0
+bone_rb	dir_deg	75|裙_1_10	0.0
+bone_rb	dir_deg	76|裙_1_11	0.0
+bone_rb	dir_deg	77|裙_1_12	0.0
+bone_rb	dir_deg	78|裙_1_13	0.0
+bone_rb	dir_deg	79|裙_1_14	0.0
+bone_rb	dir_deg	80|裙_1_15	0.0
+bone_rb	dir_deg	81|裙_1_16	0.0197823
+bone_rb	dir_deg	82|裙_1_17	0.0197823
+bone_rb	dir_deg	83|裙_1_18	0.0
+bone_rb	dir_deg	84|裙_1_19	0.0
+bone_rb	dir_deg	85|裙_1_20	0.0
+bone_rb	dir_deg	86|裙_1_21	0.0
+bone_rb	dir_deg	87|裙_1_22	0.0
+bone_rb	dir_deg	88|裙_1_23	0.0
+bone_rb	dir_deg	89|裙_1_24	0.0197823
+bone_rb	dir_deg	90|裙_2_0	0.0197823
+bone_rb	dir_deg	91|裙_2_1	0.0
+bone_rb	dir_deg	92|裙_2_2	0.0
+bone_rb	dir_deg	93|裙_2_3	0.0
+bone_rb	dir_deg	94|裙_2_4	0.0
+bone_rb	dir_deg	95|裙_2_5	0.0
+bone_rb	dir_deg	96|裙_2_6	0.0
+bone_rb	dir_deg	97|裙_2_7	0.0
+bone_rb	dir_deg	98|裙_2_8	0.0
+bone_rb	dir_deg	99|裙_2_9	0.0
+bone_rb	dir_deg	100|裙_2_10	0.034264
+bone_rb	dir_deg	101|裙_2_11	0.0
+bone_rb	dir_deg	102|裙_2_12	0.0
+bone_rb	dir_deg	103|裙_2_13	0.0
+bone_rb	dir_deg	104|裙_2_14	0.0
+bone_rb	dir_deg	105|裙_2_15	0.0197823
+bone_rb	dir_deg	106|裙_2_16	0.0
+bone_rb	dir_deg	107|裙_2_17	0.0
+bone_rb	dir_deg	108|裙_2_18	0.0
+bone_rb	dir_deg	109|裙_2_19	0.0
+bone_rb	dir_deg	110|裙_2_20	0.0
+bone_rb	dir_deg	111|裙_2_21	0.0197823
+bone_rb	dir_deg	112|裙_2_22	0.0
+bone_rb	dir_deg	113|裙_2_23	0.0
+bone_rb	dir_deg	114|裙_2_24	0.0
+bone_rb	dir_deg	115|裙_3_0	0.0
+bone_rb	dir_deg	116|裙_3_1	0.0
+bone_rb	dir_deg	117|裙_3_2	0.0
+bone_rb	dir_deg	118|裙_3_3	0.0
+bone_rb	dir_deg	119|裙_3_4	0.0
+bone_rb	dir_deg	120|裙_3_5	0.0
+bone_rb	dir_deg	121|裙_3_6	0.0
+bone_rb	dir_deg	122|裙_3_7	0.0
+bone_rb	dir_deg	123|裙_3_8	0.0
+bone_rb	dir_deg	124|裙_3_9	0.0
+bone_rb	dir_deg	125|裙_3_10	0.0
+bone_rb	dir_deg	126|裙_3_11	0.0
+bone_rb	dir_deg	127|裙_3_12	0.0
+bone_rb	dir_deg	128|裙_3_13	0.0
+bone_rb	dir_deg	129|裙_3_14	0.0
+bone_rb	dir_deg	130|裙_3_15	0.0
+bone_rb	dir_deg	131|裙_3_16	0.0
+bone_rb	dir_deg	132|裙_3_17	0.0
+bone_rb	dir_deg	133|裙_3_18	0.0197823
+bone_rb	dir_deg	134|裙_3_19	0.0
+bone_rb	dir_deg	135|裙_3_20	0.0
+bone_rb	dir_deg	136|裙_3_21	0.0
+bone_rb	dir_deg	137|裙_3_22	0.0197823
+bone_rb	dir_deg	138|裙_3_23	0.0
+bone_rb	dir_deg	139|裙_3_24	0.0
+bone_rb	dir_deg	140|裙_4_0	0.0
+bone_rb	dir_deg	141|裙_4_1	0.0
+bone_rb	dir_deg	142|裙_4_2	0.0197823
+bone_rb	dir_deg	143|裙_4_3	0.0
+bone_rb	dir_deg	144|裙_4_4	0.0
+bone_rb	dir_deg	145|裙_4_5	0.0197823
+bone_rb	dir_deg	146|裙_4_6	0.0
+bone_rb	dir_deg	147|裙_4_7	0.0
+bone_rb	dir_deg	148|裙_4_8	0.0
+bone_rb	dir_deg	149|裙_4_9	0.0
+bone_rb	dir_deg	150|裙_4_10	0.0
+bone_rb	dir_deg	151|裙_4_11	0.0
+bone_rb	dir_deg	152|裙_4_12	0.0
+bone_rb	dir_deg	153|裙_4_13	0.0
+bone_rb	dir_deg	154|裙_4_14	0.0
+bone_rb	dir_deg	155|裙_4_15	0.0
+bone_rb	dir_deg	156|裙_4_16	0.0
+bone_rb	dir_deg	157|裙_4_17	0.0
+bone_rb	dir_deg	158|裙_4_18	0.0
+bone_rb	dir_deg	159|裙_4_19	0.0
+bone_rb	dir_deg	160|裙_4_20	0.0
+bone_rb	dir_deg	161|裙_4_21	0.0
+bone_rb	dir_deg	162|裙_4_22	0.0
+bone_rb	dir_deg	163|裙_4_23	0.0
+bone_rb	dir_deg	164|裙_4_24	0.0
+bone_rb	dir_deg	165|裙_5_0	0.0
+bone_rb	dir_deg	166|裙_5_1	0.0
+bone_rb	dir_deg	167|裙_5_2	0.0
+bone_rb	dir_deg	168|裙_5_3	0.0197823
+bone_rb	dir_deg	169|裙_5_4	0.0
+bone_rb	dir_deg	170|裙_5_5	0.0
+bone_rb	dir_deg	171|裙_5_6	0.0
+bone_rb	dir_deg	172|裙_5_7	0.0
+bone_rb	dir_deg	173|裙_5_8	0.0
+bone_rb	dir_deg	174|裙_5_9	0.0
+bone_rb	dir_deg	175|裙_5_10	0.0197823
+bone_rb	dir_deg	176|裙_5_11	0.0
+bone_rb	dir_deg	177|裙_5_12	0.0
+bone_rb	dir_deg	178|裙_5_13	0.0
+bone_rb	dir_deg	179|裙_5_14	0.0
+bone_rb	dir_deg	180|裙_5_15	0.0
+bone_rb	dir_deg	181|裙_5_16	0.0
+bone_rb	dir_deg	182|裙_5_17	0.0
+bone_rb	dir_deg	183|裙_5_18	0.0
+bone_rb	dir_deg	184|裙_5_19	0.0
+bone_rb	dir_deg	185|裙_5_20	0.0
+bone_rb	dir_deg	186|裙_5_21	0.0
+bone_rb	dir_deg	187|裙_5_22	0.0
+bone_rb	dir_deg	188|裙_5_23	0.0
+bone_rb	dir_deg	189|裙_5_24	0.0
+bone_rb	dir_deg	190|裙_6_0	0.0
+bone_rb	dir_deg	191|裙_6_1	0.0
+bone_rb	dir_deg	192|裙_6_2	0.0
+bone_rb	dir_deg	193|裙_6_3	0.0
+bone_rb	dir_deg	194|裙_6_4	0.0
+bone_rb	dir_deg	195|裙_6_5	0.0
+bone_rb	dir_deg	196|裙_6_6	0.0
+bone_rb	dir_deg	197|裙_6_7	0.0
+bone_rb	dir_deg	198|裙_6_8	0.0
+bone_rb	dir_deg	199|裙_6_9	0.0
+bone_rb	dir_deg	200|裙_6_10	0.0
+bone_rb	dir_deg	201|裙_6_11	0.0
+bone_rb	dir_deg	202|裙_6_12	0.0
+bone_rb	dir_deg	203|裙_6_13	0.0
+bone_rb	dir_deg	204|裙_6_14	0.0197823
+bone_rb	dir_deg	205|裙_6_15	0.0
+bone_rb	dir_deg	206|裙_6_16	0.0
+bone_rb	dir_deg	207|裙_6_17	0.0
+bone_rb	dir_deg	208|裙_6_18	0.0
+bone_rb	dir_deg	209|裙_6_19	0.0
+bone_rb	dir_deg	210|裙_6_20	0.0
+bone_rb	dir_deg	211|裙_6_21	0.0
+bone_rb	dir_deg	212|裙_6_22	0.0
+bone_rb	dir_deg	213|裙_6_23	0.0
+bone_rb	dir_deg	214|裙_6_24	0.0
+bone_rb	dir_deg	215|裙_7_0	0.0
+bone_rb	dir_deg	216|裙_7_1	0.0
+bone_rb	dir_deg	217|裙_7_2	0.0
+bone_rb	dir_deg	218|裙_7_3	0.0
+bone_rb	dir_deg	219|裙_7_4	0.0
+bone_rb	dir_deg	220|裙_7_5	0.0
+bone_rb	dir_deg	221|裙_7_6	0.0197823
+bone_rb	dir_deg	222|裙_7_7	0.0
+bone_rb	dir_deg	223|裙_7_8	0.0
+bone_rb	dir_deg	224|裙_7_9	0.0
+bone_rb	dir_deg	225|裙_7_10	0.0
+bone_rb	dir_deg	226|裙_7_11	0.0
+bone_rb	dir_deg	227|裙_7_12	0.0
+bone_rb	dir_deg	228|裙_7_13	0.0197823
+bone_rb	dir_deg	229|裙_7_14	0.0
+bone_rb	dir_deg	230|裙_7_15	0.0
+bone_rb	dir_deg	231|裙_7_16	0.0
+bone_rb	dir_deg	232|裙_7_17	0.0
+bone_rb	dir_deg	233|裙_7_18	0.0
+bone_rb	dir_deg	234|裙_7_19	0.0
+bone_rb	dir_deg	235|裙_7_20	0.0
+bone_rb	dir_deg	236|裙_7_21	0.0
+bone_rb	dir_deg	237|裙_7_22	0.0
+bone_rb	dir_deg	238|裙_7_23	0.0
+bone_rb	dir_deg	239|裙_7_24	0.0
+bone_rb	dir_deg	240|裙_8_0	0.0
+bone_rb	dir_deg	241|裙_8_1	0.0
+bone_rb	dir_deg	242|裙_8_2	0.0
+bone_rb	dir_deg	243|裙_8_3	0.0
+bone_rb	dir_deg	244|裙_8_4	0.0
+bone_rb	dir_deg	245|裙_8_5	0.0
+bone_rb	dir_deg	246|裙_8_6	0.0
+bone_rb	dir_deg	247|裙_8_7	0.0197823
+bone_rb	dir_deg	248|裙_8_8	0.0
+bone_rb	dir_deg	249|裙_8_9	0.0
+bone_rb	dir_deg	250|裙_8_10	0.0
+bone_rb	dir_deg	251|裙_8_11	0.0
+bone_rb	dir_deg	252|裙_8_12	0.0
+bone_rb	dir_deg	253|裙_8_13	0.0
+bone_rb	dir_deg	254|裙_8_14	0.0
+bone_rb	dir_deg	255|裙_8_15	0.0
+bone_rb	dir_deg	256|裙_8_16	0.0
+bone_rb	dir_deg	257|裙_8_17	0.0
+bone_rb	dir_deg	258|裙_8_18	0.0
+bone_rb	dir_deg	259|裙_8_19	0.0197823
+bone_rb	dir_deg	260|裙_8_20	0.0
+bone_rb	dir_deg	261|裙_8_21	0.0
+bone_rb	dir_deg	262|裙_8_22	0.0
+bone_rb	dir_deg	263|裙_8_23	0.0
+bone_rb	dir_deg	264|裙_8_24	0.0
+bone_rb	dir_deg	265|裙_9_0	0.0
+bone_rb	dir_deg	266|裙_9_1	0.0
+bone_rb	dir_deg	267|裙_9_2	0.0
+bone_rb	dir_deg	268|裙_9_3	0.0197823
+bone_rb	dir_deg	269|裙_9_4	0.0
+bone_rb	dir_deg	270|裙_9_5	0.0
+bone_rb	dir_deg	271|裙_9_6	0.0
+bone_rb	dir_deg	272|裙_9_7	0.0
+bone_rb	dir_deg	273|裙_9_8	0.0
+bone_rb	dir_deg	274|裙_9_9	0.0
+bone_rb	dir_deg	275|裙_9_10	0.0
+bone_rb	dir_deg	276|裙_9_11	0.0
+bone_rb	dir_deg	277|裙_9_12	0.0
+bone_rb	dir_deg	278|裙_9_13	0.0
+bone_rb	dir_deg	279|裙_9_14	0.0
+bone_rb	dir_deg	280|裙_9_15	0.0
+bone_rb	dir_deg	281|裙_9_16	0.0
+bone_rb	dir_deg	282|裙_9_17	0.0
+bone_rb	dir_deg	283|裙_9_18	0.0
+bone_rb	dir_deg	284|裙_9_19	0.0
+bone_rb	dir_deg	285|裙_9_20	0.0
+bone_rb	dir_deg	286|裙_9_21	0.0197823
+bone_rb	dir_deg	287|裙_9_22	0.0197823
+bone_rb	dir_deg	288|裙_9_23	0.0
+bone_rb	dir_deg	289|裙_9_24	0.0
+bone_rb	dir_deg	290|裙_10_0	0.0
+bone_rb	dir_deg	291|裙_10_1	0.0
+bone_rb	dir_deg	292|裙_10_2	0.0
+bone_rb	dir_deg	293|裙_10_3	0.0
+bone_rb	dir_deg	294|裙_10_4	0.0
+bone_rb	dir_deg	295|裙_10_5	0.0
+bone_rb	dir_deg	296|裙_10_6	0.0
+bone_rb	dir_deg	297|裙_10_7	0.0
+bone_rb	dir_deg	298|裙_10_8	0.0
+bone_rb	dir_deg	299|裙_10_9	0.0
+bone_rb	dir_deg	300|裙_10_10	0.0
+bone_rb	dir_deg	301|裙_10_11	0.0
+bone_rb	dir_deg	302|裙_10_12	0.0
+bone_rb	dir_deg	303|裙_10_13	0.0
+bone_rb	dir_deg	304|裙_10_14	0.0197823
+bone_rb	dir_deg	305|裙_10_15	0.0
+bone_rb	dir_deg	306|裙_10_16	0.0
+bone_rb	dir_deg	307|裙_10_17	0.0
+bone_rb	dir_deg	308|裙_10_18	0.0
+bone_rb	dir_deg	309|裙_10_19	0.0
+bone_rb	dir_deg	310|裙_10_20	0.0
+bone_rb	dir_deg	311|裙_10_21	0.0
+bone_rb	dir_deg	312|裙_10_22	0.0
+bone_rb	dir_deg	313|裙_10_23	0.0
+bone_rb	dir_deg	314|裙_10_24	0.0
+bone_rb	dir_deg	315|裙_11_0	0.0
+bone_rb	dir_deg	316|裙_11_1	0.0
+bone_rb	dir_deg	317|裙_11_2	0.0
+bone_rb	dir_deg	318|裙_11_3	0.0197823
+bone_rb	dir_deg	319|裙_11_4	0.0
+bone_rb	dir_deg	320|裙_11_5	0.0
+bone_rb	dir_deg	321|裙_11_6	0.0279765
+bone_rb	dir_deg	322|裙_11_7	0.0
+bone_rb	dir_deg	323|裙_11_8	0.0
+bone_rb	dir_deg	324|裙_11_9	0.0
+bone_rb	dir_deg	325|裙_11_10	0.0
+bone_rb	dir_deg	326|裙_11_11	0.0
+bone_rb	dir_deg	327|裙_11_12	0.0
+bone_rb	dir_deg	328|裙_11_13	0.0
+bone_rb	dir_deg	329|裙_11_14	0.0
+bone_rb	dir_deg	330|裙_11_15	0.0
+bone_rb	dir_deg	331|裙_11_16	0.0
+bone_rb	dir_deg	332|裙_11_17	0.0
+bone_rb	dir_deg	333|裙_11_18	0.0
+bone_rb	dir_deg	334|裙_11_19	0.0
+bone_rb	dir_deg	335|裙_11_20	0.0
+bone_rb	dir_deg	336|裙_11_21	0.0
+bone_rb	dir_deg	337|裙_11_22	0.0
+bone_rb	dir_deg	338|裙_11_23	0.0
+bone_rb	dir_deg	339|裙_11_24	0.0
+bone_rb	dir_deg	340|裙_12_0	0.0197823
+bone_rb	dir_deg	341|裙_12_1	0.0
+bone_rb	dir_deg	342|裙_12_2	0.0
+bone_rb	dir_deg	343|裙_12_3	0.0279765
+bone_rb	dir_deg	344|裙_12_4	0.0
+bone_rb	dir_deg	345|裙_12_5	0.0
+bone_rb	dir_deg	346|裙_12_6	0.0279765
+bone_rb	dir_deg	347|裙_12_7	0.0
+bone_rb	dir_deg	348|裙_12_8	0.0
+bone_rb	dir_deg	349|裙_12_9	0.0
+bone_rb	dir_deg	350|裙_12_10	0.0
+bone_rb	dir_deg	351|裙_12_11	0.0
+bone_rb	dir_deg	352|裙_12_12	0.0
+bone_rb	dir_deg	353|裙_12_13	0.0
+bone_rb	dir_deg	354|裙_12_14	0.0
+bone_rb	dir_deg	355|裙_12_15	0.0197823
+bone_rb	dir_deg	356|裙_12_16	0.0
+bone_rb	dir_deg	357|裙_12_17	0.0
+bone_rb	dir_deg	358|裙_12_18	0.0
+bone_rb	dir_deg	359|裙_12_19	0.0
+bone_rb	dir_deg	360|裙_12_20	0.0
+bone_rb	dir_deg	361|裙_12_21	0.0
+bone_rb	dir_deg	362|裙_12_22	0.0
+bone_rb	dir_deg	363|裙_12_23	0.0
+bone_rb	dir_deg	364|裙_12_24	0.0
+bone_rb	dir_deg	365|裙_13_0	0.0
+bone_rb	dir_deg	366|裙_13_1	0.0
+bone_rb	dir_deg	367|裙_13_2	0.0
+bone_rb	dir_deg	368|裙_13_3	0.0
+bone_rb	dir_deg	369|裙_13_4	0.0
+bone_rb	dir_deg	370|裙_13_5	0.0
+bone_rb	dir_deg	371|裙_13_6	0.0197823
+bone_rb	dir_deg	372|裙_13_7	0.0
+bone_rb	dir_deg	373|裙_13_8	0.0
+bone_rb	dir_deg	374|裙_13_9	0.0
+bone_rb	dir_deg	375|裙_13_10	0.0
+bone_rb	dir_deg	376|裙_13_11	0.0197823
+bone_rb	dir_deg	377|裙_13_12	0.0
+bone_rb	dir_deg	378|裙_13_13	0.0
+bone_rb	dir_deg	379|裙_13_14	0.0197823
+bone_rb	dir_deg	380|裙_13_15	0.0
+bone_rb	dir_deg	381|裙_13_16	0.0
+bone_rb	dir_deg	382|裙_13_17	0.0
+bone_rb	dir_deg	383|裙_13_18	0.0
+bone_rb	dir_deg	384|裙_13_19	0.0
+bone_rb	dir_deg	385|裙_13_20	0.0
+bone_rb	dir_deg	386|裙_13_21	0.0
+bone_rb	dir_deg	387|裙_13_22	0.0
+bone_rb	dir_deg	388|裙_13_23	0.0
+bone_rb	dir_deg	389|裙_13_24	0.0
+bone_rb	measurable	-	356
+bone_rb	short_skipped	-	25
+bone_rb	read_fail	-	0
+bone_rb	over_tol	-	0
+bone_rb	worst_deg	-	0.034264
+bone_rb	worst_bone	-	100|裙_2_10
+bone_rb	pivot_max_cm	-	1.54513e-05
+bone_rb	pivot_max_bone	-	9|右目先
+pass	ran	bone_dir_verify	1
+shot_rb	chest_box_lo	x	-60.736
+shot_rb	chest_box_hi	x	60.736
+shot_rb	chest_box_lo	y	-31.0689
+shot_rb	chest_box_hi	y	35.1261
+shot_rb	chest_box_lo	z	77.7561
+shot_rb	chest_box_hi	z	99.1553
+shot_rb	neck_box_lo	x	-16.0
+shot_rb	neck_box_hi	x	19.48
+shot_rb	neck_box_lo	y	-16.9866
+shot_rb	neck_box_hi	y	20.6739
+shot_rb	neck_box_lo	z	108.643
+shot_rb	neck_box_hi	z	141.499
+shot_rb	clip_bones_total	-	objects=1496 认定为骨=416 Editable_mesh=8 Biped_Object=35 Dummy=709 Capsule=11 BoneGeometry=381 Sphere=2 Box=350
+shot_rb	clip_hidden	front	0
+shot_rb	fill_pct	front	62.998
+shot_rb	clip_hidden	side	0
+shot_rb	fill_pct	side	63.1565
+shot_rb	clip_hidden	top	0
+shot_rb	fill_pct	top	32.8958
+shot_rb	clip_hidden	bone_front	0
+shot_rb	fill_pct	bone_front	62.8514
+shot_rb	clip_hidden	bone_side	0
+shot_rb	fill_pct	bone_side	63.0096
+shot_rb	clip_hidden	bone_foot_side	411
+shot_rb	fill_pct	bone_foot_side	62.2512
+shot_rb	clip_hidden	bone_foot_front	411
+shot_rb	fill_pct	bone_foot_front	49.3862
+shot_rb	clip_hidden	bone_foot_top	411
+shot_rb	fill_pct	bone_foot_top	38.1696
+shot_rb	tight_h_lo	bone_chest_front	-12.2514
+shot_rb	tight_h_hi	bone_chest_front	12.2515
+shot_rb	clip_hidden	bone_chest_front	312
+shot_rb	fill_pct	bone_chest_front	63.023
+shot_rb	tight_h_lo	bone_chest_side	-10.2229
+shot_rb	tight_h_hi	bone_chest_side	14.2801
+shot_rb	clip_hidden	bone_chest_side	249
+shot_rb	fill_pct	bone_chest_side	63.1075
+shot_rb	tight_h_lo	bone_chest_top	-37.8979
+shot_rb	tight_h_hi	bone_chest_top	37.8979
+shot_rb	clip_hidden	bone_chest_top	224
+shot_rb	fill_pct	bone_chest_top	63.0486
+shot_rb	tight_h_lo	chest_front	-12.2514
+shot_rb	tight_h_hi	chest_front	12.2515
+shot_rb	clip_hidden	chest_front	312
+shot_rb	fill_pct	chest_front	62.7866
+shot_rb	tight_h_lo	chest_side	-10.2229
+shot_rb	tight_h_hi	chest_side	14.2801
+shot_rb	clip_hidden	chest_side	249
+shot_rb	fill_pct	chest_side	62.8708
+shot_rb	tight_h_lo	chest_top	-37.8979
+shot_rb	tight_h_hi	chest_top	37.8979
+shot_rb	clip_hidden	chest_top	224
+shot_rb	fill_pct	chest_top	63.0782
+shot_rb	tight_h_lo	neck_side	-16.967
+shot_rb	tight_h_hi	neck_side	20.6543
+shot_rb	clip_hidden	neck_side	404
+shot_rb	fill_pct	neck_side	62.9613
+shot_rb	tight_h_lo	neck_front	-16.0
+shot_rb	tight_h_hi	neck_front	19.48
+shot_rb	clip_hidden	neck_front	404
+shot_rb	fill_pct	neck_front	63.0022
+shot_rb	clip_hidden	foot_side	411
+shot_rb	fill_pct	foot_side	62.9944
+shot_rb	clip_hidden	foot_front	411
+shot_rb	fill_pct	foot_front	49.0462
+shot_rb	clip_hidden	foot_top	411
+shot_rb	fill_pct	foot_top	38.1885
+shot_rb	clip_hidden	hand_front	409
+shot_rb	fill_pct	hand_front	63.1961
+shot_rb	clip_hidden	hand_side	409
+shot_rb	fill_pct	hand_side	63.0735
+shot_rb	tags	-	21
+shot_rb	projection_fail	-	0
+pass	ran	shot_capture	1

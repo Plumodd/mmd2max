@@ -1,0 +1,63 @@
+[13:55:09] skin=True physics=False shot=True manual=False gen_only=False
+[13:55:09] 权重文件 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\香菱-海灯节_weights.tsv 顶点数 24921
+[13:55:10] 已生成脚本 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\mmd2max_run.ms
+[13:55:10] 判据规格 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\MMD2MAX.VERDICTS：843 行
+[13:55:10] 3ds Max：C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe（2022）
+[13:55:10] 3dsmax pid=43900（-U MAXScript 执行 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\mmd2max_run.ms）
+[13:55:29]   | 输出: C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\香菱-海灯节.max
+[13:55:29]   | 期望顶点数: 24921
+[13:55:29]   | 2026/11/4 13:55:27  配置来自 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\MMD2MAX.CFG（42 项） 顶点 24921 脊柱 2 手指 5x3 脚盒压平轴=true 胸框=x-21.1504..21.1504 y-27.5332..13.1717 z103.551..131.665 颈框=x-15.9999..19.223 y-21.7921..15.9598 z116.69..149.548 蒙皮=true 方向容差=3.0 扭转容差=1.0 趾落位容差=0.5 盒隙容差=0.5 脚链拉伸=true 快照回滚=false 回滚触发=0.05 收敛上限=3 规格=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\MMD2MAX.VERDICTS 报告=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\MMD2MAX.REPORT
+[13:55:29]   | 2026/11/4 13:55:28  场景已重置。
+[13:55:29]   | 2026/11/4 13:55:28  导入 OBJ：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\model.obj
+[13:55:29]   | 2026/11/4 13:55:28  无法修改 OBJ 导入器选项，沿用 Max 当前设置（请确认未启用 Weld）。
+[13:55:34]   | 2026/11/4 13:55:33  权重进度：20000/24921
+[13:55:34]   | 2026/11/4 13:55:33  权重写入耗时：0.879 秒，已写入顶点 24921，失败顶点 0
+[13:55:34]   | 2026/11/4 13:55:33    蒙皮覆盖 Bip001 L Foot 顶点=0
+[13:55:34]   | 2026/11/4 13:55:33    蒙皮覆盖 Bip001 R Foot 顶点=0
+[13:55:34]   | 2026/11/4 13:55:33    蒙皮覆盖 Bip001 R Toe0 顶点=0
+[13:55:34]   | 2026/11/4 13:55:33    蒙皮覆盖 Bip001 L Toe0 顶点=0
+[13:55:39]   | 2026/11/4 13:55:35    回读进度：5000/24921
+[13:55:39]   | 2026/11/4 13:55:35    回读进度：10000/24921
+[13:55:39]   | 2026/11/4 13:55:35    回读进度：15000/24921
+[13:55:39]   | 2026/11/4 13:55:35    回读进度：20000/24921
+[13:55:39]   | 2026/11/4 13:55:35  蒙皮回读：24921/24921 顶点，未写入=0，零权重=0（补前 0，补救重写 0），主控不符=0，缺失链路=332，链路 期望/回读=45865/45533，最大权重误差=1.19209e-07，耗时 2.067 秒
+[13:55:39]   | 2026/11/4 13:55:37  WM3_MC_BuildFromNode 类型：Primitive 可用=true
+[13:56:09]   | 2026/11/4 13:56:07  截图 hand_side 取景填充=63.2948% 框=[34.7433,-10.2605,82.8218]..[56.95,9.15192,102.396]
+[13:56:09]   | 2026/11/4 13:56:07  截图 hand_side 视口已缩放
+[13:56:09]   | 2026/11/4 13:56:07  截图 hand_side 取图 class=BitMap
+[13:56:09]   | 2026/11/4 13:56:07  截图 hand_side 落盘=true -> C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\shots\香菱-海灯节_hand_side.png
+[13:56:09]   | 2026/11/4 13:56:07  截图取景：量到=21 投不出=0 最小纵向填充=26.0773%
+[13:56:09]   | 2026/11/4 13:56:07  非交互模式：quitMax() 正常退出（避免上层 taskkill /F 累积崩溃计数）。
+[13:56:09] 成功标记已出现（.max 已落盘），继续等视口截图抓完、Max 自行退出
+[13:56:14] 3ds Max 已正常退出（崩溃计数未被污染）
+[13:56:14] 完成：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱-海灯节\香菱-海灯节.max
+[13:56:14]   [FAIL] segment/len_cm Bip001 Spine1 -> Bip001 Neck (gate) 期望=17.898357 实报=17.9546 —— |17.9546 - 17.898357| = 0.05624299999999849 > 0.05
+[13:56:14]   [FAIL] skin_rb/link_diff_max - (gate) 期望=0 实报=71 —— |71.0 - 0.0| = 71.0 > 0.0
+[13:56:14]   [FAIL] skin_rb/link_mismatch_bones - (gate) 期望=0 实报=11 —— |11.0 - 0.0| = 11.0 > 0.0
+[13:56:14]   [FAIL] skin_rb/links_missing - (gate) 期望=0 实报=332 —— |332.0 - 0.0| = 332.0 > 0.0
+[13:56:14]   [FAIL] skin_rb/links_read - (gate) 期望=45865 实报=45533 —— |45533.0 - 45865.0| = 332.0 > 0.0
+[13:56:14]   [SKIP] pass/ran foot_reach_guard (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] pass/ran physics_build (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] pass/ran rollback_selftest (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] placement/pos_err_cm Bip001 Spine2 (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/angle_deg - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/box_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_after_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_before_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_restore_angle_deg - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_restore_box_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_restore_pos_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_restore_scale_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_restored - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/foot_worse_bones - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/guard_fired - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/guard_saved - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/loaded - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/perturb_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/perturbed_bone - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/pos_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/saved - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/scale_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14]   [SKIP] rollback/snap_cost_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[13:56:14] 判据汇总：通过 815，失败 5，未跑 23 （gate/lock/min/max 失败 5）；报告共 820 行，规格 843 行
+[13:56:14] ⇒ 本轮验收不通过

@@ -1,0 +1,214 @@
+﻿phase	check	subject	actual
+pass	ran	scene_prepare	1
+pass	ran	mesh_import	1
+pass	ran	biped_create	1
+fit	segment_count	-	39
+fit	failed_segments	-	0
+fit	cum_len_err_cm	-	0.224741
+pass	ran	fit_segments	1
+pass	ran	apply_widths	1
+pose	placed_nodes	-	30
+pose	failed_nodes	-	0
+pose	missing_nodes	-	0
+pose	hip_residual_cm	-	2.6226e-06
+pass	ran	pose_initial	1
+pass	ran	ankle_recheck	1
+pass	ran	toe_box	1
+converge	raised	1	0
+converge	not_improved	1	0
+converge	dir_over	1	4
+converge	place_sum_cm	1	146.513
+converge	place_max_cm	1	5.6995
+converge	raised	2	0
+converge	not_improved	2	0
+converge	dir_over	2	5
+converge	place_sum_cm	2	64.9124
+converge	place_max_cm	2	5.6995
+converge	raised	3	0
+converge	not_improved	3	0
+converge	dir_over	3	5
+converge	place_sum_cm	3	63.0287
+converge	place_max_cm	3	5.6995
+converge	iters	-	3
+converge	exit_reason	-	ceiling
+converge	gate_satisfied	-	false
+pass	ran	converge	1
+thigh_roll	knee_err_cm	Bip001 L Thigh	0.158355
+thigh_roll	ankle_err_cm	Bip001 L Thigh	7.05655e-06
+thigh_roll	knee_err_cm	Bip001 R Thigh	0.246829
+thigh_roll	ankle_err_cm	Bip001 R Thigh	3.34305e-05
+pass	ran	thigh_roll	1
+pose_end	placed_nodes	-	30
+pose_end	failed_nodes	-	0
+pose_end	missing_nodes	-	0
+rotate_end	raised	-	0
+rotate_end	not_improved	-	0
+pass	ran	finish_pose	1
+toe_snap	residual_after_roll_cm	Bip001 L Toe0	0.0
+toe_snap	residual_after_roll_cm	Bip001 R Toe0	9.61096e-07
+pass	ran	toe_snap_roll	1
+pass	ran	foot_reach	1
+toe_snap	residual_after_reach_cm	Bip001 L Toe0	4.76837e-07
+toe_snap	residual_after_reach_cm	Bip001 R Toe0	9.61096e-07
+pass	ran	toe_snap_reach	1
+pass	ran	figure_exit	1
+foot_yaw	bone_yaw_deg	Bip001 L Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 L Foot	0.0
+foot_chain	chain_angle_deg	Bip001 L Foot -> Bip001 L Toe0	29.8725
+foot_chain	gap_cm	Bip001 L Foot -> Bip001 L Toe0	-9.53674e-07
+foot_chain	gap_covered	Bip001 L Foot -> Bip001 L Toe0	true
+foot_yaw	bone_yaw_deg	Bip001 R Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 R Foot	0.0
+foot_chain	chain_angle_deg	Bip001 R Foot -> Bip001 R Toe0	29.8929
+foot_chain	gap_cm	Bip001 R Foot -> Bip001 R Toe0	9.53674e-07
+foot_chain	gap_covered	Bip001 R Foot -> Bip001 R Toe0	true
+foot_chain	broken_roots	-	2
+foot_chain	gap_unconnected	-	0
+pass	ran	foot_chain_check	1
+segment	len_cm	Bip001 L Clavicle -> Bip001 L UpperArm	8.22213
+segment	len_cm	Bip001 L UpperArm -> Bip001 L Forearm	19.5224
+segment	len_cm	Bip001 L Forearm -> Bip001 L Hand	16.6452
+segment	len_cm	Bip001 R Clavicle -> Bip001 R UpperArm	8.22212
+segment	len_cm	Bip001 R UpperArm -> Bip001 R Forearm	19.5224
+segment	len_cm	Bip001 R Forearm -> Bip001 R Hand	16.6452
+segment	len_cm	Bip001 Pelvis -> Bip001 L Thigh	6.95583
+segment	len_cm	Bip001 L Thigh -> Bip001 L Calf	36.3827
+segment	len_cm	Bip001 L Calf -> Bip001 L Foot	38.0685
+segment	len_cm	Bip001 L Foot -> Bip001 L Toe0	11.2281
+segment	len_cm	Bip001 Pelvis -> Bip001 R Thigh	6.95583
+segment	len_cm	Bip001 R Thigh -> Bip001 R Calf	36.3827
+segment	len_cm	Bip001 R Calf -> Bip001 R Foot	38.0686
+segment	len_cm	Bip001 R Foot -> Bip001 R Toe0	11.2281
+segment	len_cm	Bip001 L Finger0 -> Bip001 L Finger01	2.34429
+segment	len_cm	Bip001 L Finger01 -> Bip001 L Finger02	1.87114
+segment	len_cm	Bip001 L Finger1 -> Bip001 L Finger11	2.29793
+segment	len_cm	Bip001 L Finger11 -> Bip001 L Finger12	1.82906
+segment	len_cm	Bip001 L Finger2 -> Bip001 L Finger21	2.623
+segment	len_cm	Bip001 L Finger21 -> Bip001 L Finger22	2.19136
+segment	len_cm	Bip001 L Finger3 -> Bip001 L Finger31	2.58958
+segment	len_cm	Bip001 L Finger31 -> Bip001 L Finger32	1.99041
+segment	len_cm	Bip001 L Finger4 -> Bip001 L Finger41	2.03532
+segment	len_cm	Bip001 L Finger41 -> Bip001 L Finger42	1.37202
+segment	len_cm	Bip001 R Finger0 -> Bip001 R Finger01	2.34429
+segment	len_cm	Bip001 R Finger01 -> Bip001 R Finger02	1.87114
+segment	len_cm	Bip001 R Finger1 -> Bip001 R Finger11	2.29794
+segment	len_cm	Bip001 R Finger11 -> Bip001 R Finger12	1.82905
+segment	len_cm	Bip001 R Finger2 -> Bip001 R Finger21	2.623
+segment	len_cm	Bip001 R Finger21 -> Bip001 R Finger22	2.19136
+segment	len_cm	Bip001 R Finger3 -> Bip001 R Finger31	2.58958
+segment	len_cm	Bip001 R Finger31 -> Bip001 R Finger32	1.99041
+segment	len_cm	Bip001 R Finger4 -> Bip001 R Finger41	2.03532
+segment	len_cm	Bip001 R Finger41 -> Bip001 R Finger42	1.37202
+segment	len_cm	Bip001 Pelvis -> Bip001 Spine	3.50962
+segment	len_cm	Bip001 Spine -> Bip001 Spine1	8.32508
+segment	len_cm	Bip001 Spine1 -> Bip001 Spine2	7.42392
+segment	len_cm	Bip001 Spine2 -> Bip001 Neck	16.3148
+segment	len_cm	Bip001 Neck -> Bip001 Head	6.71111
+pass	ran	segment_check	1
+placement	pos_err_cm	Bip001 Head	0.0
+placement	pos_err_cm	Bip001 Neck	0.0
+placement	pos_err_cm	Bip001 Spine2	0.0187461
+placement	pos_err_cm	Bip001 Spine	4.76837e-07
+placement	pos_err_cm	Bip001 Pelvis	5.6995
+placement	pos_err_cm	Bip001 L Clavicle	0.0
+placement	ray_err_cm	Bip001 L UpperArm	1.90944e-06
+placement	pos_err_cm	Bip001 L UpperArm	0.955353
+placement	pos_err_cm	Bip001 L Forearm	1.01505
+placement	pos_err_cm	Bip001 L Hand	0.143507
+placement	pos_err_cm	Bip001 R Clavicle	0.0
+placement	ray_err_cm	Bip001 R UpperArm	1.91107e-06
+placement	pos_err_cm	Bip001 R UpperArm	0.938523
+placement	pos_err_cm	Bip001 R Forearm	1.00992
+placement	pos_err_cm	Bip001 R Hand	0.140112
+placement	pos_err_cm	Bip001 L Thigh	0.105656
+placement	pos_err_cm	Bip001 L Calf	0.158318
+placement	pos_err_cm	Bip001 L Foot	6.48569e-06
+placement	pos_err_cm	Bip001 R Thigh	0.10566
+placement	pos_err_cm	Bip001 R Calf	0.24703
+placement	pos_err_cm	Bip001 R Foot	3.38328e-05
+pass	ran	placement_check	1
+struct_dir	measurable	-	51
+struct_dir	over_tol	-	6
+struct_dir	short_skipped	-	1
+pass	ran	struct_dir_check	1
+box_rb	width_cm	Bip001 L Foot	3.71425
+box_rb	height_cm	Bip001 L Foot	8.65601
+box_rb	length_cm	Bip001 L Foot	12.6445
+box_rb	len_axis	Bip001 L Foot	2
+box_rb	width_cm	Bip001 L Toe0	5.31703
+box_rb	height_cm	Bip001 L Toe0	1.86092
+box_rb	length_cm	Bip001 L Toe0	3.56919
+box_rb	len_axis	Bip001 L Toe0	1
+box_rb	width_cm	Bip001 R Foot	3.71432
+box_rb	height_cm	Bip001 R Foot	8.65963
+box_rb	length_cm	Bip001 R Foot	12.6419
+box_rb	len_axis	Bip001 R Foot	2
+box_rb	width_cm	Bip001 R Toe0	5.31693
+box_rb	height_cm	Bip001 R Toe0	1.85908
+box_rb	length_cm	Bip001 R Toe0	3.56923
+box_rb	len_axis	Bip001 R Toe0	1
+box_rb	hand_scale_cm	Bip001 L Hand	3.6286
+box_rb	hand_box_cm	Bip001 L Hand	2.17486
+box_rb	hand_scale_cm	Bip001 L Finger0	1.692
+box_rb	hand_box_cm	Bip001 L Finger0	0.773286
+box_rb	hand_scale_cm	Bip001 L Finger1	1.2615
+box_rb	hand_box_cm	Bip001 L Finger1	0.576537
+box_rb	hand_scale_cm	Bip001 L Finger2	2.0346
+box_rb	hand_box_cm	Bip001 L Finger2	0.929863
+box_rb	hand_scale_cm	Bip001 L Finger3	1.4453
+box_rb	hand_box_cm	Bip001 L Finger3	0.660538
+box_rb	hand_scale_cm	Bip001 L Finger4	1.1134
+box_rb	hand_box_cm	Bip001 L Finger4	0.508852
+box_rb	hand_scale_cm	Bip001 R Hand	3.6953
+box_rb	hand_box_cm	Bip001 R Hand	2.21484
+box_rb	hand_scale_cm	Bip001 R Finger0	1.692
+box_rb	hand_box_cm	Bip001 R Finger0	0.773286
+box_rb	hand_scale_cm	Bip001 R Finger1	1.2817
+box_rb	hand_box_cm	Bip001 R Finger1	0.585769
+box_rb	hand_scale_cm	Bip001 R Finger2	1.9638
+box_rb	hand_box_cm	Bip001 R Finger2	0.897506
+box_rb	hand_scale_cm	Bip001 R Finger3	1.387
+box_rb	hand_box_cm	Bip001 R Finger3	0.633894
+box_rb	hand_scale_cm	Bip001 R Finger4	1.1267
+box_rb	hand_box_cm	Bip001 R Finger4	0.51493
+box_rb	nodes_measured	-	16
+box_rb	read_fail	-	0
+pass	ran	box_verify	1
+accessory	on_biped	-	54
+accessory	on_bone	-	214
+accessory	no_parent	-	0
+pass	ran	accessory_build	1
+mesh	vertex_count	-	18892
+skin	bones	-	321
+skin	written_vertices	-	18892
+skin	failed_vertices	-	0
+pass	ran	skin_apply	1
+skin_rb	links	Bip001 L Foot	363
+skin_rb	links	Bip001 L Toe0	74
+skin_rb	links	Bip001 R Foot	366
+skin_rb	links	Bip001 R Toe0	74
+skin_rb	verts_read	-	18892
+skin_rb	read_fail	-	0
+skin_rb	unmodified_verts	-	0
+skin_rb	index_seq_bad	-	0
+skin_rb	pairs_dropped	-	0
+skin_rb	verts_no_exp	-	0
+skin_rb	links_expected	-	26742
+skin_rb	links_read	-	26742
+skin_rb	links_missing	-	0
+skin_rb	name_mismatch	-	0
+skin_rb	zero_verts_pre	-	0
+skin_rb	repaired	-	0
+skin_rb	zero_verts	-	0
+skin_rb	dom_mismatch	-	0
+skin_rb	weight_err_max	-	0.0
+skin_rb	sum_err_max	-	1.19209e-07
+skin_rb	link_diff_max	-	0
+skin_rb	link_mismatch_bones	-	0
+skin_rb	elapsed_s	-	1.395
+pass	ran	skin_verify	1
+morpher	blocks	-	61
+morpher	built	-	61
+morpher	with_target	-	61
+morpher	with_name	-	61
+pass	ran	morpher_build	1

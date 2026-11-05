@@ -1,0 +1,58 @@
+[09:26:03] skin=True physics=False shot=True manual=False gen_only=False
+[09:26:03] 权重文件 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱_weights.tsv 顶点数 18892
+[09:26:04] 已生成脚本 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\mmd2max_run.ms
+[09:26:04] 判据规格 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.VERDICTS：493 行
+[09:26:04] 3ds Max：C:\Program Files\Autodesk\3ds Max 2022\3dsmax.exe（2022）
+[09:26:04] 3dsmax pid=48816（-U MAXScript 执行 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\mmd2max_run.ms）
+[09:26:24]   | 输出: C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱.max
+[09:26:24]   | 期望顶点数: 18892
+[09:26:24]   | 2026/11/4 9:26:22  配置来自 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.CFG（30 项） 顶点 18892 脊柱 3 手指 5x3 脚盒压平轴=true 蒙皮=true 方向容差=3.0 扭转容差=1.0 趾落位容差=0.5 盒隙容差=0.5 脚链拉伸=true 快照回滚=false 回滚触发=0.05 收敛上限=3 规格=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.VERDICTS 报告=C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.REPORT
+[09:26:24]   | 2026/11/4 9:26:23  场景已重置。
+[09:26:24]   | 2026/11/4 9:26:23  导入 OBJ：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\model.obj
+[09:26:24]   | 2026/11/4 9:26:23  无法修改 OBJ 导入器选项，沿用 Max 当前设置（请确认未启用 Weld）。
+[09:26:29]   | 2026/11/4 9:26:28  权重进度：10000/18892
+[09:26:29]   | 2026/11/4 9:26:28  权重写入耗时：0.417 秒，已写入顶点 18892，失败顶点 0
+[09:26:29]   | 2026/11/4 9:26:28    蒙皮覆盖 Bip001 L Foot 顶点=363
+[09:26:29]   | 2026/11/4 9:26:28    蒙皮覆盖 Bip001 L Toe0 顶点=74
+[09:26:29]   | 2026/11/4 9:26:28    蒙皮覆盖 Bip001 R Foot 顶点=366
+[09:26:29]   | 2026/11/4 9:26:28    蒙皮覆盖 Bip001 R Toe0 顶点=74
+[09:26:34]   | 2026/11/4 9:26:28    蒙皮覆盖 Bip001 R Toe0 顶点=74
+[09:26:34]   | 2026/11/4 9:26:29    回读进度：5000/18892
+[09:26:34]   | 2026/11/4 9:26:29    回读进度：10000/18892
+[09:26:34]   | 2026/11/4 9:26:29    回读进度：15000/18892
+[09:26:34]   | 2026/11/4 9:26:29  蒙皮回读：18892/18892 顶点，未写入=0，零权重=0（补前 0，补救重写 0），主控不符=0，缺失链路=0，链路 期望/回读=26742/26742，最大权重误差=0.0，耗时 1.503 秒
+[09:26:34]   | 2026/11/4 9:26:31  WM3_MC_BuildFromNode 类型：Primitive 可用=true
+[09:27:01]   | 2026/11/4 9:26:59  截图 hand_side 取景填充=62.875% 框=[31.7878,-10.2016,77.2343]..[53.0626,9.53362,95.8596]
+[09:27:01]   | 2026/11/4 9:26:59  截图 hand_side 视口已缩放
+[09:27:01]   | 2026/11/4 9:26:59  截图 hand_side 取图 class=BitMap
+[09:27:01]   | 2026/11/4 9:26:59  截图 hand_side 落盘=true -> C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\shots\香菱_hand_side.png
+[09:27:01]   | 2026/11/4 9:26:59  截图取景：量到=19 投不出=0 最小纵向填充=53.2267%
+[09:27:01]   | 2026/11/4 9:26:59  非交互模式：quitMax() 正常退出（避免上层 taskkill /F 累积崩溃计数）。
+[09:27:01] 成功标记已出现（.max 已落盘），继续等视口截图抓完、Max 自行退出
+[09:27:06] 3ds Max 已正常退出（崩溃计数未被污染）
+[09:27:06] 完成：C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\香菱.max
+[09:27:06]   [SKIP] pass/ran foot_reach_guard (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] pass/ran physics_build (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] pass/ran rollback_selftest (gate) 期望=1 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/angle_deg - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/box_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_after_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_before_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_restore_angle_deg - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_restore_box_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_restore_pos_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_restore_scale_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_restored - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/foot_worse_bones - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/guard_fired - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/guard_saved - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/loaded - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/perturb_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/perturbed_bone - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/pos_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/saved - (gate) 期望=true 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/scale_cm - (gate) 期望=0 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06]   [SKIP] rollback/snap_cost_cm - (report) 期望=— 实报=— —— 本轮没有这一步（when=if_present）
+[09:27:06] 判据汇总：通过 471，失败 0，未跑 22 （gate/lock/min 失败 0）；报告共 471 行，规格 493 行
+[09:27:06]   其中 27 条是 lock（已定价的缺陷，PASS = 没变得更差，不等于达标）
+[09:27:06] 判据通过，逐行状态见 C:\Users\Administrator\Desktop\mmd2max_v4_src_2026-11-03\test_runs\香菱\MMD2MAX.CHECK

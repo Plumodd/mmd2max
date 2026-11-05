@@ -1,0 +1,122 @@
+﻿phase	check	subject	actual
+fit	segment_count	-	39
+fit	failed_segments	-	0
+fit	cum_len_err_cm	-	0.224741
+pose	placed_nodes	-	30
+pose	failed_nodes	-	0
+pose	missing_nodes	-	0
+pose	hip_residual_cm	-	2.6226e-06
+converge	raised	1	0
+converge	not_improved	1	0
+converge	dir_over	1	4
+converge	place_sum_cm	1	146.513
+converge	place_max_cm	1	5.6995
+converge	raised	2	0
+converge	not_improved	2	0
+converge	dir_over	2	5
+converge	place_sum_cm	2	64.9124
+converge	place_max_cm	2	5.6995
+converge	raised	3	0
+converge	not_improved	3	0
+converge	dir_over	3	5
+converge	place_sum_cm	3	63.0287
+converge	place_max_cm	3	5.6995
+thigh_roll	knee_err_cm	Bip001 L Thigh	0.158355
+thigh_roll	ankle_err_cm	Bip001 L Thigh	7.05655e-06
+thigh_roll	knee_err_cm	Bip001 R Thigh	0.246829
+thigh_roll	ankle_err_cm	Bip001 R Thigh	3.34305e-05
+pose_end	placed_nodes	-	30
+pose_end	failed_nodes	-	0
+pose_end	missing_nodes	-	0
+rotate_end	raised	-	0
+rotate_end	not_improved	-	0
+toe_snap	residual_after_roll_cm	Bip001 L Toe0	0.0
+toe_snap	residual_after_roll_cm	Bip001 R Toe0	9.61096e-07
+toe_snap	residual_after_reach_cm	Bip001 L Toe0	4.76837e-07
+toe_snap	residual_after_reach_cm	Bip001 R Toe0	9.61096e-07
+foot_yaw	bone_yaw_deg	Bip001 L Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 L Foot	0.0
+foot_chain	chain_angle_deg	Bip001 L Foot -> Bip001 L Toe0	29.8725
+foot_chain	gap_cm	Bip001 L Foot -> Bip001 L Toe0	-9.53674e-07
+foot_chain	gap_covered	Bip001 L Foot -> Bip001 L Toe0	true
+foot_yaw	bone_yaw_deg	Bip001 R Foot	0.0
+foot_yaw	toe_yaw_deg	Bip001 R Foot	0.0
+foot_chain	chain_angle_deg	Bip001 R Foot -> Bip001 R Toe0	29.8929
+foot_chain	gap_cm	Bip001 R Foot -> Bip001 R Toe0	9.53674e-07
+foot_chain	gap_covered	Bip001 R Foot -> Bip001 R Toe0	true
+foot_chain	broken_roots	-	2
+foot_chain	gap_unconnected	-	0
+segment	len_cm	Bip001 L Clavicle -> Bip001 L UpperArm	8.22213
+segment	len_cm	Bip001 L UpperArm -> Bip001 L Forearm	19.5224
+segment	len_cm	Bip001 L Forearm -> Bip001 L Hand	16.6452
+segment	len_cm	Bip001 R Clavicle -> Bip001 R UpperArm	8.22212
+segment	len_cm	Bip001 R UpperArm -> Bip001 R Forearm	19.5224
+segment	len_cm	Bip001 R Forearm -> Bip001 R Hand	16.6452
+segment	len_cm	Bip001 Pelvis -> Bip001 L Thigh	6.95583
+segment	len_cm	Bip001 L Thigh -> Bip001 L Calf	36.3827
+segment	len_cm	Bip001 L Calf -> Bip001 L Foot	38.0685
+segment	len_cm	Bip001 L Foot -> Bip001 L Toe0	11.2281
+segment	len_cm	Bip001 Pelvis -> Bip001 R Thigh	6.95583
+segment	len_cm	Bip001 R Thigh -> Bip001 R Calf	36.3827
+segment	len_cm	Bip001 R Calf -> Bip001 R Foot	38.0686
+segment	len_cm	Bip001 R Foot -> Bip001 R Toe0	11.2281
+segment	len_cm	Bip001 L Finger0 -> Bip001 L Finger01	2.34429
+segment	len_cm	Bip001 L Finger01 -> Bip001 L Finger02	1.87114
+segment	len_cm	Bip001 L Finger1 -> Bip001 L Finger11	2.29793
+segment	len_cm	Bip001 L Finger11 -> Bip001 L Finger12	1.82906
+segment	len_cm	Bip001 L Finger2 -> Bip001 L Finger21	2.623
+segment	len_cm	Bip001 L Finger21 -> Bip001 L Finger22	2.19136
+segment	len_cm	Bip001 L Finger3 -> Bip001 L Finger31	2.58958
+segment	len_cm	Bip001 L Finger31 -> Bip001 L Finger32	1.99041
+segment	len_cm	Bip001 L Finger4 -> Bip001 L Finger41	2.03532
+segment	len_cm	Bip001 L Finger41 -> Bip001 L Finger42	1.37202
+segment	len_cm	Bip001 R Finger0 -> Bip001 R Finger01	2.34429
+segment	len_cm	Bip001 R Finger01 -> Bip001 R Finger02	1.87114
+segment	len_cm	Bip001 R Finger1 -> Bip001 R Finger11	2.29794
+segment	len_cm	Bip001 R Finger11 -> Bip001 R Finger12	1.82905
+segment	len_cm	Bip001 R Finger2 -> Bip001 R Finger21	2.623
+segment	len_cm	Bip001 R Finger21 -> Bip001 R Finger22	2.19136
+segment	len_cm	Bip001 R Finger3 -> Bip001 R Finger31	2.58958
+segment	len_cm	Bip001 R Finger31 -> Bip001 R Finger32	1.99041
+segment	len_cm	Bip001 R Finger4 -> Bip001 R Finger41	2.03532
+segment	len_cm	Bip001 R Finger41 -> Bip001 R Finger42	1.37202
+segment	len_cm	Bip001 Pelvis -> Bip001 Spine	3.50962
+segment	len_cm	Bip001 Spine -> Bip001 Spine1	8.32508
+segment	len_cm	Bip001 Spine1 -> Bip001 Spine2	7.42392
+segment	len_cm	Bip001 Spine2 -> Bip001 Neck	16.3148
+segment	len_cm	Bip001 Neck -> Bip001 Head	6.71111
+placement	pos_err_cm	Bip001 Head	0.0
+placement	pos_err_cm	Bip001 Neck	0.0
+placement	pos_err_cm	Bip001 Spine2	0.0187461
+placement	pos_err_cm	Bip001 Spine	4.76837e-07
+placement	pos_err_cm	Bip001 Pelvis	5.6995
+placement	pos_err_cm	Bip001 L Clavicle	0.0
+placement	ray_err_cm	Bip001 L UpperArm	1.90944e-06
+placement	pos_err_cm	Bip001 L UpperArm	0.955353
+placement	pos_err_cm	Bip001 L Forearm	1.01505
+placement	pos_err_cm	Bip001 L Hand	0.143507
+placement	pos_err_cm	Bip001 R Clavicle	0.0
+placement	ray_err_cm	Bip001 R UpperArm	1.91107e-06
+placement	pos_err_cm	Bip001 R UpperArm	0.938523
+placement	pos_err_cm	Bip001 R Forearm	1.00992
+placement	pos_err_cm	Bip001 R Hand	0.140112
+placement	pos_err_cm	Bip001 L Thigh	0.105656
+placement	pos_err_cm	Bip001 L Calf	0.158318
+placement	pos_err_cm	Bip001 L Foot	6.48569e-06
+placement	pos_err_cm	Bip001 R Thigh	0.10566
+placement	pos_err_cm	Bip001 R Calf	0.24703
+placement	pos_err_cm	Bip001 R Foot	3.38328e-05
+struct_dir	measurable	-	51
+struct_dir	over_tol	-	6
+struct_dir	short_skipped	-	1
+accessory	on_biped	-	54
+accessory	on_bone	-	214
+accessory	no_parent	-	0
+mesh	vertex_count	-	18892
+skin	bones	-	321
+skin	written_vertices	-	18892
+skin	failed_vertices	-	0
+morpher	blocks	-	61
+morpher	built	-	61
+morpher	with_target	-	61
+morpher	with_name	-	61
