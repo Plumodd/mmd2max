@@ -4,12 +4,15 @@ v3 的完整缺陷史在 `README_HANDOVER.md`（第七节那条时间轴，条�
 去看文件）。这份文件只写 v4 改了什么结构、为什么，以及**怎么判断这一轮又犯了老毛病**。
 
 回滚开关：v3 目录 `C:\Users\Administrator\Desktop\mmd2max_v3_src_2026-11-01` 仍是完整的源码 +
-`.git`（提交 `d4949f6` 已全部推到 `Plumodd/mmd2max`，工作树干净），`C:\Users\Administrator\Desktop\mmd2max_v3.zip`
+`.git`（提交 `d4949f6`，工作树干净；它现在在远端叫 `v3-archive`，**不在 `main` 上了** —— `main` 从
+2026-11-05 起是这份 v4），`C:\Users\Administrator\Desktop\mmd2max_v3.zip`
 是同一份成品的压缩包。2026-11-04 清理时它的 `test_runs/` 产物（693MB）与 v1/v2 两棵树、三份 v2 zip
 一起进了 `Desktop\_旧版本_待删_2026-11-04\`（当时是**移动隔离**，不是删除）；2026-11-05 用户点头之后
 那个目录已**整目录删除**（2.1G / 344 件，含 `香菱-海灯节.max` 263MB 与 v1/v2 两棵源码树）⇒ 那几份旧物
-从此不在磁盘上，回滚只有一条路可走：**v3 那棵树与 v3.zip**，它们与 `Desktop\香菱`、`Desktop\test2`
-两份 `.pmx` 输入都逐条 `ls` 过还在（`d4949f6` 仍是 v3 的 HEAD）。
+从此不在磁盘上（v1/v2 的源码在 git 里也没有第二条路：v3 那棵树只有 `d4949f6` 一个压缩提交，本仓库的
+根提交是「v4 基线：从 v3 第十七轮原样复制」）。v3 的回滚落点现在是**三个**：GitHub 上的
+`refs/heads/v3-archive`（= `d4949f6`，2026-11-05 强推 `main` 之前先存的档）、本地 v3 目录、`mmd2max_v3.zip`；
+两份 `.pmx` 输入 `Desktop\香菱`、`Desktop\test2` 也逐条 `ls` 过还在。
 v4 任何一步做砸了，回到 v3 目录跑 `tools/obj_run.py` 即可，不需要在 v4 里修；产物缺失用
 `tools/run_model.py` 重生成，一条命令的事。
 
@@ -418,6 +421,12 @@ v4 的写法：`catch` 必须留下痕迹（记一条 verdict，或至少 `say` 
 ---
 
 ## 8. 测试版打包：`git archive` + 一次独立导出自检（**2026-11-05 起停**：项目转长期，交付形态改成仓库本身，见交接第 42 条；下面这一节留作「最后一次自检读到什么」的记录）
+
+**替代它的动作 = 推远端**（见交接第 43 条）：`git -c http.sslBackend=openssl push`。本机默认的 schannel
+后端对 `github.com` **握手就失败**（`SSL/TLS connection failed`），而同一个地址 `curl --tlsv1.2` 读 200、
+`baidu`/`gitee` 都通 ⇒ 是 TLS 后端不是网络，别去调代理。**只每次调用带 `-c`，不把 `http.sslBackend`
+写进配置**（那是全仓库生效的改动，会牵动别的仓库的凭据路径）。远端布局：`main` = v4 全历史，
+`v3-archive` = `d4949f6`（强推前落的档，也是唯一的远端 v3 落点）。
 
 一条命令（**包内容 = HEAD 内容**，口径现取，别抄数：`git ls-files | awk -F/ 'NF>1{print $1"/"}NF==1{print "(root)"}' | sort | uniq -c`
 —— 第 99 轮复核时它是 `mmd2max/` 11 + `probes/` 35 + `scripts/` 1 + `tools/` 13 + 根 4 件 = **64 个文件**。

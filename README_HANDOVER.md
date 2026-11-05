@@ -1681,6 +1681,37 @@ python tools/gui.py ["C:/…/克雷薇.pmx"]        # 标准库 tkinter，本机
       磁盘上唯一的两份就是刚删的那两棵树与三份 v2 zip，而 git 里也没有第二条路：v3 那棵树只有 `d4949f6`
       一个提交（压缩过的），本仓库的根提交是「v4 基线：从 v3 第十七轮原样复制」，两边都不含 v1/v2 历史。
       要回头看 v2 只能靠第 30~40 条台账里的读数，代码本身没了。README_V4 回滚段已按这个事实改口。
+    - **视觉验收（第 42 条留的 C 项）过掉了**：用户手动看过两份 `_phys.max`（香菱 01:59 / 克雷薇第 78 轮），
+      结论「还行，能接受」⇒ 颈段那条 `lock` 维持定价（不升回 gate），足盒、手指权重、Morpher 通道
+      都没有新增要登记的缺陷。香菱目录里 `MMD2MAX.VERDICTS`（02:01）比 `MMD2MAX.REPORT`（01:59）新，
+      离线重判被规则 III 拒收是**预期**（那份 .max 的配对读数是 01:59 的 REPORT/CHECK），别去 `touch`。
+
+43. **仓库上 GitHub 了：`Plumodd/mmd2max` 的 `main` = v4 全历史，v3 存成 `v3-archive`（2026-11-05 上午，交付形态从 zip 换成远端仓库）**
+    - **为什么必须先分清两条历史**：远端 `main` 一直是 `d4949f6`（v3 的**压缩单提交**），与本仓库这 54 条
+      **无共同祖先**（`git merge-base` 空）⇒ 要么开新分支，要么强推。用户选强推 + 存档：
+      先把 `refs/remotes/origin/main`（`d4949f6`）推成 `refs/heads/v3-archive`，**再**用
+      `--force-with-lease=refs/heads/main:d4949f6…` 推 `main`。顺序不能反 —— 存档分支落地之前，
+      那个提交在本机对象库里之外**没有任何一份副本**（`mmd2max_v3.zip` 是压缩包，不是 git 对象）。
+      推完的读数（**这一笔落地之前**的 main，之后它会前进，别把 sha 当活性口径）：
+      `refs/heads/main = 5755766…`（54 条）、`refs/heads/v3-archive = d4949f6…`。回滚开关一条：
+      `git -c http.sslBackend=openssl push --force-with-lease=refs/heads/main:<当下 main 的 sha> origin refs/heads/v3-archive:refs/heads/main`
+      —— 期望值现取（`git rev-parse origin/main`），写死 sha 的强推在别人往 main 上推过东西之后会**要么失败要么覆盖**，
+      而这两种都比「推不动」糟。
+    - **推到 GitHub 之前过三道查件**：① 体积 —— 222 件受控、pack 1.54 MiB，`test_runs/`、金标准 tsv、
+      `genNN/`、`shots_*` 都不在里面（那份 192MB 的 `香菱_phys.max` 因此没进 git，只在本地）；
+      ② 密钥扫描 —— 对全部 222 件按 `api_key|secret|password|token=字面量`、`gh[pousr]_…`、
+      `-----BEGIN PRIVATE KEY-----`、`AKIA…` 四类模式扫，**0 命中**，也没有 `.env`/`*.pem` 被跟踪；
+      ③ 提交身份 = `Plumodd` / `61000375+Plumodd@users.noreply.github.com`（与远端那笔 v3 同一个）。
+    - **本机 git 推不动 GitHub 的真实原因是 schannel，不是网络**：`git ls-remote` 报
+      `schannel: failed to receive handshake, SSL/TLS connection failed`，而同时 `curl --tlsv1.2 https://github.com`
+      读 200、`baidu`/`gitee` 都通、系统代理 `ProxyEnable=0` 且常见本地代理端口无人监听
+      ⇒ 换成 `git -c http.sslBackend=openssl …` 立刻通。**每次调用带 `-c`，不改仓库配置**
+      （`remote.origin.url` 与分支跟踪是仅有的两处本地状态：`git remote add origin` +
+      `main` 已 `--set-upstream-to=origin/main`）。凭据走的是 Credential Manager 里已有的那份，
+      这一次**没有弹浏览器**。
+    - **`README_V4.md` 第一节的回滚段跟着改口**：v3 现在有两个落点（远端 `v3-archive` 分支与本地
+      `Desktop\mmd2max_v3_src_2026-11-01`），第 42 条那句「回滚只剩一条路」要按这个更新。
+
 
 
 **下一轮（换模型 / 继续验收）判读几件事**：
