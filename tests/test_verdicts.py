@@ -42,6 +42,19 @@ SEGMENT_FORCED_LOG = PROJECT_ROOT / "baselines" / "round58_香菱-海灯节_objr
 # 第 57 轮的 obj_run 输出（出厂容差下量到同一个数的第一轮）。
 SEGMENT_FIRST_STDOUT = PROJECT_ROOT / "baselines" / "round57_haideng_zerolinks.log"
 
+# SEGMENT_LOCKS 每一具模型的两份凭据：(定价轮, 复现轮)，每份是 (文件, 那一行里读数的前缀)。
+# 前缀必须按文件写：`实际=` 是 objrun 日志里 `段校验` 那一行的写法，`实报=` 是判据表/CHECK
+# 的写法 —— 只认一种，换夹具类型时正则会**静默不匹配**（第 19 轮时间戳事故的同形）。
+# 新增一具模型的段长锁而不在这里登记，下面那条循环会直接红：定价表可以长，凭据不许缺。
+BASELINES = PROJECT_ROOT / "baselines"
+SEGMENT_PROVENANCE: dict[str, tuple[tuple, tuple]] = {
+    "香菱-海灯节": ((SEGMENT_PRICED_LOG, "实际="), (SEGMENT_FIRST_STDOUT, "实报=")),
+    # 定价轮 = 第 78 轮（本工作区，跑在定价之后的规格上）；复现轮 = 第 75 轮
+    # （Desktop 源树那一轮，定价之前）。两轮隔着第 41 条那批改动，读数逐字相同。
+    "克雷薇": ((BASELINES / "round78_克雷薇_objrun.log", "实际="),
+               (BASELINES / "round75_克雷薇_objrun.log", "实际=")),
+}
+
 # fixture 的肢段表：三种 mode 各一行，覆盖 build_spec 里全部「按 mode 派生主体」的分支。
 # 脚段必须带齐骨盒回读（M4c）要的六列：少一列 `box_targets` 就抛，fixture 也就装不出
 # 全套通道 —— 那正是要它在这里说话的原因（CHANNELS 缺类 = .ms 多报没人判的行不被发现）。
@@ -721,8 +734,11 @@ class PricedLockTests(unittest.TestCase):
         """锁的来源必须是 baselines/ 里那一份冻结的日志，不是会被下一轮覆盖的 test_runs/。"""
         self.assertEqual(PRICED_LOG.parent.name, "baselines",
                          "指向可变日志的回归锁会在下一轮实跑后自己作废自己")
-        self.assertEqual(SEGMENT_PRICED_LOG.parent.name, "baselines",
-                         "段长锁同理：指向 live 日志 = 下一轮自己给自己发尺")
+        for model, (priced, repeat) in SEGMENT_PROVENANCE.items():
+            for path, _ in (priced, repeat):
+                self.assertEqual(path.parent.name, "baselines",
+                                 f"{model} 的段长锁凭据 {path.name} 不在 baselines/："
+                                 "指向 live 日志 = 下一轮自己给自己发尺")
 
     def test_segment_lock_is_a_reading_from_its_own_frozen_round(self):
         """#76-B：换模型定价的那一段必须能在**那一具模型**的冻结日志里逐字读到。
@@ -730,34 +746,43 @@ class PricedLockTests(unittest.TestCase):
         和香菱那批锁同一套规矩：数字不许是没来历的。这里读的还不是结论文字，是
         `段校验 … 实际=` 那一行的读数本身 —— 定价的是量到的长度，不是谁写的解释。
         并且同一个数要在**两份**出厂容差的冻结件里都出现：单轮读数不叫定价，叫抄噪声。
+
+        凭据按模型查（`SEGMENT_PROVENANCE`）：以前整条循环只读海灯节那一份日志，所以
+        「第二具模型也定价」这件事一旦发生，就会拿**别人的**读数来验**这一具**的数 ——
+        克雷薇的 20.4092 会在海灯节的 17.9546 里找，找不到的那一步才是这条测试第一次
+        真正工作。表里缺登记同样不许放过：定价表长、凭据没长 = 新增那条锁没人验过。
         """
-        required_files.require(SEGMENT_PRICED_LOG, SEGMENT_FIRST_STDOUT)
-        log = SEGMENT_PRICED_LOG.read_text(encoding="utf-8")
-        # 定价轮必须跑在出厂容差下：拿实验轮（DIR_TOL 被压小）的读数当「正常读数」，
-        # 锁钉的就是一个只有把容差改小才会出现的场景。
-        cfg = [l for l in log.splitlines() if "配置来自" in l]
-        self.assertEqual(len(cfg), 1, f"{SEGMENT_PRICED_LOG.name} 里读不出一行配置")
-        self.assertIn(f"方向容差={targets.DIR_TOL_DEG}", cfg[0],
-                      "定价轮的 DIR_TOL 和源码里的不是同一个数：这一轮的读数不是出厂配置下的读数")
+        self.assertEqual(set(verdicts.SEGMENT_LOCKS), set(SEGMENT_PROVENANCE),
+                         "SEGMENT_LOCKS 与凭据表分叉：有人加了段长锁却没登记它来自哪两轮")
+        required_files.require(*[path for pair in SEGMENT_PROVENANCE.values()
+                                 for path, _ in pair])
         self.assertTrue(verdicts.SEGMENT_LOCKS,
                         "定价表空了：#76-B 那条够不着的段又变回一条永远红下去的 gate")
-        earlier = SEGMENT_FIRST_STDOUT.read_text(encoding="utf-8")
-        # 两份凭据都得是出厂容差下的轮：拿实验轮的读数当「独立复现」，那是两个同源数字
-        # 互相印证，不是复现。
-        self.assertIn(f"方向容差={targets.DIR_TOL_DEG}", earlier,
-                      f"{SEGMENT_FIRST_STDOUT.name} 不是出厂容差那一轮：跨轮印证不成立")
         for model, table in verdicts.SEGMENT_LOCKS.items():
+            (priced_log, priced_key), (repeat_log, repeat_key) = SEGMENT_PROVENANCE[model]
+            log = priced_log.read_text(encoding="utf-8")
+            # 定价轮必须跑在出厂容差下：拿实验轮（DIR_TOL 被压小）的读数当「正常读数」，
+            # 锁钉的就是一个只有把容差改小才会出现的场景。
+            cfg = [l for l in log.splitlines() if "配置来自" in l]
+            self.assertEqual(len(cfg), 1, f"{priced_log.name} 里读不出一行配置")
+            self.assertIn(f"方向容差={targets.DIR_TOL_DEG}", cfg[0],
+                          "定价轮的 DIR_TOL 和源码里的不是同一个数：这一轮的读数不是出厂配置下的读数")
+            earlier = repeat_log.read_text(encoding="utf-8")
+            # 两份凭据都得是出厂容差下的轮：拿实验轮的读数当「独立复现」，那是两个同源数字
+            # 互相印证，不是复现。
+            self.assertIn(f"方向容差={targets.DIR_TOL_DEG}", earlier,
+                          f"{repeat_log.name} 不是出厂容差那一轮：跨轮印证不成立")
             for subject, (value, tol) in table.items():
                 lines = [l for l in log.splitlines() if f"段校验 {subject} " in l]
                 self.assertEqual(len(lines), 1,
-                                 f"{model} 的 {subject} 在 {SEGMENT_PRICED_LOG.name} 里"
+                                 f"{model} 的 {subject} 在 {priced_log.name} 里"
                                  "不是唯一一行：来历读不出")
-                self.assertIn(f"实际={value}", lines[0],
+                self.assertIn(f"{priced_key}{value}", lines[0],
                               f"{subject} 定价的 {value} 不是那一轮量到的长度：{lines[0]}")
                 # 同一个数在两轮（不同代码、同一容差）里都量到：锁钉的是稳定读数，
                 # 不是把一次偶发写死。
-                self.assertIn(f"实报={value}", earlier,
-                              f"{value} 只在 {SEGMENT_PRICED_LOG.name} 里出现过一次："
+                self.assertIn(f"{repeat_key}{value}", earlier,
+                              f"{value} 只在 {priced_log.name} 里出现过一次："
                               "拿单轮读数定价 = 把噪声钉成尺")
                 # 锁取代的是 gate，容差只许更严：放宽尺去迁就读数就是「悄悄改容差」。
                 self.assertLess(tol, verdicts.SEGMENT_TOL_CM,
@@ -1076,10 +1101,18 @@ class RealExportTests(unittest.TestCase):
                          "LOCK_CHECKS 与真规格表分叉了：加/删 lock 行要同步改这张表")
         self.assertEqual(sorted(verdicts.LOCK_CHECKS), list(verdicts.LOCK_CHECKS),
                          "这张表按字母序写：两轮 diff 才能看出改了哪一项")
-        # 非定价模型一条 lock 都不该出（换模型时 _lock 退成 report），但声明表不许跟着空 ——
+        # 非定价模型一条 `_lock` 锁都不该出（换模型时它们退成 report），但声明表不许跟着空 ——
         # 它记的是「这套判据里哪些 check 有钉住读数的用法」，与这一具模型有没有被定价无关。
-        other = {r[1] for r in self.rows(model="克雷薇") if r[5] == "lock"}
-        self.assertEqual(other, set(), other)
+        # SEGMENT_LOCKS 是**按模型分键**的例外通道：那里的主体本来就该是 lock。所以口径不
+        # 是「别的模型一律零锁」（克雷薇的 Spine1→Neck 就是正经定价过的锁），而是「除点名的
+        # 行以外全都必须仍是 gate」—— 有人把 `_priced` 里的 `model == PRICED_MODEL` 删掉，
+        # 这里立刻红。用 ⊆ 不用相等：这个 fixture 拿的是香菱的 limbs，被点名的那一段在
+        # 香菱的表里根本不存在，等号会把它自己的「定价没落到不相关的模型上」判成泄漏。
+        seg = verdicts.SEGMENT_LOCKS.get("克雷薇", {})
+        allowed = {("segment", "len_cm", s) for s in seg}
+        other = {(r[0], r[1], r[2]) for r in self.rows(model="克雷薇") if r[5] == "lock"}
+        self.assertEqual(other - allowed, set(),
+                         "非定价模型上出现了 SEGMENT_LOCKS 没点名的 lock 行 = 定价泄漏")
         self.assertTrue(verdicts.LOCK_CHECKS)
 
     def test_shape_of_the_priced_spec(self):
