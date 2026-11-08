@@ -1,9 +1,0 @@
-# 基线读数件是**证据**，不是源码：它们的字节本身就是判据。
-#   · `round77_MMD2MAX.CFG` 的 sha256[:12] 被打进驱动流（`obj_run.build_script`），
-#     交接第 41 条记的是 CRLF 那份 `caf81f10214a`；
-#   · `tests/test_check_verdicts.py` 要求冻结报告必须带 BOM + CRLF —— 那是「这文件是
-#     Max 直接写的、没被人在中间改过」的指纹。
-# 默认 `core.autocrlf=true` 的机器上检出会把仓库里 LF 化的正文再翻回 CRLF，数值侥幸对得上，
-# 但换一台 `autocrlf=input/false` 的机器就悄悄对不上，而这两条判据都只报「字节不是那份」。
-# `-text` = 不做任何行尾转换：检出什么字节就是什么仓库里的字节。
-baselines/round* -text

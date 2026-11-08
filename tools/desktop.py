@@ -271,12 +271,18 @@ def capture_window(hwnd: int, path: str) -> tuple[int, int, bool]:
         raise ValueError("窗口尺寸无效")
     hdc_screen = GetDC(0)
     hdc_mem = CreateCompatibleDC(hdc_screen)
-    ok = PrintWindow(hwnd, hdc_mem, 2)
-    pixels = _capture(hdc_mem, width, height, lambda target: None)
+    painted: list[int] = []
+
+    def draw(target):
+        # 必须画进 _capture 即将读的那张 DIB：mem DC 刚建时选中的是 1x1 单色位图，
+        # 先 PrintWindow 再另起 DIB 的话，PrintWindow 的内容被丢掉、回读恒为全黑。
+        painted.append(PrintWindow(hwnd, target, 2))
+
+    pixels = _capture(hdc_mem, width, height, draw)
     DeleteDC(hdc_mem)
     ReleaseDC(0, hdc_screen)
     write_bmp(path, width, height, pixels)
-    return width, height, bool(ok)
+    return width, height, bool(painted and painted[0])
 
 
 def focus(hwnd: int) -> None:

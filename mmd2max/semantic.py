@@ -20,9 +20,10 @@ import math
 import re
 from pathlib import Path
 
-from mmd2max import coords
+from mmd2max import app_paths, coords
 
-CONFIG_DIR = Path(__file__).resolve().parent / "configs"
+# 打成 exe 后「包在哪」和「用户能改的那份在哪」不在一起，这条解析不在这里自己拼
+CONFIG_DIR = app_paths.config_dir()
 
 # ---------------------------------------------------------------------------
 # 骨架中线骨骼：语义 ID -> PMX 定义
@@ -641,6 +642,19 @@ def biped_targets(model) -> tuple:
     return mapping, missing, conflict_names
 
 
+def node_name(biped_target, bone_name: str) -> str:
+    """一根保留骨在 Max 场景里叫什么 —— 命名口径只有这一处。
+
+    复用 Biped 节点的骨（有人形语义、`biped_target` 非空），场景里就是那台 Biped 的
+    段名（`Bip001 L Foot`）；其余是建出来的 BoneGeometry，名字 = PMX 原名。
+    蒙皮期望（`verdicts.skin_expectation`）与刚体父骨的期望节点名
+    （`export_obj._bone_node_names` → physics.tsv 的 `rigid_bone_node`）都走这里：
+    「按名字认出挂对骨」这条尺一旦和蒙皮那条各写各的，两侧就会在同一个模型上
+    数出两套名字，而它们本该是同一件事。
+    """
+    return (biped_target or "").strip() or bone_name
+
+
 # 躯干中轴：从下往上。Biped 侧对应 Pelvis / Spine / Spine1 / Spine2。
 CENTER_CHAIN_SIDS = ("WAIST", "LOWER_BODY", "SPINE_1", "SPINE_2")
 CENTER_CHAIN_TARGETS = ("Bip001 Pelvis", "Bip001 Spine", "Bip001 Spine1", "Bip001 Spine2")
@@ -684,6 +698,31 @@ def _center_chain_plan(model) -> tuple:
                 dropped.add(idx)
                 continue
         kept.append(idx)
+
+    # 第二道去重：相邻躯干骨「过近」而非完全重合时，Biped 脊柱链也会出现退化段。
+    # 林尼实测：下半身(Y=12.28) 与 上半身(Y=12.35) 只差 0.07 PMX 单位，旧阈值(1e-6)
+    # 放不过，于是 下半身→Bip001 Spine 直接压在 上半身→Bip001 Spine1 上，Spine 段
+    # 在 Max 里只有 0.53cm（≈0.07×scale）。阈值取整条中轴跨度的 3%（MMD 模型尺度
+    # 一致，约 1~1.5cm）：既吃掉退化段，又不误删真正有间距的骨。退化段里保留「更靠上
+    # 的那根」（上半身 是主胸腔骨，下半身 是被挤进来的冗余骨），但永远不删最底下的
+    # 腰/WAIST —— 它是 Pelvis 根，删了中轴就没根、整条脊柱链塌掉。
+    if len(kept) >= 2:
+        positions = [model.bones[k].position for k in kept]
+        span = 0.0
+        for k in range(1, len(positions)):
+            span = max(span, positions[k][1] - positions[0][1])
+        span = max(span, 1e-6)
+        thr2 = max(0.05, 0.03 * span)
+        final_kept: list = [kept[0]]  # 保护最低（Pelvis 根）
+        for k in range(1, len(kept)):
+            cur = model.bones[kept[k]].position
+            nxt = model.bones[kept[k + 1]].position if k + 1 < len(kept) else None
+            if nxt is not None and \
+                    sum((cur[j] - nxt[j]) ** 2 for j in range(3)) ** 0.5 < thr2:
+                dropped.add(kept[k])  # 过近 → 删「靠下这根」，保留靠上那根
+                continue
+            final_kept.append(kept[k])
+        kept = final_kept
     return dropped, kept
 
 
@@ -724,6 +763,66 @@ def dropped_toe_ex_indices(model) -> set:
         dropped.add(node)
         stack.extend(children.get(node, []))
     return dropped
+
+
+# 并行变形骨的命名后缀。MMD 的「D 骨」是给 IK 链配的一套**只负责蒙皮**的副本：
+# 标准骨（左足/左ひざ/左足首）留着做 IK 与运动，网格权重却全落在同位的
+# 左足D/左ひざD/左足首D 上。林尼实测：标准腿骨 4 根权重合计 0，D 链 + 足先EX
+# 承担了两条腿的全部 12772 个顶点。
+_DEFORM_TWIN_SUFFIXES = ("D", "Ｄ")
+_TWIN_HEAD_EPS2 = 1e-6   # PMX 单位平方；同位骨通常逐字相同，只留浮点余量
+
+
+def deform_twin_plan(model, biped_mapping: dict | None) -> tuple[dict[int, int], set[int]]:
+    """找「与人形骨 head 同位、但自己没有 Biped 目标」的并行变形骨。
+
+    返回 (redirect, drop)：
+      - `redirect`：原 PMX 骨序号 -> 承接它权重/刚体引用的**标准人形骨序号**；
+      - `drop`：应从导出骨架里删掉的骨序号（这套链在 Biped 上已有对应节点，
+        留着只会变成挂在 Pelvis 上的附属 BoneGeometry，把腿网格从 Biped 腿骨上摘走）。
+
+    为什么既认名字又认坐标：只按「名字以 D 结尾」会把スカートD 这类无关骨卷进来；
+    只按「坐标重合」会把恰好从腰部长出的裙摆根骨当成腰的副本。两条同时成立
+    （`名字去掉 D == 某根 Biped 骨的名字` 且 `head 逐字重合`）才认。
+
+    子链顺着父链的目标走：足先EX 挂在 足首D 下面，D 链删掉之后若不重定向，
+    它的权重会沿父链归并到「下半身」= Bip001 Spine，鞋头就跟着腰转。
+    """
+    mapping = biped_mapping or {}
+    canon: dict[str, int] = {}
+    for i, target in mapping.items():
+        if target:
+            canon.setdefault(model.bones[i].name, i)
+
+    children: dict[int, list[int]] = {}
+    for i, bone in enumerate(model.bones):
+        if bone.parent_index >= 0:
+            children.setdefault(bone.parent_index, []).append(i)
+
+    redirect: dict[int, int] = {}
+    for i, bone in enumerate(model.bones):
+        if mapping.get(i):
+            continue
+        nm = bone.name or ""
+        if not nm.endswith(_DEFORM_TWIN_SUFFIXES):
+            continue
+        twin = canon.get(nm[:-1])
+        if twin is None:
+            continue
+        a, b = bone.position, model.bones[twin].position
+        if sum((a[k] - b[k]) ** 2 for k in range(3)) > _TWIN_HEAD_EPS2:
+            continue
+        redirect[i] = twin
+
+    stack = list(redirect)
+    while stack:
+        parent = stack.pop()
+        for child in children.get(parent, []):
+            if child in redirect or mapping.get(child):
+                continue
+            redirect[child] = redirect[parent]
+            stack.append(child)
+    return redirect, set(redirect)
 
 
 def guide_bone_indices(model, biped_mapping: dict | None = None) -> set:

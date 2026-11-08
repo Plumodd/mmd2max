@@ -340,6 +340,9 @@ def load_pmx(path: str | Path) -> PMXModel:
                 r.vec3()  # R0
                 r.vec3()  # R1
             elif deform == 4:  # PMX 2.1 QDEF
+                # 文件里的 QDEF 与 BDEF4 同构（4 骨 4 权），**不是** MMD 运行时的 8 骨
+                # （对过两份外部规格：crossous《PMX文件格式解析》、felixjones PMX 2.0/2.1）。
+                # 照「双四元数当然该有 8 根」去加读 4 组，会把整条字节流读歪。
                 deform_types.add("QDEF")
                 bones = [r.index(header.bone_index_size, True) for _ in range(4)]
                 raw_weights = list(r.unpack("4f"))

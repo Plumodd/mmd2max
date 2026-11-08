@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from mmd2max import export_obj, semantic          # noqa: E402
+from mmd2max import app_paths, console, export_obj, semantic          # noqa: E402
 from mmd2max.pmx import load_pmx                  # noqa: E402
 
 
@@ -82,6 +82,9 @@ def summarize(pmx: Path, outdir: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # 第一句 print 之前把输出定成 UTF-8：不给编码时这里的 stdout 跟本地代码页（这台机
+    # cp936），而打印的文本里有 GBK 编不出来的字符（⇒ 这类，见 mmd2max/console.py 文件头）。
+    console.adopt_utf8_console()
     args = [a for a in argv[1:] if not a.startswith("--")]
     if not args:
         print(__doc__)
@@ -99,7 +102,7 @@ def main(argv: list[str]) -> int:
             min_weight = float(argv[i + 1])
 
     pmx = find_model(folder)
-    outdir = ROOT / "test_runs" / pmx.stem
+    outdir = app_paths.test_runs_dir() / pmx.stem
     # 目录交给 export() 自己建：在这里先 mkdir 会在 auto_scale/export 抛错时
     # 留下一堆空目录，看起来像「跑过了」。
     scale = export_obj.auto_scale(pmx, target_cm=height)
@@ -112,12 +115,11 @@ def main(argv: list[str]) -> int:
           f"骨骼 {info['bone_count']} -> {info['kept_bone_count']}")
 
     print("[2/3] 生成 Max 装配脚本（gen-only，不会启动 Max）")
-    cmd = [sys.executable, str(ROOT / "tools" / "obj_run.py"), str(outdir),
-           pmx.stem, "--shot", "--gen-only"]
+    cmd = app_paths.obj_run_command(outdir, pmx.stem, "--shot", "--gen-only")
     # 不 capture 子进程输出：obj_run 打的是 UTF-8 中文，而 subprocess 在 Windows 上
     # 按本地代码页(GBK)解码管道，真实踩过 UnicodeDecodeError → result.stdout 变 None
     # → write() 抛 TypeError。让子进程直接继承 stdio 既正确又能实时看到进度。
-    if subprocess.call(cmd, cwd=ROOT) != 0:
+    if subprocess.call(cmd, cwd=app_paths.app_dir()) != 0:
         return 1
 
     print("[3/3] 体检")

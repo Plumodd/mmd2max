@@ -43,17 +43,32 @@ v3 的验收长成这样：Max 侧自己数 `成功=39 失败=0`、自己判断�
 由模型决定、导出侧无法预先保证它存在（19 个落位校验点里的 Neck、Biped 指槽位数
 不够时的指节）。
 
-锁只在被定价的那具模型上生效
-----------------------------
+锁按「哪一具模型 + 哪一组导出配置」生效
+--------------------------------------
 `lock` 的数字全部来自一具具体模型的一次实跑。5.6995 厘米是按香菱 158 厘米折出来的，
-换一具 80 厘米的角色它必然超差 —— 那不是缺陷，是换了模型。所以每个锁都先问
-`model == PRICED_MODEL`：不是那一具就退化成 `report`（仍然要求这一行出现，只是不卡
-数字），等谁真跑了那具模型再把它定价。
+换一具 80 厘米的角色它必然超差 —— 那不是缺陷，是换了模型。所以每个锁都先问这一轮
+是不是被定价过的那一具：不是就退化成 `report`（仍然要求这一行出现，只是不卡数字），
+等谁真跑了那具模型再把它定价。
+
+「哪一具」不认文件名，认**导出的事实**（`PRICED_RUNS` 的 `verts`/`morphs`）。这一条是
+#106 修的东西：`run_model.py` 用 `outdir = test_runs/<pmx 名>`，所以第 76 轮为了让交付件
+不覆盖金标准夹具而把 PMX 改名 ⇒ `model` 变了 ⇒ 整片锁退成 `report` ⇒ 那一轮 512 全绿，
+而它其实是「验收层没参与」。改名是流程逼出来的，判据强度却跟着文件名走，这才是缺陷。
+
+第二维是**导出配置**（`export_config()`：身高、权重阈值、骨数、辅助骨开关、形变口径）。
+同一个 `香菱.pmx` 换一组开关就是另一组读数 —— `--drop-guides` 少导出 50 根骨，收敛循环要转的
+骨集合不同，实测 `方向超标` 从 4/5/5 变成 5/6/6、结构向超标从 6 根变成 7 根。所以：
+
+- 模型没被定价过 → `report`（设计，换模型不许拿香菱的数判它）；
+- 模型被定价过、这一组配置没有 → **中止**（`pricing_of` 抛）。这一支以前不存在：
+  配置对判据层完全隐形，于是「换配置」要么被判红（错的是尺），要么靠改名判绿（错的
+  是没人看）。两边都不许，先把这一组配置实跑一遍、逐个查过读数来历再进表。
 
 第二具模型上「按设计够不着」的读数走另一条路：`SEGMENT_LOCKS` 按模型名分键，命中的
 那一行从 `gate` 换成 `lock`（尺从输入表的目标值换成已定价的读数），没命中的模型**照旧
 走 gate** —— 段长的尺本来就每具模型都能从 limbs.tsv 数出来，退化成 report 等于放弃
-验收，而它并不需要放弃：要钉住的只有那一段。
+验收，而它并不需要放弃：要钉住的只有那一段。这条路仍按名字认，因为它一次只改**一行**
+的尺（漏了只少一段），而不是整片锁；改名风险的其余部分由上面那条计数认模型堵住。
 """
 from __future__ import annotations
 
@@ -64,12 +79,16 @@ from mmd2max import passes, semantic
 from mmd2max.targets import (
     DIR_TOL_DEG,
     GAP_TOL_CM,
+    SEGMENT_TOL_CM,
     TOE_TOL_CM,
+    GROUND_TOL_CM,
+    PENETRATION_TOL_CM,
     ROLLBACK_TOL_CM,
     ROLLBACK_TOL_DEG,
     STUB_CM,
     WEIGHT_ERR_TOL,
     WEIGHT_SUM_TOL,
+    ORIENT_TOL,
     box_tol_cm,
     span_tol_cm,
 )
@@ -99,7 +118,8 @@ LOCK_CHECKS = ("broken_roots", "chain_angle_deg", "dir_over", "knee_err_cm",
 # 定义在 pass 注册表那边，因为归因/闸门规则也要用它去查报告行。
 GLOBAL = passes.GLOBAL_SUBJECT
 
-# 锁（lock）只对这一具模型生效；其余模型的相关行退化成 report。见模块文档。
+# 模型名现在只剩两处用处：`SEGMENT_LOCKS` 的分键、以及 `PricedRun.model`（只进日志与报错）。
+# 「这一轮是不是被定价过的那一具」不再由它决定 —— 见模块文档与 `PRICED_RUNS`。
 PRICED_MODEL = "香菱"
 
 # 收敛循环的遍数上限住在 `mmd2max/passes.py`（M3）：那边是注册表，它同时决定
@@ -109,15 +129,15 @@ PRICED_MODEL = "香菱"
 CONVERGE_MAX_PASSES = passes.max_iters("converge")
 
 # ---------------------------------------------------------------------------
-# 已定价的读数（lock）—— 来源：baselines/round20_objrun.log（第二十轮，香菱）
-# 每一个都带「为什么是这个数」，没有来历的数字不许进这张表。
+# 已定价的读数（lock）—— 每一条都带「哪一轮、哪一组导出配置、数出自哪份冻结件」
+# 没有来历的数字不许进这张表。
 # ---------------------------------------------------------------------------
 
-# 收敛三遍的读数。落位最大值 5.6995 是骨盆（PMX 腰 vs Biped COM 的固有差），
-# 方向超标 4→5→5 是「靠上限退出」的证据（#53 要治的正是这个），本轮先钉住不许变差。
-# 尝试/改善不单独锁：未改善=0 与 抛错=0 两条 gate 已经蕴含「改善数 == 尝试数」。
+# 落位最大值 5.6995 是骨盆（PMX 腰 vs Biped COM 的固有差）；偏差和是 19 个校验点的
+# 和。这两组在香菱的两组导出配置下**读数逐字相同**（2026-11-05 用同一个 exe 各跑一遍：
+# 5.6995 三遍一样、146.513/64.9124/63.0287 一个末位都没动），所以它们不随配置走，
+# 留在这一份共享表里；随配置走的那个数（`dir_over`）住在 `PricedRun` 里。
 CONVERGE_LOCKS: dict[str, tuple[float, ...]] = {
-    "dir_over": (4, 5, 5),
     "place_max_cm": (5.6995, 5.6995, 5.6995),
     "place_sum_cm": (146.513, 64.9124, 63.0287),
 }
@@ -139,9 +159,136 @@ CHAIN_ANGLE_LOCKS = {"Bip001 L Foot -> Bip001 L Toe0": 29.8725,
                      "Bip001 R Foot -> Bip001 R Toe0": 29.8929}
 CHAIN_ANGLE_TOL_DEG = 0.5
 
-# 结构向复核（退出 Figure 后的权威朝向读数）：>DIRTOL 的 6 根是已知集合
-# （#27 的 Spine2/颈/手指 + 脚链定价项），本轮先钉住数量。
-STRUCT_OVER_LOCK = 6
+# 结构向复核（退出 Figure 后的权威朝向读数）：>DIRTOL 的那几根是已知集合
+# （#27 的 Spine2/颈/手指 + 脚链定价项），钉的是数量不许变差。数量随导出配置走，
+# 所以它住在 `PricedRun.struct_over` 里而不是一个常数。
+
+# ── 定价的身份：模型由导出计数认，配置由导出事实拼 ──────────────────
+#
+# 这六个值全部取自导出落下来的**文本**，不在这里重新 float()：`float("0.000088")`
+# 打印成 `8.8e-05`，定价条目与 meta 就会写成两种字形而对不上（`_ruler` 那条教训）。
+# 前五维取 CLI/GUI 上真能按的开关（`--height` → scale、`--min-weight`、`--drop-guides`），
+# 加上 `bones`：骨数是这些开关与骨架模式共同的结果，而「收敛要转几根骨」正是它决定的。
+# 第六维 `dq` 取的是**源文件声明的形变口径**（meta 的 SDEF/QDEF 两键组合成
+# lin / sdef / qdef / sdef+qdef）。它不是开关，但和开关一样决定「这轮的读数该按哪组数卡」：
+# 双四元数分支在 M1b 删掉之后 Max 端只会按线性混合装配，于是「源含 DQ + 装配线性」是一个
+# **从没实跑过定价**的组合 —— 让它进指纹，这一组就命中「配置没定价 ⇒ 中止」，而不是拿
+# 纯线性那两组的数冒充它的尺。
+# 放配置这一边而不是「认模型」那一边，是因为要防的事只有一件：一具与香菱同网格同表情
+# 但含 SDEF 的模型，不该悄悄继承线性混合那两组的锁（认模型那一维会把它判成「没定价的
+# 模型 ⇒ 整片退 report」，太安静；配置这一维判成「这一组配置没定价 ⇒ 中止」，够响）。
+# 反过来，认模型用 `vertex_count` / `morph_count`：它们由网格与表情表决定，改文件名、
+# 换身高、丢辅助骨都不动它们 —— 所以「把 PMX 改个名」不会让验收层认不出这具模型。
+def export_config(*, scale: str, min_weight: str, bones: str, guides: str,
+                  sdef: str, qdef: str) -> str:
+    """导出配置串：定价表的分键，也是中止信息里那句「这一轮到底是哪一组开关」。
+
+    `guides` 收的是 meta 的字面文本（true/false），不是 Python bool —— 装配侧读的是
+    文件，中间不许有翻译（`foot_box_flat` 同一条规矩）。认不出的写法一律抛：那说明
+    meta 与代码分叉了，此时任何定价判断都建立在猜上。
+    `sdef` / `qdef` 同理收 meta 的 "0"/"1" 原文（#119）：形变口径决定 Skin 怎么算，
+    双四元数分支在 M1b 删掉之后，「源文件有没有 SDEF/QDEF」只剩 meta 里这两行，
+    而它不进指纹就等于「DQ 模型继承线性混合那两组的锁」—— 同一具网格换一种形变，
+    落位与朝向读数本来就该重量一遍。
+    """
+    if guides not in ("true", "false"):
+        raise ValueError(
+            f"meta 的 keep_guides 必须是 true/false，读到 {guides!r}：重跑 "
+            "tools/run_model.py 生成新的 meta（这一轮的辅助骨开关读不出来，"
+            "而收敛读数恰好跟着它变）")
+    for key, value in (("has_sdef", sdef), ("has_qdef", qdef)):
+        if value not in ("0", "1"):
+            raise ValueError(
+                f"meta 的 {key} 必须是 0/1，读到 {value!r}：重跑 tools/run_model.py "
+                "生成新的 meta（形变口径读不出来，而 Max 端只会按线性混合装配）")
+    # 引号不在 f-string 里套引号：那条写法要 Python 3.12+，而本项目的下限是 3.8
+    keep = "keep" if guides == "true" else "drop"
+    dq = {(0, 0): "lin", (1, 0): "sdef", (0, 1): "qdef",
+          (1, 1): "sdef+qdef"}[(int(sdef), int(qdef))]
+    return f"scale={scale} min_weight={min_weight} bones={bones} guides={keep} dq={dq}"
+
+
+class PricedRun(NamedTuple):
+    """一具被定价过的模型在某一组导出配置下的读数，加它的来历。"""
+
+    model: str                      # 只进日志与报错：定价认的是下面的计数，不是名字
+    verts: str                      # 认模型：meta 的 vertex_count 原文（装配核对它 == 权重表行数，#121）
+    morphs: str                     # 认模型：meta 的 morph_count 原文
+    config: str                     # 认配置：export_config() 的产物
+    dir_over: tuple[int, ...]       # 三遍收敛各自还有几根骨转不过去
+    struct_over: int                # 结构向 >DIRTOL 的根数
+    log: str                        # 这两个数量出自 baselines/ 里哪一份冻结件
+
+
+PRICED_RUNS: tuple[PricedRun, ...] = (
+    # 第 20 轮起那一组（全骨 321 根）：`dir_over` 4→5→5 是「靠上限退出」的证据
+    # （#53 要治的正是这个），钉住不许变差。尝试/改善不单独锁：未改善=0 与 抛错=0
+    # 两条 gate 已经蕴含「改善数 == 尝试数」。
+    # `struct_over` 的 6 根 = #27 的 Spine2 / 颈 / 手指 + 脚链那两条定价项。
+    PricedRun(model=PRICED_MODEL, verts="18892", morphs="61",
+              config=export_config(scale="7.6563", min_weight="0.0",
+                                   bones="321", guides="true", sdef="0", qdef="0"),
+              dir_over=(4, 5, 5), struct_over=6, log="round20_objrun.log"),
+    # 第 77 轮 = 第 76 轮那个交付件形状（--drop-guides，271 根骨）在 2026-11-05 重跑一遍。
+    # 两轮独立读数相同（`dir_over 5/6/6`、`struct_dir/over_tol 7`，见下面那份冻结件与
+    # test_runs/香菱_无附属骨/MMD2MAX.REPORT），所以这不是抄当轮，是量到过的两组数。
+    # 第 110/114 轮（2026-11-07，同一份 PMX 只差 keep_guides）把「多的那 1 根」点名了：
+    # 是 **R Hand 从退化读数变成可测**，不是泛指「少一批骨就少一批转到位的机会」。
+    #   guides=true ：R Hand 挑中**轴3**、目标倾=0.0、实测倾=-90.541、夹角=90.5409，
+    #                 被判**短骨**跳过 ⇒ measurable=51 / short_skipped=1 / over_tol=6
+    #   guides=false：R Hand 挑中**轴1**、目标倾=-137.284、实测倾=178.77、夹角=43.7781
+    #                 ⇒ measurable=52 / short_skipped=0 / over_tol=7
+    # L Hand 两轮**逐位相同**（轴1、夹角=43.7967、pivot偏差=0.143507），所以变的只有
+    # R Hand 的长度轴挑选这一处。它那 43.78 度就是 #33 定价的「Hand 不转」，只不过
+    # 现在左右对称地各报一根，而不是一根报 43.8、另一根躲在短骨豁免里。
+    # ⇒ 拿 over_tol 跨这两个配置比大小会造出假回归；它按配置指纹各锁各的数。
+    PricedRun(model=PRICED_MODEL, verts="18892", morphs="61",
+              config=export_config(scale="7.6563", min_weight="0.0",
+                                   bones="271", guides="false", sdef="0", qdef="0"),
+              dir_over=(5, 6, 6), struct_over=7,
+              log="round77_香菱_noguide_objrun.log"),
+)
+
+
+def pricing_of(*, vertex_count: int, morph_count: int, config: str) -> PricedRun | None:
+    """这一轮是不是「被定价过的那一具模型 + 那一组配置」。
+
+    - 计数对不上任何条目 → None：没被定价过的模型，那些行退化成 `report`（模块文档）。
+    - 计数对得上、配置对不上 → 抛。这一支就是 #106：以前配置不存在，所以
+      `--drop-guides` 那轮要么拿全骨的数判红、要么（改了名）整片不判。
+    """
+    same_model = [r for r in PRICED_RUNS
+                  if r.verts == str(vertex_count) and r.morphs == str(morph_count)]
+    if not same_model:
+        return None
+    for run in same_model:
+        if run.config == config:
+            return run
+    raise ValueError(
+        f"{same_model[0].model}（顶点 {vertex_count} / 表情 {morph_count}）被定价过，"
+        f"但这一组导出配置没有定价：{config}。已定价的配置是 "
+        f"{'、'.join(r.config for r in same_model)}。"
+        "换配置 = 换读数（骨数决定收敛要转多少根、身高决定所有厘米数），"
+        "拿别的配置的数判它是假绿或假红 —— 先按这一组配置实跑一遍，把每个读数逐个"
+        "查过来历，再往 PRICED_RUNS 里加一条")
+
+
+def pricing_note(*, vertex_count: int, morph_count: int, config: str,
+                 rows: list[tuple[str, ...]]) -> str:
+    """给日志的一行：这一轮的锁是拿谁的数在卡。
+
+    必须**每轮**打印，而不是只在抛错时说话：#106 那轮的形状不是「判错了」，是「整片
+    不判，而日志里看不见」。没被定价过的模型退化成 report 是设计，但设计也得在账面上
+    留一行 —— 否则下一轮没人发现自己其实没量（读数写着 512 全绿，验收层根本没参与）。
+    """
+    locks = sum(1 for r in rows if r[5] == "lock")
+    run = pricing_of(vertex_count=vertex_count, morph_count=morph_count, config=config)
+    if run is None:
+        return (f"定价：无（顶点 {vertex_count} / 表情 {morph_count} 不在定价表里 ⇒ "
+                f"已定价的读数只报告、不卡数，本表 {locks} 条 lock）")
+    return (f"定价：{run.model}｜{run.config}｜读数出自 baselines/{run.log}"
+            f"（dir_over {'/'.join(str(v) for v in run.dir_over)}、"
+            f"struct_over {run.struct_over}）⇒ 本表 {locks} 条 lock")
 
 # 落位偏差：这些节点**必须**落在 PMX 目标上（回读实测 ~0），超 0.5cm 就是真缺陷。
 PLACEMENT_GATE_NODES = (
@@ -179,9 +326,8 @@ PLACEMENT_LOCKS: dict[str, tuple[float, float]] = {
 PLACEMENT_RAY_NODES = ("Bip001 L UpperArm", "Bip001 R UpperArm")
 PLACEMENT_RAY_TOL_CM = 0.01
 
-# 段校验的容差：0.05 厘米是第十二轮以来一直在用的口径（`段校验 … 误差 ≤0.05`），
-# 比 Max 的 pivot 回读噪声（~4e-06）大三个数量级，比人眼能看出的错位（~0.3cm）小。
-SEGMENT_TOL_CM = 0.05
+# 段校验的容差 SEGMENT_TOL_CM 在 mmd2max/targets.py（0.05 的定价与来历写在那边）。
+# 这边只引用，不再抄一遍：`TOE_TOL_CM` 的门控值就是从这里等过去的（#127）。
 
 # 肢段长度：换到第二具模型上**实测到够不着**的那一段，按模型定价钉住（#76-B）。
 # 键 = 模型名，值 = {段主体: (定价读数, 容差)}。没被定价的模型/段仍走 gate，
@@ -210,16 +356,18 @@ SEGMENT_TOL_CM = 0.05
 SEGMENT_LOCKS: dict[str, dict[str, tuple[float, float]]] = {
     "香菱-海灯节": {"Bip001 Spine1 -> Bip001 Neck": (17.9546, 0.001)},
     # 克雷薇同一段的对应物，来历与上面那条**是同一个机制**（不是同一堆数字）：
-    # round78（本工作区，2026-11-05 08:19，`--physics --shot`）实跑读数
     #   `段校验 Bip001 Spine1 -> Bip001 Neck 目标=20.3506 实际=20.4092 误差=0.0585976`
     #   `结构向 Bip001 Spine1 … 夹角=0.0 pivot偏差=0.159074` —— pivot 停在父骨轴上，
     #   `校验 Bip001 Neck … 偏差=0.0` —— Neck 自己落位是准的，
     #   `段校验 Bip001 Spine -> Bip001 Spine1 目标=15.2164 实际=15.213` —— 同一根弧的
     #     另一半落在上一段（短 0.0034），两个符号、一个来历。
     # 所以这段的世界长度 = PMX 长度 + pivot 偏移在这段方向上的投影，按构造够不着 20.3506。
-    # 定价的复现性：round75（Desktop 源树，2026-11-04 21:46）与 round78 读**同一个** 20.4092、
-    # 同一个误差 0.0585976；两遍之间隔着第 41 条那批改动，而 `tools/diff_round.py` 对撞这两轮
-    # 除了绝对路径与截图取景/填充一行没动（量到=21 投不出=0 两边相同）⇒ 这段读数与那批改动无关。
+    # 来历：上面四行读数在 baselines/round79_克雷薇_objrun.log（185/186/189/208 行，
+    # 2026-11-05 13:19）里各出现一次，`实报=20.4092` 在 baselines/round75_克雷薇_driver.log
+    # （34 行，2026-11-04 21:47，那一轮这段还是 gate 所以才会被打出来）里出现一次。
+    # 两轮之间隔着并回 portable 那批改动 —— 79 轮的 .ms 与规格装配都是并回后的，配置项
+    # 也从 42 项变成 43 项（新增 `短骨门限=1.0`），四行读数一字没变 ⇒ 这个数不是某一轮的
+    # 偶发，也和那批改动无关。
     # 容差照 海灯节 的 0.001 定（比原 gate 的 0.05 严 50 倍），钉「别漂」，不是「达标」。
     "克雷薇": {"Bip001 Spine1 -> Bip001 Neck": (20.4092, 0.001)},
 }
@@ -307,6 +455,95 @@ class SkinExpectation(NamedTuple):
     links_by_bone: tuple[tuple[str, int], ...]
 
 
+class PhysicsExpectation(NamedTuple):
+    """物理段「该建成什么样」的五把尺，全部从**导出的 physics.tsv** 数出来。
+
+    这几把尺与 meta 的 `rigid_count` / `joint_count` 是两份不同的东西：后者是 PMX 侧的
+    声明（`len(model.rigid_bodies)`），前者是真正落盘、Max 要逐行读的那张表的行数。
+    装配时两边对撞（分叉 ⇒ 中止，#122），对上了才把表里这份交给 Max 当期望值 ——
+    Max 报的是**它在场景里建出来的代理个数**，创建会抛错、会退化成圆柱、会进不了层，
+    所以那不是一个恒等式。第 64/64b 轮那句 `物理刚体代理：253（失败 1）` 就是这条闸
+    该响而当时没有闸：那根「失败」的代理其实建好并挂上了父骨，抛的是记账那一步
+    （PMX 刚体索引 0 基、Max 数组 1 基），所以 `rigid_created` 会比场景里的真数少一根、
+    而 `rigid_failed` 会多说一根 —— 两个数都得看，卡一个不够。
+
+    `oriented_rows` 数的是 `rigid_rot_x/y/z` 里至少一根非零的 RIGID 行，口径与 .ms 的
+    `if (rx != 0.0) or (ry != 0.0) or (rz != 0.0)` 逐字相同（同一批列、同一个非零判据）。
+    它是「`旋转失败=0` 这句是真话还是空话」的那一格：没有它，254 根全没朝向与 254 根
+    全转上了读起来一模一样（.ms 汇总行那段注释记的就是这件事）。
+
+    `parented_rows` 数的是 `rigid_bone >= 0` 的 RIGID 行（#125）= 这些代理**该**挂在一根骨
+    下面。PMX 允许一个刚体不绑骨（bone = -1，MMD 里那种自己挂在根上的挂件），那几行本来就
+    不该挂，所以期望不是「刚体行数」而是「绑了骨的行数」。对上的语义是 .ms 那句回读
+    `proxy.parent != undefined` —— 挂父那三层条件落空时创建计数完全不动，这一格是唯一的出口。
+
+    `named_rows`（#126）数的是 `rigid_bone_node` 非空的 RIGID 行 = 这些行**认得出该挂哪根骨
+    的名字**。它永远 ≤ `parented_rows`：差出来的那几行是「绑了骨，但这个名字当不了尺」——
+    重名骨（Max 会给第二个副本加后缀，谁拿裸名没量过）。`rigid_parented` 只说「挂上骨了」，
+    挂错一根照样绿；这一格比的是回读到的 `proxy.parent.name` 与表里那个名字，
+    是「表里的骨号 → Max 的 boneNodes 下标 → 场景里那个节点」这条链上唯一两端不同源的量。
+    """
+
+    rigid_rows: int
+    joint_rows: int
+    oriented_rows: int
+    parented_rows: int
+    named_rows: int
+
+
+def physics_expectation(rows: list[dict[str, str]], *, src: str) -> PhysicsExpectation:
+    """physics.tsv 解析出来的行 → 物理段那几把尺（#122 三把、#125 第四把、#126 第五把）。
+
+    分类只认**列名**：RIGID 行走第 1 行的列名（有 `rigid_index`），JOINT 行走 `@JOINT`
+    那行的列名（有 `joint_index`）。之所以不许「按第一列 row_kind 分类再看列名」：
+    如果 `@JOINT` 那行没被读到（旧产物、或被谁手改坏了），JOINT 行会被主表头错解成
+    `row_kind=JOINT`、`rigid_index=0` —— 数出来是一份**看着正常**的刚体行数，而真正的
+    关节数读成 0。所以这里把每一种读不出的形状都抛出去，而不是把偏小的尺交给下一轮。
+    """
+    rigid = [r for r in rows if "rigid_index" in r]
+    joint = [r for r in rows if "joint_index" in r]
+    if both := [r for r in rows if "rigid_index" in r and "joint_index" in r]:
+        raise ValueError(f"{src}：{len(both)} 行同时有 rigid_index 与 joint_index，"
+                         "两种记录的列名撞了（`@JOINT` 那行的列名前缀是 joint_，不该撞）")
+    if weird := [r for r in rigid if r.get("row_kind") not in (None, "RIGID")]:
+        raise ValueError(f"{src}：{len(weird)} 行按主表头读出来 row_kind 不是 RIGID "
+                         f"（第一行是 {weird[0].get('row_kind')!r}）—— `@JOINT` 那行列名行"
+                         "没读到，关节行被当成刚体行了，重跑 tools/run_model.py")
+    if unknown := [r for r in rows if "rigid_index" not in r and "joint_index" not in r]:
+        raise ValueError(f"{src}：{len(unknown)} 行既没有 rigid_index 也没有 joint_index："
+                         f"第一行是 {unknown[0].get('row_kind', unknown[0])!r}，"
+                         "这张表不是导出层写的那种记录，重跑 tools/run_model.py")
+    oriented = 0
+    for r in rigid:
+        try:
+            axes = [float(r[f"rigid_rot_{a}"]) for a in ("x", "y", "z")]
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"{src}：刚体行 {r.get('rigid_name', '?')} 的 rigid_rot_* "
+                             f"读不出三个数（{error}）—— 朝向这一维没有尺，重跑导出")
+        if any(v != 0.0 for v in axes):
+            oriented += 1
+    parented = 0
+    named = 0
+    for r in rigid:
+        try:
+            bone = int(r["rigid_bone"])
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"{src}：刚体行 {r.get('rigid_name', '?')} 的 rigid_bone "
+                             f"读不出一个整数（{error}）—— 「该不该挂骨」这一维没有尺，重跑导出")
+        if bone >= 0:
+            parented += 1
+        try:
+            node = r["rigid_bone_node"]
+        except KeyError:
+            raise ValueError(f"{src}：刚体行 {r.get('rigid_name', '?')} 没有 rigid_bone_node "
+                             "这一格 —— 「该挂哪根骨的名字」这一维没有尺，重跑导出")
+        if (node or "").strip():
+            named += 1
+    return PhysicsExpectation(rigid_rows=len(rigid), joint_rows=len(joint),
+                              oriented_rows=oriented, parented_rows=parented,
+                              named_rows=named)
+
+
 def parse_weights(text: str) -> list[list[tuple[int, float]]]:
     """weights.tsv → 每个顶点一串 `(全局骨号, 权重)`。
 
@@ -359,7 +596,7 @@ def skin_expectation(bones: list[dict[str, str]],
         if row.get("skin_flag") == "0":
             continue
         # 节点名 = Biped 目标名（人形骨复用 Biped 节点），否则 = 建出来的 BoneGeometry 名。
-        skinned.append(row.get("biped_target") or row["bone_name"])
+        skinned.append(semantic.node_name(row.get("biped_target"), row["bone_name"]))
 
     global_to_skin: dict[int, int] = {}
     skin_id = 0
@@ -434,6 +671,9 @@ class FootBox(NamedTuple):
 class HandBox(NamedTuple):
     node: str
     section: float
+    # 掌长目标（widths.tsv 第 3 列，只有 Hand 两行有）。None = 老产物没有这一列，
+    # 此时不许凭空长出一条 Max 永远不会报的 hand_length_cm 尺。
+    palm: float | None = None
 
 
 def _box_float(limb: dict[str, str], key: str, row_label: str,
@@ -569,7 +809,19 @@ def box_targets(limbs: list[dict[str, str]],
                              "截面目标非正 = 网格那一段没量到东西。"
                              ".ms 的 mmd2maxReadWidths 只收 > 0.001 的行，所以这边必须在它"
                              "之前拦住：否则规格表会多出一条永远没人报的尺")
-        hands.append(HandBox(name, value))
+        # 第 3 列「掌长」是 #136 加的可选列：有值才长出 `hand_length_cm` 那把尺。
+        # 空串/缺键都按「没有目标」处理，绝不把 0 当成合法掌长（0cm 的手掌不存在）。
+        palm = None
+        raw_palm = item.get("palm_len")
+        if raw_palm is not None and str(raw_palm).strip():
+            try:
+                palm = float(raw_palm)
+            except ValueError:
+                raise ValueError(f"粗细表 {name} 的 palm_len 不是数字：{raw_palm!r}") from None
+            if palm <= 0.5:
+                raise ValueError(f"粗细表 {name} 的 palm_len = {raw_palm}，不是正的掌长："
+                                 "量不到手掌网格就别写这一格，Max 那边不会去缩")
+        hands.append(HandBox(name, value, palm))
     return foot, hands
 
 
@@ -696,6 +948,40 @@ SHOT_MIN_FILL_FLOOR = 0.0
 # 一个读数：特写报 0 = 裁骨没跑；全身报 >0 = 取景框被谁改小了。
 SHOT_SCENE_TAGS: tuple[str, ...] = ("front", "side", "top", "bone_front", "bone_side")
 
+# ---------------------------------------------------------------------------
+# 截图**内容**（#115）：上面那些读数没有一个是像素
+# ---------------------------------------------------------------------------
+#
+# fill_pct 拿的是骨的世界坐标经 `gw.transPoint` 投影，tags/clip_hidden 是计数 ——
+# 于是「21 张全在、取景全对、每张打开都是纯黑」这个形状一路绿灯。第 83 轮 #112 就实拍
+# 到过这个形状（desktop.capture 恒黑那时还没有这道闸）。#115 把话变成像素上的：
+# 存完每张图立刻 `openBitMap` 回读盘上那个文件，按网格采样，报两个数
+# —— 「有几种颜色」和「最多的那种占多少」。纯色（黑屏、白屏、没渲染出来）在这两行上
+# 是 1 与 100%，一眼就红。
+#
+# 定价（先用探针量 API，再拿两轮真跑定数，两条路都走过才敢把数写死）：
+# · 合成件（test_runs/probe115：make_parse_probe 的 direct 模式只剪掉主执行块，
+#   所以探针里调的就是 mmd2maxSampleShot 本尊，不是探针复刻的一份）：
+#   纯黑 / 纯白 → 采到 576、去重 **1**、最大同类 576（=100%）；左右各半 → 去重 2、
+#   最大同类 288；随机噪声 → 去重 576、最大同类 1；24×24 逐点不同 → 去重 576
+#   （边长恰好等于网格，不能被 `w < grid` 误杀）；8×8 / 0 字节 / 改名成 .png 的文本 /
+#   根本没这个文件 → 三格全 **-1**。
+# · 真图（第 84 轮香菱r80、第 85 轮香菱-海灯节，各 21 张全部采到 576 点）：
+#   去重最少 **29**（85 轮 bone_front，只剩骨架的那一张），最多 275；
+#   最大同类占比最低 3.47%、最高 **12.15%**（85 轮 front，全身图里背景那一格）。
+# 两条线都卡在「坏的」与「预期的」中间，两头各留一倍以上余量：
+# 10 ≤ 29（真图最差）而纯色只有 1；50% ≥ 12.15%（真图最差）而纯色是 100%。
+# 和 SHOT_MIN_FILL_PCT 同一条定价纪律：不要求「正好多少」，只要求「别再悄悄退回去」。
+# 两个边界记在这里，别以后当 bug 查：
+# · 左右各半那张的最大同类是 288/576 = **50.0%**，`max` 判的是「≤」，所以它**过**
+#   dominant 这条、挂在 distinct=2 上 —— 两行是两条独立的闸，不是同一条判据的备份。
+# · 拿 PIL 独立重算同一批盘上 PNG：最大同类 21/21 逐张与 Max 报的数相同，去重色数
+#   差 0~3（Max 的解码与色彩管理不是逐通道恒等映射）。这一位不改判闸方向，所以没把
+#   「逐张相等」写成断言 —— 那会变成一条跟着 Max 版本走的假红。
+SHOT_PIXEL_GRID = 24
+SHOT_MIN_DISTINCT_COLORS = 10
+SHOT_MAX_DOMINANT_PCT = 50.0
+
 # 取景框的三根轴（与导出侧的 mmd2max.export_obj.FRAMING_AXES、tools/obj_run.FRAMING_AXES
 # 同一套词）。胸与颈共用这一套，因为两张特写的行形状完全一样：三轴各一对框 + 一对紧边。
 FRAMING_AXES = ("x", "y", "z")
@@ -715,7 +1001,8 @@ SHOT_H_AXIS: dict[str, str] = {
 
 def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None,
                    neck_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
-    """截图取景的规格行：每张图一行填充率 + 一行裁骨数 + 两条聚合计数 + 两张特写的「罩得住」判据。
+    """截图段的规格行：每张图 填充率 + 裁骨数 + 去重色数 + 最大同类占比，四条聚合计数，
+    加两张特写的「罩得住」判据。
 
     `when` 全是 `if_present`：截图段只在 `MMD2MAX_SHOT` 打开时跑，而且它排在保存与成功
     标记之后 —— 那段坏了不该把已经落盘的 .max 判成失败，但它一旦跑了，行数与填充率
@@ -749,6 +1036,19 @@ def shot_fill_rows(chest_bone: tuple[tuple, tuple] | None = None,
     rows.append(row("shot_rb", "clip_bones_total", GLOBAL, None, 0, "report",
                     when="if_present"))
     rows.append(row("shot_rb", "projection_fail", GLOBAL, 0, 0, "gate",
+                    when="if_present"))
+    # ---- 内容闸（#115）：每张两行 + 一条「采样到底跑了几张」的聚合 ----
+    # 逐张那 42 行的 `when` 是 if_present，单靠它们防不住「采样代码一次都没被调到」：
+    # 没有行 = 合法缺席 = 全绿。所以配一条 gate —— 与上面 tags / projection_fail 同一套路。
+    # 用 row 而不是 _lock：「不是一张纯色图」与模型无关，是这一段的结构性要求，
+    # 换一具模型不会让纯黑的图变成可以接受。
+    for tag in SHOT_TAGS:
+        rows.append(row("shot_rb", "distinct_colors", tag,
+                        SHOT_MIN_DISTINCT_COLORS, 0, "min", when="if_present"))
+    for tag in SHOT_TAGS:
+        rows.append(row("shot_rb", "dominant_pct", tag,
+                        SHOT_MAX_DOMINANT_PCT, 0, "max", when="if_present"))
+    rows.append(row("shot_rb", "pixel_sampled", GLOBAL, len(SHOT_TAGS), 0, "gate",
                     when="if_present"))
     rulers = {"chest": chest_bone, "neck": neck_bone}
     for prefix in rulers:
@@ -820,10 +1120,10 @@ def row(phase: str, check: str, subject: str, expected, tol,
 
 
 def _lock(phase: str, check: str, subject: str, priced, tol,
-          model: str, when: str = "always") -> tuple[str, ...]:
+          when: str = "always") -> tuple[str, ...]:
     """有定价读数就出 `lock`，否则出 `report`。
 
-    「否则」有两种：这具模型没被定价过（换模型），以及这个主体不在定价表里（新增的
+    「否则」有两种：这一轮没被定价过（换模型），以及这个主体不在定价表里（新增的
     肢段、改名的骨）。两种都不该拿香菱的数字去判红 —— 但那一行**必须出现**，
     否则「没量」和「量了没问题」在报告里长得一样。
     """
@@ -832,19 +1132,30 @@ def _lock(phase: str, check: str, subject: str, priced, tol,
     return row(phase, check, subject, priced, tol, "lock", when=when)
 
 
-def _priced(model: str, table: dict, key):
-    """只有被定价的那具模型才拿到数字，其余模型返回 None（→ report）。"""
-    return table.get(key) if model == PRICED_MODEL else None
+def _priced(run: PricedRun | None, table: dict, key):
+    """这一轮被定价过才从表里取数字，否则 None（→ report）。
+
+    `run` 是 `pricing_of()` 的结果：它已经把「模型对不上（None）」和「模型对得上但
+    配置没定价（抛）」两种情况分开了，所以这里只需要问「有没有」。
+    """
+    return table.get(key) if run is not None else None
 
 
-def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
+def build_spec(*, model: str, config: str, vertex_count: int,
+               limbs: list[dict[str, str]],
                skin_expect: SkinExpectation, widths: list[dict[str, str]],
                bones: list[dict[str, str]], biped_map: list[dict[str, str]],
-               morph_count: int, skin: bool = True,
+               morph_count: int, physics: PhysicsExpectation | None,
+               skin: bool = True,
                foot_reach: bool = True, rollback: bool = False,
+               toe_ground: bool = False,
                chest_bone: tuple[tuple, tuple] | None = None,
                neck_bone: tuple[tuple, tuple] | None = None) -> list[tuple[str, ...]]:
     """装配一轮的全部判据规格。
+
+    `config` 是必填的：它和 `vertex_count` / `morph_count` 一起决定「这一轮是不是被
+    定价过的那个形状」（`pricing_of`）。不给默认值 —— 一个「默认按全骨」的形参会让
+    `--drop-guides` 那一轮悄悄用上全骨的锁，而那正是 #106 要堵的形状。
 
     输入全部来自**导出结果**（weights 行数、limbs.tsv 的行、meta 的计数）与
     `mmd2max.targets` 的容差 —— 一个都不许从 Max 的日志里取，否则就成了「拿 Max
@@ -874,6 +1185,22 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     `if_present`（Max 一段都不跑，读数当然没有），打开时 `rollback/saved` 与三列差值
     必须出现 —— 「开关打开却什么都没报」正是「退路只是句注释」的样子，必须红。
 
+    `toe_ground`（#134 加、#135 翻默认）值来自 `targets.TOE_GROUND` → CFG。产品默认 true
+    （落地踩地，用户第 135 轮对着截图拍板）；这里的形参默认 false 只服务于直接调用/单测
+    的贴鞋基线。它改的是 **kind** 不是行数：落地态把 Toe0 链的 `segment/len_cm` 与
+    `foot_chain/chain_angle_deg` 降 report（搬 pivot 的已定价代价，数字照打印），并把
+    `toe_shoe` 的闸从 penetration 换到 ground_gap；贴鞋态反过来。行数与开关无关。
+
+    `physics`（#122）是**必填**的，值可以是 `None`：`None` = 这一轮没给 physics 文件，
+    物理段整段不跑，那些行退成 `if_present`（合法缺席）；给了就是 `PhysicsExpectation`，
+    四个数都从**导出的 physics.tsv** 数出来（`physics_expectation()`），而 meta 的
+    `rigid_count` / `joint_count` 在装配时与它对撞、分叉就中止 —— 那两份是导出层里
+    各算各的同一件事（PMX 声明 vs 落盘的表），Max 读的是表。Max 报回来的
+    `physics_rb/*` 是它在场景里**真建出来**的代理与标记的计数：创建会抛错、代理会
+    退化成圆柱、会进不了层、会离开 PMX 那个点、会一根骨也没挂上（#125）。第 64/64b 轮的
+    `物理刚体代理：253（失败 1） 旋转失败=254` 与第 70/71 轮的
+    `挂父后世界偏心=4 最大=94.6242` 当时全靠人读日志，这一段就是那段日志的闸化。
+
     `chest_bone` / `neck_bone`（#70、#71）是导出侧量的**取景主体骨端点极值**
     `((x,y,z)min, (x,y,z)max)`，None = 这具模型认不出那组骨（胸：叫「胸 / bust」的骨；
     颈：映射到 `Bip001 Spine2 / Neck / Head` 的那三节）。它们是两组特写判据的尺：Max
@@ -882,12 +1209,21 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     丢了只有那一组降级，另一组照常卡数。
     """
     rows: list[tuple[str, ...]] = []
+    # 这一轮是「被定价过的那个形状」吗？认模型用导出计数、认配置用导出开关，两者都不
+    # 许看文件名（#106）。配置没定价过的被定价模型在这里就抛，装配不会往下走。
+    run = pricing_of(vertex_count=vertex_count, morph_count=morph_count, config=config)
+    # 脚段/腿段的类别由名字表定，mode 列只被核对（规则 I）；「这双脚有没有网格可量」
+    # 问权重表，不问 mode 列 —— 见 `foot_pairs_with_mesh`。
     measured_feet = foot_pairs_with_mesh(skin_expect)
     foot_rows = limb_rows_of_mode(limbs, "foot", measured_feet)
     leg_rows = limb_rows_of_mode(limbs, "leg", measured_feet)
 
     def pair(limb: dict[str, str]) -> str:
         return f"{limb['parent_target']} -> {limb['child_target']}"
+
+    # 落地态（#135）被搬 pivot 的那几根 Toe0 链：Foot -> Toe0。segment/foot_chain 对
+    # 这几条链的读数在落地态是「用户选择的代价」而非缺陷，降 report（见下面两处分支）。
+    toe_pairs = {pair(limb) for limb in foot_rows}
 
     # ── 网格 ──────────────────────────────────────────────────────
     # 期望顶点数来自 weights.tsv 的数据行；Max 报的是**网格对象**上的顶点数。
@@ -916,14 +1252,19 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         subject = str(pass_no)
         rows.append(row("converge", "raised", subject, 0, 0, "gate", when=when))
         rows.append(row("converge", "not_improved", subject, 0, 0, "gate", when=when))
+    # `dir_over` 随导出配置变（要转的骨集合不同），所以它来自定价条目而不是共享表；
+    # 没被定价的那一具拿不到这个数，那三行退化成 report（`_priced` 返回 None）。
+    converge_locks = dict(CONVERGE_LOCKS)
+    if run is not None:
+        converge_locks["dir_over"] = run.dir_over
     for check in ("dir_over", "place_max_cm", "place_sum_cm"):
-        values = CONVERGE_LOCKS[check]
+        values = converge_locks.get(check, ())
         for pass_no in range(1, CONVERGE_MAX_PASSES + 1):
             when = "always" if pass_no == 1 else "if_present"
-            value = _priced(model, {str(i + 1): v for i, v in enumerate(values)},
+            value = _priced(run, {str(i + 1): v for i, v in enumerate(values)},
                             str(pass_no))
             rows.append(_lock("converge", check, str(pass_no), value,
-                              CONVERGE_TOL[check], model, when=when))
+                              CONVERGE_TOL[check], when=when))
 
     # ── 收敛闸门本身（M3）─────────────────────────────────────────
     # 这三行是「循环为什么停」的读数，全部由 Max 报，Python 只要求它们出现：
@@ -951,15 +1292,18 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     # ── 大腿扭转（#36）：主体 = limbs 里 mode=leg 的那些行 ────────
     for limb in leg_rows:
         subject = limb["parent_target"]
-        value = _priced(model, THIGH_KNEE_LOCKS, subject)
+        value = _priced(run, THIGH_KNEE_LOCKS, subject)
         rows.append(_lock("thigh_roll", "knee_err_cm", subject, value,
-                          THIGH_KNEE_TOL_CM, model))
+                          THIGH_KNEE_TOL_CM))
         rows.append(row("thigh_roll", "ankle_err_cm", subject, 0,
                         THIGH_ANKLE_TOL_CM, "gate"))
 
     # ── 脚趾复摆（#38）+ 接趾后复摆：主体 = mode=foot 的行 ────────
     # 复摆残差的上限就是 CFG 里的 MMD2MAX_TOETOL：同一个数在两侧各写一遍的日子
     # 已经结束（M2a），规格表直接引用 targets。
+    # 这个上限**同时是 .ms 里「已在容差内就不动」的门控**，所以它一旦比下面 `segment /
+    # len_cm` 的闸（SEGMENT_TOL_CM）松，就出现「这里放行、那里判红」的自相矛盾（#127，
+    # 林尼实测 0.489997 被放行、段长红在 0.38872）。targets 里两个数已并成一个。
     # residual_after_reach_cm 在 FOOTREACH=false 时整段不跑。
     for limb in foot_rows:
         subject = limb["child_target"]
@@ -968,6 +1312,30 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("toe_snap", "residual_after_reach_cm", subject, 0,
                         TOE_TOL_CM, "gate",
                         when="always" if foot_reach else "if_present"))
+
+    # ── 穿鞋检测（#134）：趾盒到底呆在鞋里没有 / 踩没踩在地面 ──────────
+    # 这一族回答的是用户那句「Toe 趾盒也可以踩在地面吗？符合结构」—— 以前只有 #19 的
+    # 截面尺（盒粗=鞋截面）与一句日志，没有任何一列读「盒底相对鞋底/地面的竖直位置」。
+    # 两把尺分工：
+    #   penetration_cm = max(0, 鞋底z − 盒底z)：盒底戳到鞋底下方多少（穿模量）。
+    #   ground_gap_cm  = 盒底世界 z：盒底离地面（z=0）多远。
+    # 开关 MMD2MAX_TOE_GROUND 决定哪一把是闸（与 foot_reach/rollback 同一条配置分支）：
+    #   关（回滚，贴鞋尖）⇒ penetration 是 max 闸（盒必须在鞋里，穿模≈0），ground_gap 只 report
+    #     （盒底悬在鞋底那么高是翘头鞋的几何必然，不是缺陷 —— 拿它当闸会把现状判红）；
+    #   开（落地，#135 起默认）⇒ ground_gap 升 gate（盒底必须真落到 z≈0，证明落地这一刀落下去了），
+    #     penetration 退 report（落地必然戳穿翘起的鞋底，诚实报穿模量，不拿它判红 ——
+    #     搬 pivot 的代价另由 segment/foot_chain 的 Toe0 链 report 行摆出来，见下面两处分支）。
+    # 行数与开关无关（同 rollback 那 19 行）：开关改的是 kind，不是合同有没有这一格。
+    for limb in foot_rows:
+        subject = limb["child_target"]
+        if toe_ground:
+            rows.append(row("toe_shoe", "penetration_cm", subject, None, None, "report"))
+            rows.append(row("toe_shoe", "ground_gap_cm", subject, 0,
+                            GROUND_TOL_CM, "gate"))
+        else:
+            rows.append(row("toe_shoe", "penetration_cm", subject, 0,
+                            PENETRATION_TOL_CM, "max"))
+            rows.append(row("toe_shoe", "ground_gap_cm", subject, None, None, "report"))
 
     # ── 快照回滚（M4d）：载体本身每轮验一次，守卫只在开关打开时判 ──
     # 这一组和上面所有行的区别：它判的不是「几何对不对」，而是「写坏了有没有退路」。
@@ -1029,17 +1397,37 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
     # `.ms` 那边把同一个数降级成一行 `脚骨偏航结论` 日志（和截图对时序还有用），
     # 判据换成下面两条不问写入侧的：**骨轴 vs 回读到的子关节**（链向）与
     # **两个盒子之间的空气**（盒隙）。
+    # 这一族（以及任何 phase）的**去重条数**由 `tests/test_verdicts.py::MaxChannelContractTests.GRADED_SURFACE`
+    # 数着：删/加通道要连那张名单一起改。第 81 轮的教训是「`.ms` 与 Python **对称地**删掉一族 ⇒
+    # 两侧键集照旧一致、每个通道都有 Max 报读数、驱动无 orphan，三道**一致性**闸全绿」。
+    # 当场咬住的只有 `RealExportTests.test_shape_of_the_priced_spec` 那两道**计数**
+    # （规格 551→547 行、`CHANNELS` 118→116），它钉的是**一具真导出夹具**的数 —— 换模型本来
+    # 就得重数，一族删 4 行、另一族加 4 行还能把总行数抵回去。名单按族数，抵不掉。
+
     for limb in foot_rows:
         pair_subject = pair(limb)
-        value = _priced(model, CHAIN_ANGLE_LOCKS, pair_subject)
-        rows.append(_lock("foot_chain", "chain_angle_deg", pair_subject, value,
-                          CHAIN_ANGLE_TOL_DEG, model))
-        rows.append(row("foot_chain", "gap_cm", pair_subject, 0, GAP_TOL_CM, "gate"))
+        value = _priced(run, CHAIN_ANGLE_LOCKS, pair_subject)
+        # 落地态（#135）搬了 Toe0 pivot，Foot->Toe0 的链向必然偏离 PMX 靶（实测 +6.5°）。
+        # 那是用户选择的落地形态的代价、不是缺陷：降 report（数字照打印），贴鞋态仍 lock/gate。
+        if toe_ground and pair_subject in toe_pairs:
+            rows.append(row("foot_chain", "chain_angle_deg", pair_subject,
+                            None, None, "report"))
+        else:
+            rows.append(_lock("foot_chain", "chain_angle_deg", pair_subject, value,
+                              CHAIN_ANGLE_TOL_DEG))
+        # #139：gap_cm 是**单向**尺。Max 侧报的是「子关节沿轴 − 父盒远端」：>0 =
+        # 两块盒子之间有空气（#41 要防的断链），<0 = 父盒盖过子关节、更连贯。
+        # 旧规格写 gate(0 ± 容差) 会把 #135 落地态下必然出现的负 gap 判成缺陷
+        # （Toe0 前移后 Foot 长度轴翻到 -Z，落地搬的 z 直接落在长度轴投影上）。
+        # 改成 max 上限：正向空气缝超过 GAP_TOL_CM 仍然判红，护栏一条不少；
+        # 负向重叠放行，但数字照打印，且 `gap_covered` 与 `gap_unconnected` 仍 gate。
+        rows.append(row("foot_chain", "gap_cm", pair_subject,
+                        GAP_TOL_CM, 0, "max"))
         rows.append(row("foot_chain", "gap_covered", pair_subject,
                         GAP_COVERED_TRUE, 0, "gate"))
     rows.append(_lock("foot_chain", "broken_roots", GLOBAL,
-                      _priced(model, {GLOBAL: CHAIN_BROKEN_LOCK}, GLOBAL),
-                      0, model))
+                      _priced(run, {GLOBAL: CHAIN_BROKEN_LOCK}, GLOBAL),
+                      0))
     rows.append(row("foot_chain", "gap_unconnected", GLOBAL, 0, 0, "gate"))
 
     # ── 段校验：limbs 每一对一行 ───────────────────────────────────
@@ -1053,7 +1441,12 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         when = "if_present" if "Finger" in limb["child_target"] else "always"
         subject = pair(limb)
         price = priced_segments.get(subject)
-        if price is None:
+        # 落地态（#135）Foot->Toe0 段长必然偏离 PMX 靶（搬 pivot 实测 +0.866cm）：
+        # 代价降 report（数字照打印），贴鞋态仍 gate/lock。只 demote 被搬的那几条链。
+        if toe_ground and subject in toe_pairs:
+            rows.append(row("segment", "len_cm", subject, None, None, "report",
+                            when=when))
+        elif price is None:
             rows.append(row("segment", "len_cm", subject,
                             segment_expectation(limb, anchor),
                             SEGMENT_TOL_CM, "gate", when=when))
@@ -1069,9 +1462,9 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("placement", "pos_err_cm", bone, 0,
                         PLACEMENT_GATE_TOL_CM, "gate", when="if_present"))
     for bone in sorted(PLACEMENT_LOCKS):
-        value = _priced(model, {k: v[0] for k, v in PLACEMENT_LOCKS.items()}, bone)
+        value = _priced(run, {k: v[0] for k, v in PLACEMENT_LOCKS.items()}, bone)
         tol = PLACEMENT_LOCKS[bone][1]
-        rows.append(_lock("placement", "pos_err_cm", bone, value, tol, model,
+        rows.append(_lock("placement", "pos_err_cm", bone, value, tol,
                           when="if_present"))
     for bone in PLACEMENT_RAY_NODES:
         # `max` 不是笔误：b 方案里 UpperArm 的**写入目标**就是锁骨骨盒射线点
@@ -1086,9 +1479,11 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
                         "max", when="if_present"))
 
     # ── 结构向复核 ────────────────────────────────────────────────
+    # 超标的根数随导出配置变（与 `dir_over` 同一条理：它数的正是「还有几根转不到位」，
+    # 而辅助骨那 50 根本来就分在收敛循环的活里）。
+    struct_over = {GLOBAL: run.struct_over} if run else {}
     rows.append(_lock("struct_dir", "over_tol", GLOBAL,
-                      _priced(model, {GLOBAL: STRUCT_OVER_LOCK}, GLOBAL),
-                      0, model))
+                      _priced(run, struct_over, GLOBAL), 0))
     for check in ("measurable", "short_skipped"):
         rows.append(row("struct_dir", check, GLOBAL, None, None, "report"))
 
@@ -1138,9 +1533,32 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("box_rb", "hand_scale_cm", box.node, f"{box.section:.6f}",
                         box_tol_cm(box.section), "gate"))
         rows.append(row("box_rb", "hand_box_cm", box.node, None, None, "report"))
+        # 掌长（#136）：期望来自 widths.tsv 的网格实测，Max 在最终场景里量本地盒跨度。
+        # 与 hand_scale_cm 同一条口径（2% 相对 + 0.02cm 地板），但量的是长度轴，
+        # 抓的正是「横截面缩到位了、桨形盒却还比手掌长一截」这一格。
+        if box.palm is not None:
+            rows.append(row("box_rb", "hand_length_cm", box.node,
+                            f"{box.palm:.6f}", box_tol_cm(box.palm), "gate"))
     rows.append(row("box_rb", "nodes_measured", GLOBAL,
                     len(foot_boxes) + len(hand_boxes), 0, "gate"))
     rows.append(row("box_rb", "read_fail", GLOBAL, 0, 0, "gate"))
+
+    # ── 趾盒终帧重收的覆盖（#129）：那一刀落没落下是一个数 ─────────
+    # 上面 box_rb 那组读的是**最终场景**的盒子，但它的期望值全部来自 limbs.tsv，
+    # 与「这一刀是在哪一帧落的」无关。所以 #78 那个缺陷（终帧没重收、盒子上留的还是
+    # 早帧那次的轴）在旧表里只有 R Toe0 宽高互换那两行会红，而第 48 轮的 L 恰好早帧
+    # 与终帧的 |z| 顺序一致 —— 同一件事整个被盖住。Max 在这一段的自述只有
+    # `pass/ran/toe_box_final 1`：一双脚跳过一根它照样是 1。
+    # 「该落几刀」由输入表回答（`box_targets` 里带趾长的那几根 = 每双脚的趾骨），
+    # 「落下几刀」由 Max 报，两边不同源 ⇒ 不是恒等式。这一行也不会有**合法的**跳过：
+    # 终帧那道守卫现在与早帧那道是同一批条件（书写顺序不同），而「截面算不算一个正数」
+    # 只有 `_box_float` 一把尺（≤ 0.02 在写规格表这一步就抛，Max 根本不会被启动）
+    # —— 原来终帧守卫里多出的 `toeW/toeH > 0.05` 是第二把尺，会把 0.02~0.05 那一段的
+    # 合法跳过报成红，与 #127 同一类，已删（见 .ms 那段注释）。
+    for box in foot_boxes:
+        if box.length is None:
+            continue        # 足背的盒长由接趾投影决定，#78 只重收趾骨那根
+        rows.append(row("toe_box_final", "fit", box.node, "true", 0, "gate"))
 
     # ── 附属骨父级 ────────────────────────────────────────────────
     rows.append(row("accessory", "no_parent", GLOBAL, 0, 0, "gate"))
@@ -1234,6 +1652,99 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         rows.append(row("morpher", check, GLOBAL, morph_count, 0, "gate",
                         when="if_present"))
 
+    # ── 物理代理与关节标记（#122）：这几行就是那句日志汇总的闸化 ──
+    # `mmd2maxBuildPhysics` 末尾一直有一整串计数（created / rigidFail / rotFail /
+    # capFalls / worldFail / layerFail …），可它**只走 mmd2maxLog**。于是
+    # 第 64/64b 轮的「`物理刚体代理：253（失败 1） 旋转失败=254`」、
+    # 第 70 轮的「`挂父后世界偏心=4 最大=94.6242`」、第 71 轮的
+    # 「`循环后仍偏=4 最大=94.6242@RB_21_右ひざ`」全是人一行行读日志读出来的 ——
+    # 判据表上那些轮次都是绿的。
+    # 五条「该有几根」的尺来自 physics.tsv（rigid/joint 的行数、朝向非零的行数、
+    # `rigid_bone >= 0` 因而**该挂上骨**的行数、`rigid_bone_node` 因而**认得出挂哪根**的行数）；
+    # 其余每条卡的是 0，各自对应一种真实下场：抛错、没转上、中心没挪到形心、
+    # 挂父把那一步搬走、离开 PMX 那个点、循环跑完仍在外面、胶囊退成圆柱、没进层、
+    # 父骨带着非单位的缩放矩阵。
+    # `rigid_parented`（#125）补的是这一族最后一个绿盲：挂父那三层条件
+    # （`boneNew >= 0` / 在 `boneNodes` 范围内 / 那个位置真有节点）任何一层落空，
+    # 代理就钉在场景根上，而 `rigid_created` 照样 +1、`off_center` / `world_failed` /
+    # `after_failed` 照样读 0 —— 那三把尺量的是「形心在不在 PMX 那个点上」，
+    # 而一个没挂父的代理在绑定姿态下**正好就在那儿**（位置是我们自己按 PMX 摆的）。
+    # 于是「254 根全绿」与「254 根一根都不跟骨动」在旧表上逐字相同，差别只在时间轴上
+    # 才看得见。Max 侧数的是**回读** `proxy.parent`（不是「我那条 `.parent=` 抛没抛」），
+    # 期望来自表 —— 两份各算各的，和 `rigid_created` 同构。
+    # 「没挂上」几根不进表：它恒等于 `rigid_created - rigid_parented`，多给一行就是把
+    # 同一个数判两遍（#124 给 `world_worst_cm` 的那条理由同形）；它在日志里逐根点名。
+    # `rigid_parent_named`（#126）管的是下一层：挂上了骨，但挂的是**不是这一根**。
+    # `rigid_parented` 只回读 `proxy.parent != undefined`，所以「父级是隔壁那根骨」在它
+    # 眼里一分不差；而 `.parent=` 那一行的下标就是表里的 `rigid_bone`，拿它自己验它自己
+    # 是恒等式（`boneNodes[j] == parN` 永远成立，因为 parN 就是从那个槽取的）。
+    # 唯一两端不同源的公共量是**名字**：期望名由导出侧从 bones.tsv 那一行算
+    # （`semantic.node_name` → physics.tsv 的 `rigid_bone_node`），实读名是 Max 在场景里
+    # 拿到的 `proxy.parent.name`。中间隔着「表行序 = boneNodes 数组序」这句从来没有读数
+    # 在验的假设 —— 现有闸只核过两边的**个数**（`rows.count != boneNodes.count` 三处），
+    # 顺序错了它们照样绿。香菱 254 根里有 8 根的父骨是短骨：`bone_rb` 按 STUB 跳过它们，
+    # 那 8 根此前没有任何逐行回读碰过。
+    # 名字为空的行不进期望（重名骨，见 `_bone_node_names`）：这一格 ≤ `rigid_parented`，
+    # 差几根在汇总行 `名字不计=N` 里看得见（香菱与克雷薇都读 0，即两具都没有重名保留骨）。
+    # `parent_scaled` 卡 0。#122 初稿把它留成 `report`，理由写的是「探针 87 那具量到
+    # 202 根，父骨本来就可能有一批缩放非单位的」—— 那句是假的，而且假在第 57 条刚登记的
+    # 那类病上（把一次读数当模型属性，没问是谁量的）：第 69 轮那把尺读 `parent.scale`，
+    # Biped 骨没这个属性、逐根当场抛（就是同一行那 42 条「创建失败」），254 根里只有挂在
+    # 附属骨/Dummy 上的进了分母；换成探针 90 的 F2 那把活的尺（缩放 = `parent.transform`
+    # 三行的长度，任何节点都读得到）之后**同一轮读 0**。此后每一轮都是 0：
+    # 71/74/75/79/80/84/89（香菱）、90（克雷薇），而这两具的分母里分别有 42 / 13 根的
+    # 父骨就是 Biped 骨 —— 「Biped 骨自带非 1 缩放是常态」这句话从来没被量过。
+    # 口径要说死，因为**另一种**「父骨缩放」确实非 1，而且是我们自己写的：Biped 的段缩放
+    # （第 89 轮 `肢段 Bip001 L UpperArm -> L Forearm … scale: [20.8675,…] -> [19.5224,…]`，
+    # 骨长就是这么凑出来的）不进 `node.transform` 的行长度 —— 同一轮里那两根代理的父骨
+    # 缩放仍读 1.0。这一格量的是「父骨的世界矩阵带不带缩放」，也就是会不会把挂上去的代理
+    # 整块放大；physics.tsv 的 size 是绝对长度，父骨一带缩放代理就变形，而其余三把位置闸
+    # （off_center / world_failed / after_failed）只看形心在不在 PMX 那个点上，一根都
+    # 抓不到「整块大一倍」，世界盒并集那一行又只进日志 —— 这条轴上只有这一把尺。
+    when_phys = "always" if physics is not None else "if_present"
+    # 没给 physics 文件 ⇒ 整段不跑：期望 0 根，同时退成 if_present（合法缺席）。
+    want = physics if physics is not None else PhysicsExpectation(0, 0, 0, 0, 0)
+    for check, expected in (("rigid_created", str(want.rigid_rows)),
+                            ("rigid_parented", str(want.parented_rows)),
+                            ("rigid_parent_named", str(want.named_rows)),
+                            ("joint_created", str(want.joint_rows)),
+                            ("rot_oriented", str(want.oriented_rows)),
+                            ("rot_ctrl_native", str(want.rigid_rows)),
+                            ("rigid_failed", "0"), ("joint_failed", "0"),
+                            ("rot_failed", "0"), ("center_failed", "0"),
+                            ("off_center", "0"), ("link_shifted", "0"),
+                            ("world_failed", "0"), ("after_failed", "0"),
+                            ("cap_cylinder", "0"), ("layer_failed", "0"),
+                            ("parent_scaled", "0")):
+        rows.append(row("physics_rb", check, GLOBAL, expected, 0, "gate",
+                        when=when_phys))
+    rows.append(row("physics_rb", "world_worst_cm", GLOBAL, None, None, "report",
+                    when=when_phys))
+    # #132：朝向这一半此前**一把尺都没有**。link_shifted 只量形心，而收尾那句
+    # `proxy.center=` 把形心强行搬回 PMX 那个点 —— 第 106 轮林尼 link_shifted=0、
+    # world_worst_cm=1.64975e-05 全绿，同一轮 RB_1_首 的朝向却歪了 1.049 度
+    # （弦长 0.0183069）。根因是默认的 Euler_XYZ 旋转控制器存不下万向锁上的旋转：
+    # 那根代理挂在摆过姿势的 Bip001 Neck 下，局部欧拉 Y = -89.9999（探针 97 诊断行），
+    # 而探针 97 X2 把**正确的**局部 quat 直接写进它的 .value，读回来是另一个 quat
+    # （弦长 0.0407014）—— 不是写法的问题，是表示能力不够，重发多少句都拽不回。
+    # 修法是建出来就换 Bezier_Rotation（探针 97 X1/X3 每一步弦长 0.0，探针 99 B
+    # 三种形状都活）。
+    #
+    # 两行各治一种绿盲，不重复：
+    #   orient_worst   量**结果**（最终世界矩阵 vs 从 Python 度数造出的应当矩阵，
+    #                  两端不同源；阈值 ORIENT_TOL 的十个噪声读数见 targets.py）。
+    #                  它是 gate 而不是 report —— 与 world_worst_cm 相反，因为朝向
+    #                  没有别的闸在卡，这个最大弦长本身就是唯一的判据。
+    #   rot_ctrl_native 量**机制**（所有写做完之后回读控制器类）。为什么结果之外还要
+    #                  机制：orient_worst 只在「这一具的父骨姿势正好把局部旋转顶到死点」
+    #                  时才响，香菱/克雷薇/海灯节 不撞死点（探针 98 离线量了 6 具 1956 根
+    #                  刚体，导出侧死点 0 根），控制器退回去它们照样全绿 —— 正是 #125/#126
+    #                  那类「症状没出现就当成没病」。期望 = rigid_rows，与 rigid_created
+    #                  同源不同数：那边数建出来几根，这边数几根真是四元数原生。
+    # 日志里的「没换上」不给行：它恒等于 rigid_created - rot_ctrl_native。
+    rows.append(row("physics_rb", "orient_worst", GLOBAL, 0, ORIENT_TOL, "gate",
+                    when=when_phys))
+
     # ── pass 时间轴（M3）──────────────────────────────────────────
     # 每个 pass 一行 `pass/ran/<id>=1`：恰好一次。注册表还多干了三件事（顺序、作废、
     # 归因），都靠这些行当时间轴骨架，见 mmd2max/passes.py。
@@ -1244,6 +1755,10 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         "skin_verify": "always" if skin else "if_present",
         "foot_reach": "always" if foot_reach else "if_present",
         "toe_snap_reach": "always" if foot_reach else "if_present",
+        # 趾盒落地（#134）：开关打开 ⇒ 这一刀必须跑到（没跑就是「开关只是句注释」）；
+        # 关着时整段不跑，退 if_present。穿鞋检测尺只要有脚链就必跑（量盒底 vs 鞋底）。
+        "toe_ground": "always" if toe_ground else "if_present",
+        "toe_shoe": "always" if foot_rows else "if_present",
         # 回滚开关打开 ⇒ 自检**必须**跑到（没跑就是「退路只是句注释」）。守卫那一遍
         # 只有「开关开 + 接趾这一刀真跑了 + 基准拍得出来」三样都成立才会出现，前两条
         # 在这里能判，第三条（目录写不出文件）只有实跑知道 —— 它由 `rollback/guard_saved`
@@ -1251,6 +1766,10 @@ def build_spec(*, model: str, vertex_count: int, limbs: list[dict[str, str]],
         "rollback_selftest": "always" if rollback else "if_present",
         "foot_reach_guard": "always" if (rollback and foot_reach) else "if_present",
         "morpher_build": "always" if morph_count > 0 else "if_present",
+        # 物理段（#122）：装配侧知道「这一轮有没有 physics 表」，所以 `pass/ran/physics_build`
+        # 与上面那 17 行走的是同一条 when —— 不许出现「ran 是 always、读数却全空」或反过来
+        # 「读数 always、ran 允许缺席」，那两种都是把同一段代码的两种说法装进一张表。
+        "physics_build": when_phys,
     }))
 
     return rows
@@ -1285,19 +1804,54 @@ def parse_table(text: str) -> tuple[tuple[str, ...], list[dict[str, str]]]:
     短的尾部按「这个键没有」处理，取值一律用 `row.get(key)`；不许补空串 —— 补出来的
     空串会被下游当成「真有这个值」。反过来**比列名长**必须报错：那是多写了列，
     静默截断就是拿错位的数据当判据。
+
+    `@<记录名>\\t列名…`（第 2 行起）是同文件里**另一种记录**的列名，口径逐字对齐
+    Max 端的 `mmd2maxReadTable`（scripts/max_import_obj.ms:1253）：它的第 1 个字段是记录名
+    本身，列名从第 2 个字段起对齐；第 1 个字段仍报成 `row_kind`，所以两边都能按
+    `row_kind` 分流。为什么不把两套列名并进同一张表再逐行 zip（Max 那边是「一张列名表 +
+    每行原始字段数组」，按下标取，天然不会串）：Python 这边一行是一个 dict，并进来就等于
+    让 `rigid_index` 与 `joint_index` **同时绑在同一个字段上**（两者的对齐位置都是 2），
+    于是每条 RIGID 行都自带一个值为刚体号的下标，数出来的关节数看着正常 —— 那正是
+    #122 要在 `physics_expectation` 里抛出来的那种「看着正常的错数」。两套列名撞车
+    同样直接抛，不许先到先得。
     """
     body = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     lines = [ln for ln in body.split("\n") if ln.strip() and not ln.startswith("#")]
     if not lines:
         raise ValueError("表是空的（连列名行都没有）")
     header = tuple(lines[0].split("\t"))
+    # 记录名 -> 该记录自己的列名（从第 2 个字段起对齐）
+    kinds: dict[str, tuple[str, ...]] = {}
+    for line in lines[1:]:
+        cells = line.split("\t")
+        if not cells[0].startswith("@"):
+            continue
+        name = cells[0][1:]
+        if not name:
+            raise ValueError(f"`@` 行没有记录名：{line}")
+        if name in kinds:
+            raise ValueError(f"记录 {name} 的列名行出现两次，后者会整条盖掉前者")
+        if dup := set(cells[1:]) & set(header):
+            raise ValueError(f"记录 {name} 的列名 {sorted(dup)} 与主表头撞了："
+                             "两种记录读同一格，取到的数没有来历")
+        kinds[name] = tuple(cells[1:])
     rows: list[dict[str, str]] = []
     for number, line in enumerate(lines[1:], start=2):
         cells = line.split("\t")
-        if len(cells) > len(header):
-            raise ValueError(f"第 {number} 行有 {len(cells)} 列，比列名行的 "
-                             f"{len(header)} 列还多：{line}")
-        rows.append(dict(zip(header, cells)))
+        if cells[0].startswith("@"):
+            continue
+        if kind := kinds.get(cells[0]):
+            names, offset = kind, 1
+        else:
+            names, offset = header, 0
+        if len(cells) - offset > len(names):
+            raise ValueError(f"第 {number} 行有 {len(cells) - offset} 列，比"
+                             f"{'记录 ' + cells[0] + ' 的' if offset else '列名行的'}"
+                             f"{len(names)} 列还多：{line}")
+        row = dict(zip(names, cells[offset:]))
+        if offset:
+            row["row_kind"] = cells[0]
+        rows.append(row)
     return header, rows
 
 
@@ -1333,9 +1887,11 @@ FIXTURE_SKIN_EXPECT = skin_expectation(parse_table(FIXTURE_BONES)[1],
 # 脚段那 9 个附加列 fixture 必须带齐（至少是 box_targets 会查的那 5 列 + toe_len）：
 # 少了任何一列，CHANNELS 就少一类通道，而契约测试只会看见「.ms 多报了没人判的行」。
 # 数字取自香菱的真导出（同一具模型、同一把尺），改它们要连着看 M4c 的金标准。
-FIXTURE_WIDTHS = "\t".join(("biped_target", "width")) + "\n" + "\n".join((
-    "Bip001 L Hand\t3.6286",
-    "Bip001 R Hand\t3.6953",
+# 第 3 列 palm_len（#136）必须在这份夹具里出现：CHANNELS 是「.ms 里所有报告通道」
+# 的对照表，少写这一格，`box_rb/hand_length_cm` 就会变成「报告有、规格没有」的孤儿。
+FIXTURE_WIDTHS = "\t".join(("biped_target", "width", "palm_len")) + "\n" + "\n".join((
+    "Bip001 L Hand\t3.6286\t6.5000",
+    "Bip001 R Hand\t3.6953\t6.5000",
 )) + "\n"
 
 # 附属骨方向回读（#66）的第二份 fixture：biped_map 决定「哪些行被 Biped 节点接管」，
@@ -1352,6 +1908,11 @@ FIXTURE_BIPED_MAP = "\t".join(("bone_index", "biped_node", "pmx_bone_name")) + "
 CHANNELS: frozenset[tuple[str, str]] = frozenset(
     (r[0], r[1]) for r in build_spec(
         model=PRICED_MODEL, vertex_count=1,
+        # 这一份只要「有哪些通道」，不要任何定价读数：顶点/表情写成 1，
+        # `pricing_of` 认不出这具「模型」→ 整片退成 report。config 同理是占位串，
+        # 认不出模型时它连参与都不参与（所以不许有人在这里编一组真配置来「顺便测锁」，
+        # 那会把这份通道清单和某一轮的锁绑死）。
+        config="unpriced",
         limbs=[{"parent_target": "Bip001 L Foot", "child_target": "Bip001 L Toe0",
                 "desired_len": "11.228109", "mode": "foot",
                 "foot_len": "14.097240", "toe_len": "3.569191",
@@ -1363,7 +1924,11 @@ CHANNELS: frozenset[tuple[str, str]] = frozenset(
                 "desired_len": "2.344292", "mode": "link"},
                {"parent_target": "Bip001 Spine", "child_target": "Bip001 Spine1",
                 "desired_len": "8.325677", "mode": "link"}],
-        skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1, skin=True, foot_reach=True,
+        skin_expect=FIXTURE_SKIN_EXPECT, morph_count=1,
+        # `physics=None` 不是「忘了喂物理表」，而是这份清单只要通道名：physics_rb 那 17 条
+        # 的 check 名与表里有几根刚体无关（表为空时同样要报 0），所以不需要物理 fixture，
+        # 只要 `physics` 是必填参数 —— 漏传会在下面这一句就抛，而不是让 obj_run 少装一段判据。
+        physics=None, skin=True, foot_reach=True,
         rollback=True,
         bones=parse_table(FIXTURE_BONES)[1],
         biped_map=parse_table(FIXTURE_BIPED_MAP)[1],

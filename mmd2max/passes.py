@@ -124,7 +124,9 @@ PASSES: tuple[Pass, ...] = (
     # 手掌/手指横截面：只动非长度轴，看着像「不挪 pivot」，实际会挪 —— 子节点的世界位置
     # = 父节点 TM（含非等比 scale）× 自己的局部偏移，而指根挂在手掌的横向上，不在长度轴上。
     # 所以缩手指的粗细会把整条指链在世界里推开，段长/落位/结构向全部作废。
-    _pass("apply_widths", "手掌/手指横截面", requires=("fit_segments",),
+    # #136 起这一 pass 还会缩 Hand 的**长度轴**（掌长拟合）：长度轴同样会沿骨盒推走
+    # 五根指根，所以 moves=True 本来就是对的，不需要放宽。
+    _pass("apply_widths", "手掌/手指横截面与掌长", requires=("fit_segments",),
           moves=True, optional=True),
     _pass("pose_initial", "Biped 初摆位 + 骨盆闭环", requires=("fit_segments",),
           writes=("pose",), moves=True),
@@ -181,8 +183,26 @@ PASSES: tuple[Pass, ...] = (
     # 等于给 audit 造一条永远满足不了的规则（注册表校验会直接拒绝 moves=True：
     # toe_snap 的两位作者都在它之前）。哪天趾骨下面挂了东西（例如鞋带骨），这条必须
     # 改回 moves=True。
+    # `writes` 那一条（#129）是这一段的**覆盖**读数：每根该收的趾骨报一行 true/false，
+    # 期望由 `verdicts.box_targets` 从 limbs.tsv 算 —— 于是「终帧那一刀整根没落下去」
+    # 从一句日志变成判据。`pass/ran` 那一行管不到这件事：它无论跳过几根都是 1。
     _pass("toe_box_final", "趾盒截面（最终帧重收）", requires=("toe_snap_reach",),
-          invalidates=()),
+          writes=("toe_box_final",), invalidates=()),
+    # 趾盒落地（#134 加、#135 翻默认 true）：MMD2MAX_TOE_GROUND=true（默认）时跑，把 Toe0
+    # 的 pivot 竖直搬到「盒底=世界 z0」；false 回滚贴鞋、整段跳过。探针（probes/toe_ground.txt）
+    # 已证对象偏移挪不动 Biped 画的盒，所以落地只能搬 pivot —— 这是一次真移动，会作废一批场景读数。
+    # 刻意不用 moves=True：那会展开成 POSE_FACTS 全集、含 toe_snap，而 toe_snap 的两位作者
+    # （两道复摆）都排在它**之前**、之后没人重测，validate_registry 会当场拒收这条注册表。
+    # 所以显式列出「之后确有人重测」的那六族（figure_exit 后的四道终局复核 + box_verify +
+    # bone_dir_verify）。toe_snap 的陈旧在落地态由 segment/foot_chain 的 Toe0 链 report 行体现
+    # （第 134 轮 true 态实测代价：segment/len_cm +0.866cm、foot_chain/chain_angle_deg +6.5°；
+    # #135 把这两条降 report、数字照打印；Toe0 是短骨，placement/struct_dir 的回读清单不含它），
+    # 不单独声明一条没有 later author 的作废。
+    # 排在 figure_exit 之前：搬 pivot 与摆位同一种写（#pos，Figure 模式内），退出后保持。
+    _pass("toe_ground", "趾盒落地（默认开，搬 Toe0 pivot；false 回滚贴鞋）",
+          requires=("toe_box_final",), optional=True,
+          invalidates=("bone_rb", "box_rb", "foot_chain", "placement",
+                       "segment", "struct_dir")),
     # 探针实测：退出 Figure 模式前后，Toe0 目标位与踝 pivot 逐字相同（B1 vs B2），
     # 所以这里刻意**不**声明作废任何读数 —— 声明了就是把「几何中性的退出」写成了
     # 一次移动，下一轮谁把这段往前挪都会被抓成 STALE 的假警报。
@@ -204,6 +224,14 @@ PASSES: tuple[Pass, ...] = (
     # 的 #scale，所以这里量完就是保存下来的样子（这条前提记在 accessory_build 那里）。
     _pass("box_verify", "骨盒回读复核（横截面/长度）",
           requires=("struct_dir_check",), writes=("box_rb",)),
+    # 穿鞋检测（#134）：只读不写 —— 量趾盒盒底相对鞋底/地面的竖直位置（penetration_cm /
+    # ground_gap_cm）。鞋底从导入网格的**绑定姿态**顶点（baseobject getVert × node.transform）
+    # 量，不取 Skin 变形后的快照：问的是「盒呆不呆在鞋这只网格裡」，与蒙皮变形无关。
+    # 排在 box_verify 之后、附属骨之前：这一刻趾盒已是终帧重收（+ 可选落地）后的样子。
+    # invalidates 全空（只读）；requires mesh_import 是因为要有鞋网格可量，figure_exit 是因为
+    # 盒朝向/位置要读退出 Figure 后的终值。没有脚链的模型这一段无事可报（when 退 if_present）。
+    _pass("toe_shoe", "穿鞋检测（盒底 vs 鞋底/地面）",
+          requires=("figure_exit", "mesh_import"), writes=("toe_shoe",)),
     # 附属骨 pass 只新建 BoneGeometry 并按 max_parent 改挂**自己那些**骨，
     # 不碰 Biped 的 pivot/朝向 —— 这是「段校验排在它前面仍然有效」的唯一理由。
     # 哪天这段开始挪 Biped（例如为了对齐衣服挂点），必须把 moves=True 加上，
@@ -221,8 +249,13 @@ PASSES: tuple[Pass, ...] = (
           requires=("skin_apply",), writes=("skin_rb",), optional=True),
     _pass("morpher_build", "表情（Morpher 通道）", requires=("mesh_import",),
           writes=("morpher",), optional=True),
+    # 物理段（#122）：这一段以前只有 `pass/ran` 一行，整串计数（created / rigidFail /
+    # rotFail / capFalls / worldFail / layerFail…）只落 mmd2maxLog，所以「刚体少建了 1 个」
+    # 从来不是判据，是人读日志读出来的。现在它报 physics_rb，作者归这里。
+    # 刻意**不**声明 moves：代理改父级动的是代理自己（Sphere/Box/Capsule 节点），
+    # Biped 的 pivot 与朝向一步没动 —— 若哪天这段开始挪骨，POSE_FACTS 那一批必须在它之后重测。
     _pass("physics_build", "物理刚体与关节", requires=("accessory_build",),
-          optional=True),
+          writes=("physics_rb",), optional=True),
     # 附属骨方向回读（#66）：最后一道，排在 saveMaxFile 之前（脚本里 mmd2maxMain 的
     # 那一段）。物理代理改父级、改挂写回 worldTM 都已经发生完了，这一刻量到的
     # transform.row1 就是存进 .max 的那个方向 —— 胸部骨那一刀的 tail 是从网格量出来的

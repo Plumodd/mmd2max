@@ -84,6 +84,11 @@ global MMD2MAX_CONVERGE_MAX
 global MMD2MAX_SKIN
 global MMD2MAX_SHOT
 global MMD2MAX_INTERACTIVE
+/* 跑完是否把 3ds Max 留在屏幕上（#137）。与 INTERACTIVE 是两件事：后者管「能不能
+   弹模态框问人」，自动跑必须 false；前者只管「要不要 quitMax」。以前两者捆在一起，
+   于是想保留现场就只能开交互位，而交互位一开，queryBox / messageBox 会把无人值守
+   的自动装配挂在半路。值只从 CFG 来，缺省也不许在脚本里给常量。 */
+global MMD2MAX_KEEPOPEN
 /* 装配目标值（M2 起由 mmd2max/targets.py 的 TARGETS 写进 CFG，这里只声明、不给默认值）。
    声明必须排在任何读取者之前：以前这几个数就写在声明行末尾，于是「这份脚本自己带着判据」，
    Python 侧根本不知道有哪些数 —— 现在缺键一律中止，和路径/开关同一待遇。 */
@@ -92,6 +97,11 @@ global MMD2MAX_ROLLTOL
 global MMD2MAX_TOETOL
 global MMD2MAX_GAPTOL
 global MMD2MAX_FOOTREACH
+/* 趾盒落地开关（#134 加、#135 翻默认 true）。和 FOOTREACH 一样只声明不给默认值：值来自 CFG → targets.TOE_GROUND。
+   true（默认）=把 Toe0 pivot 搬到盒底落地（用户第 135 轮拍板的效果）；false=回滚贴鞋尖（#19/#78）。
+   探针 probes/toe_ground.txt 已证对象偏移挪不动 Biped 画的盒，所以落地只能搬 pivot；
+   代价（segment/foot_chain 的 Toe0 链偏离）在落地态由 Python 降 report 摆出，数字照打印。 */
+global MMD2MAX_TOE_GROUND
 /* 快照回滚开关（M4d）。和 FOOTREACH 一样只声明不给默认值：值来自 CFG，
    而 CFG 的值来自 mmd2max/targets.py 的 ROLLBACK。它决定的是「一刀写坏了场景里剩什么」，
    不是某个目标值，所以必须能整段关掉来自证它不改几何。 */
@@ -102,7 +112,9 @@ global MMD2MAX_RBTRIG
 /* 短骨门限（厘米）：|tail-head| 比它短的骨在 PMX 里只是画给 MMD 看的显示 stub
    （香菱 右手首 0.38cm），方向没意义 —— 写侧不转它、回读不量它。以前这个数在本文件里
    抄了三份、Python 另有一份，改一边要等一整轮才以「规格表多出一条没人报的行」的形式暴露。
-   现在数值住在 mmd2max/targets.py 的 STUB_CM，经 CFG 下发，三个消费点都读这一个全局。 */
+   现在数值住在 mmd2max/targets.py 的 STUB_CM，经 CFG 下发，本文件里五处短骨闸都读这一个
+   全局（写侧：mmd2maxRotatePass 转角、mmd2maxFitScore 收敛打分、mmd2maxBuildBiped 建骨时
+   的 stub 判定；读侧：mmd2maxLogStructDir 的「短骨」标注、mmd2maxVerifyAccessoryDirs 回读）。 */
 global MMD2MAX_STUBCM
 /* mmd2maxLoadCfg 算好的配置摘要，由 mmd2maxMain 在 mmd2maxInitLog **之后**打出来
    （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
@@ -127,6 +139,16 @@ fn mmd2maxIsInteractiveNow =
 (
     if MMD2MAX_INTERACTIVE == undefined do return false
     MMD2MAX_INTERACTIVE
+)
+
+/* 跑完是否保留 3ds Max 现场（#137）。CFG 自己没读成时按 **true** 处理：配置都读不到，
+   唯一还能看的证据就是屏幕上这个场景，自动把它关掉等于把报错现场也一起丢掉。
+   上层 tools/obj_run.py 在同一个开关下也不会再等退出 / taskkill /F，所以这里不退出
+   不会攒「异常终止」计数。 */
+fn mmd2maxKeepOpen =
+(
+    if MMD2MAX_KEEPOPEN == undefined do return true
+    MMD2MAX_KEEPOPEN
 )
 
 /* 失败标记文件的路径。正常情况跟着成功标记走；CFG 没读成时 MARKER 还是
@@ -336,6 +358,14 @@ global MMD2MAX_SHOTMESH = #()
    而「哪几张真的量到了」必须是这一段的读数 —— 少一张就是红，不是静默少一行。 */
 global MMD2MAX_SHOTFILL = #()
 
+/* 每张图的**像素**读数（#115），由 mmd2maxReportShotPixels 逐个 append 一个
+   #(采到, 去重, 最大同类)。为什么还要第二条通道：MMD2MAX_SHOTFILL 量的是骨的世界坐标
+   投影，它只证明「取景框在画面上够大」，从不看盘上那张 PNG 里到底有什么 —— 一张全黑
+   的图照样 63% 填充率、照样数进 tags。第 83 轮 #112 实拍到过这个形状（desktop.capture
+   恒黑），当时 21 张全在、计数全绿。这一份是「图里真有东西」的唯一读数。
+   和 SHOTFILL 一样用全局而不是返回值：每只 ShotOne 包在自己的 try 里，返回值会被吞。 */
+global MMD2MAX_SHOTPIXEL = #()
+
 fn mmd2maxShotMeshes =
 (
     local arr = #()
@@ -498,6 +528,7 @@ fn mmd2maxPrepareShot =
     try ( select #() ) catch () -- 允许失败：取消选择失败只让选中对象在图上带高亮色，落盘的 .max / 骨 / 权重都不看选中集
     MMD2MAX_SHOTMESH = mmd2maxShotMeshes()
     MMD2MAX_SHOTFILL = #()
+    MMD2MAX_SHOTPIXEL = #()
     /* 场景里一共有几根「骨」—— 裁骨的分母，只报一次。
        为什么要有这一行：`clip_hidden` 单独看会骗人。round39 实测 foot_top 藏掉 268 根，
        而 268 恰好等于附属骨总数 —— 没有分母，「藏了 268 根」和「整副骨架 321 根里只藏了
@@ -704,6 +735,113 @@ fn mmd2maxFitView viewKind lo hi =
     fitted
 )
 
+/* ---- #115 截图内容回读：读数来自盘上那张 PNG 的像素 ----
+   API 全部是探针实测（Temp/mmd2max_probe/shot_probe*.txt），不是照印象写的：
+   · `getPixel`、`getPixelBuffer`、`createBitMap`、`freeBitmap`、`colorValue` 在
+     Max 2022 里**根本不存在**（探针原文「-- Type error: Call needs function or class,
+     got: undefined」）；能用的取像素是 `getPixels <BitMap> <point2> <count>`，
+     返回 Array of Color，越界/负坐标/count=0/跨过行尾一律返回空 `#()` **不抛**。
+   · `openBitMap <path>` 只认位置参数（写成 `filename:` 是「Argument count error:
+     openBitMap wanted 1, got 0」），读不了（不存在、0 字节、不是图）返回 **undefined**，
+     也不抛。所以「回读失败」不能靠 try/catch 发现，必须自己编成一个往错方向判红的读数。
+   · 释放用 `close <BitMap>`（探针：OK）。 */
+fn mmd2maxShotPixelCoord span idx grid =
+(
+    /* 网格第 idx 个采样点落在 [0, span-1] 的哪个像素上。走 float 再 floor：
+       MAXScript 的 `/` 对整数不一定给整数，而 `as integer` 的取舍方向探针没量过，
+       两个都不许信 —— 夹回区间是最后那道保险（越界不抛，只是悄悄少采一个点）。 */
+    local v = ((span - 1) * (idx as float) / ((grid - 1) as float))
+    local i = (floor v) as integer
+    if i < 0 do i = 0
+    if i >= span do i = span - 1
+    i
+)
+
+fn mmd2maxPixelAt bmp x y =
+(
+    /* 语句形式 + 显式失败值（契约 rule 10）：`local a = try (...) catch (...)`
+       在 Max 2022 里是编译期打死整轮装配的写法，探针里那样用没事是因为探针那份
+       不跑正式脚本 —— 正式脚本一个字都不许照抄探针的这个形状。 */
+    local a = undefined
+    try ( a = getPixels bmp [x, y] 1 ) catch ( a = undefined )
+    if a == undefined do return undefined
+    if (classof a) != Array do return a
+    if a.count < 1 do return undefined
+    a[1]
+)
+
+fn mmd2maxSampleShot shotFile =
+(
+    /* 返回 #(采到, 去重, 最大同类)；任何一步读不到都返回 #(-1, -1, -1)。
+       为什么刺眼的 -1 而不是 0：distinct_colors 那道闸是 `min`（越大越好），
+       dominant_pct 是 `max`（越小越好）—— 0 在后者上是满分，等于「读不到」被读成
+       「这张图干净」。-1 两个方向都判红，而且和真采到的数（576 里的 1..576）不会混。
+       网格边长单开一行：Python 侧的 verdicts.SHOT_PIXEL_GRID 是同一个数，
+       契约测试拿这一行对撞（改这边不改那边 = 采样点数与期望值分叉）。 */
+    local grid = 24
+    local bad = #(-1, -1, -1)
+    local bmp = undefined
+    try ( bmp = openBitMap shotFile ) catch ( bmp = undefined )
+    if bmp == undefined do return bad
+    local w = 0
+    local h = 0
+    try ( w = bmp.width as integer; h = bmp.height as integer )
+    catch ( mmd2maxLog ("位图尺寸读不出：" + shotFile) )
+    if (w < grid) or (h < grid) do
+    (
+        try ( close bmp ) catch ( mmd2maxLog ("位图关闭失败：" + shotFile) )
+        return bad
+    )
+    local got = 0
+    local uniq = #()
+    local cnt = #()
+    local dom = 0
+    for iy = 0 to (grid - 1) do
+    (
+        local y = mmd2maxShotPixelCoord h iy grid
+        for ix = 0 to (grid - 1) do
+        (
+            local x = mmd2maxShotPixelCoord w ix grid
+            local col = mmd2maxPixelAt bmp x y
+            if col != undefined do
+            (
+                local key = col as string
+                local k = findItem uniq key
+                /* 新 key 的初值是 0，不是 1：探针里 append 时写成 1 再去加，
+                   纯黑那张的最大同类量成 577（其实只有 576 个点），差一个。 */
+                if k == 0 do ( append uniq key; append cnt 0; k = uniq.count )
+                got += 1
+                cnt[k] = cnt[k] + 1
+                if cnt[k] > dom do dom = cnt[k]
+            )
+        )
+    )
+    try ( close bmp ) catch ( mmd2maxLog ("位图关闭失败：" + shotFile) )
+    if got < 1 do return bad
+    #(got, uniq.count, dom)
+)
+
+fn mmd2maxReportShotPixels tag s =
+(
+    /* 每个调用点都必须写下这两行，一条都不许省：两张表的 `when` 是 if_present，
+       「没有这一行」在判闸眼里等于合法缺席 —— 截图段整个没跑也能全绿。
+       失败的那一路（取不到图、落盘没改、回读打不开）由调用点交进来了 #(-1,-1,-1)，
+       所以这里不需要知道失败长什么样，只管报数。 */
+    local got = s[1]
+    local distinct = s[2]
+    local dom = s[3]
+    local domPct = 100.0
+    if got > 0 do domPct = 100.0 * (dom as float) / (got as float)
+    mmd2maxReport "shot_rb" "distinct_colors" tag distinct
+    mmd2maxReport "shot_rb" "dominant_pct" tag domPct
+    append MMD2MAX_SHOTPIXEL s
+    mmd2maxLog ("截图内容 " + tag + " 采到=" + (got as string) \
+        + " 去重=" + (distinct as string) \
+        + " 最大同类=" + (dom as string) \
+        + " 占比=" + (domPct as string) + "%")
+    s
+)
+
 fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
 (
     local shotFile = outDir + "\\" + baseName + "_" + tag + ".png"
@@ -749,6 +887,7 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
     if bmp == undefined then
     (
         mmd2maxLog ("截图取图为空（视口不可用）：" + shotFile)
+        mmd2maxReportShotPixels tag #(-1, -1, -1)
         false
     )
     else
@@ -758,6 +897,12 @@ fn mmd2maxShotOne outDir baseName tag viewKind lo hi =
            整份脚本一行都不跑。单参数的 f(x) 合法，因为那对括号只是分组。 */
         local okShot = mmd2maxSaveDib bmp shotFile
         mmd2maxLog ("截图 " + tag + " 落盘=" + (okShot as string) + " -> " + shotFile)
+        /* 回读只在 okShot 为真时做：mmd2maxSaveDib 的 okShot 是「这个文件的时间戳被
+           本轮改过」（#21 就是这么治上一轮同名旧图的），假 = 盘上那张还是上一轮的，
+           拿它算内容就是把上一轮的图盖章在这一轮的读数上。失败照样交 #(-1,-1,-1)，
+           两行读数一条都不能少 —— when=if_present 只认「有没有这一行」。 */
+        if okShot then ( mmd2maxReportShotPixels tag (mmd2maxSampleShot shotFile) )
+        else ( mmd2maxReportShotPixels tag #(-1, -1, -1) )
         okShot
     )
 )
@@ -1052,11 +1197,24 @@ fn mmd2maxScreenshot =
         for v in MMD2MAX_SHOTFILL do if v < 0.0 do fillFail += 1
         mmd2maxReport "shot_rb" "tags" "-" MMD2MAX_SHOTFILL.count
         mmd2maxReport "shot_rb" "projection_fail" "-" fillFail
+        /* 回读过内容的张数（#115）。这一行是「采样这段代码到底跑没跑」的闸：
+           那 42 行逐张读数的 `when` 是 if_present，采样函数一次都没被调到 = 一个像素
+           都没看过 + 42 行合法缺席 + 这一行数出 0。放在聚合这一段而不是每张各一条，
+           是因为 ShotOne 各自包在 try 里，坏在第一张就把循环带走时，剩下的行本来就
+           不会有 —— 只有聚合计数看得见「少了几张」。 */
+        mmd2maxReport "shot_rb" "pixel_sampled" "-" MMD2MAX_SHOTPIXEL.count
         local minFill = -1.0
         if MMD2MAX_SHOTFILL.count > 0 do minFill = amin MMD2MAX_SHOTFILL
+        local minDistinct = -1
+        for s in MMD2MAX_SHOTPIXEL do
+        (
+            if s[2] >= 0 do ( if minDistinct < 0 or s[2] < minDistinct do minDistinct = s[2] )
+        )
         mmd2maxLog ("截图取景：量到=" + (MMD2MAX_SHOTFILL.count as string) \
             + " 投不出=" + (fillFail as string) \
             + " 最小纵向填充=" + (minFill as string) + "%")
+        mmd2maxLog ("截图内容：回读=" + (MMD2MAX_SHOTPIXEL.count as string) \
+            + " 最小去重色数=" + (minDistinct as string))
         /* ran 行排在还原之后：截图这一段包含「改视口显示 → 抓图 → 还原」，
            还原没做完就不算收工。它也是整份报告的最后一段，所以 shot_rb 那些填充率
            天然落在这一段里（注册表里 shot_capture 是最后一个 pass）。 */
@@ -1377,12 +1535,14 @@ fn mmd2maxLoadCfg =
     MMD2MAX_TOETOL = mmd2maxCfgNum "MMD2MAX_TOETOL" 0.0 9999.0
     MMD2MAX_GAPTOL = mmd2maxCfgNum "MMD2MAX_GAPTOL" 0.0 50.0
     MMD2MAX_FOOTREACH = mmd2maxCfgBool "MMD2MAX_FOOTREACH"
+    MMD2MAX_TOE_GROUND = mmd2maxCfgBool "MMD2MAX_TOE_GROUND"
     MMD2MAX_ROLLBACK = mmd2maxCfgBool "MMD2MAX_ROLLBACK"
     MMD2MAX_RBTRIG = mmd2maxCfgNum "MMD2MAX_RBTRIG" 0.0 50.0
     MMD2MAX_STUBCM = mmd2maxCfgNum "MMD2MAX_STUBCM" 0.0 50.0
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
     MMD2MAX_INTERACTIVE = mmd2maxCfgBool "MMD2MAX_INTERACTIVE"
+    MMD2MAX_KEEPOPEN = mmd2maxCfgBool "MMD2MAX_KEEPOPEN"
     /* 分步拼接，不用行首 `+` 的跨行表达式：MAXScript 会把这种续行当成新语句。 */
     local cfgMsg = "配置来自 " + (path as string)
     cfgMsg = cfgMsg + "（" + ((mmd2maxRows MMD2MAX_CFG_TBL).count as string) + " 项）"
@@ -1404,6 +1564,7 @@ fn mmd2maxLoadCfg =
     cfgMsg = cfgMsg + " 趾落位容差=" + (MMD2MAX_TOETOL as string)
     cfgMsg = cfgMsg + " 盒隙容差=" + (MMD2MAX_GAPTOL as string)
     cfgMsg = cfgMsg + " 脚链拉伸=" + (MMD2MAX_FOOTREACH as string)
+    cfgMsg = cfgMsg + " 趾盒落地=" + (MMD2MAX_TOE_GROUND as string)
     cfgMsg = cfgMsg + " 快照回滚=" + (MMD2MAX_ROLLBACK as string)
     cfgMsg = cfgMsg + " 回滚触发=" + (MMD2MAX_RBTRIG as string)
     cfgMsg = cfgMsg + " 短骨门限=" + (MMD2MAX_STUBCM as string)
@@ -1727,20 +1888,33 @@ fn mmd2maxReadLimbs path =
 
 fn mmd2maxReadWidths path =
 (
-    /* 读 widths.tsv：biped_target <tab> width（目标世界宽度），列按表头名取 */
+    /* 读 widths.tsv：biped_target <tab> width <tab> palm_len，列按表头名取。
+       第 3 列是 #136 加的可选列（只有 Hand 两行有掌长目标）；老产物没有这一列时
+       `mmd2maxColPos` 会抛，所以先问表头在不在，再决定读不读 —— 不静默补 0，
+       也不让一条不存在的新尺混进规格表。返回 #(名字, 目标宽, 目标掌长或 0)。 */
     local result = #()
     if path == undefined or path == "" do return result
     if not (doesFileExist path) do return result
     local tbl = mmd2maxReadTable path
     local cTarget = mmd2maxColPos tbl "biped_target"
     local cWidth = mmd2maxColPos tbl "width"
+    local hasPalm = (findItem tbl[1] "palm_len") > 0
+    local cPalm = 0
+    if hasPalm do cPalm = mmd2maxColPos tbl "palm_len"
     for row in mmd2maxRows tbl do
     (
         if row.count >= cWidth do
         (
             local w = 0.0
             try ( w = row[cWidth] as float ) catch ( w = 0.0 )
-            if w > 0.001 do append result #(row[cTarget], w)
+            if w > 0.001 do
+            (
+                local palm = 0.0
+                if hasPalm and row.count >= cPalm do
+                    try ( palm = row[cPalm] as float ) catch ( palm = 0.0 )
+                if palm < 0.0 do palm = 0.0
+                append result #(row[cTarget], w, palm)
+            )
         )
     )
     result
@@ -2691,7 +2865,10 @@ fn mmd2maxLegRoll root limbs rotWay =
 
 /* MMD2MAX_TOETOL（脚趾复摆的落位容差，厘米）来自 mmd2max/targets.py → CFG，
    消费点只有 mmd2maxToeSnapBack：它同时是门控（已在容差内就不动），
-   所以写 999 等于整段复摆跳过。 */
+   所以写 999 等于整段复摆跳过。
+   门控取值 = 段长闸的容差（targets.SEGMENT_TOL_CM），两边必须是同一个数：这里比它松，
+   就出现「复摆放行、段长判红」的自相矛盾 —— #127 在 林尼 上实测到 0.489997 被放行、
+   `段校验 Foot -> Toe0` 红在 0.38872（期望 15.987622 / 实报 15.5989）。 */
 
 fn mmd2maxToeSnapBack root limbs checkNm =
 (
@@ -2859,7 +3036,7 @@ fn mmd2maxFitScore root lines rowIds targetNames limbs =
        结构向 复核表，它是**退出 Figure 模式之后**的权威值。两者对不上是已知的
        （锁骨 pass 内 6.60 / 复核表 13.64），所以这个分数只在轮与轮之间可比，
        不能拿去和复核表对数。判据与转角 pass 同源（mmd2maxBoxWantDir），
-       短于 1cm 的显示 stub 不计方向，读不到轴（-1.0）也不计。
+       短于短骨门限（MMD2MAX_STUBCM）的显示 stub 不计方向，读不到轴（-1.0）也不计。
        返回 #(方向超标数, 落位偏差和cm, 落位最大偏差cm) */
     local rows = mmd2maxRows lines
     local cHeadX = mmd2maxColPos lines "head_x"
@@ -2892,7 +3069,7 @@ fn mmd2maxFitScore root lines rowIds targetNames limbs =
                         if dp > maxPos do maxPos = dp
                         local sWant = mmd2maxBoxWantDir t sHead sTail (mmd2maxShoeTip limbs t)
                         if sWant != undefined do
-                        if (length sWant) >= 1.0 do
+                        if (length sWant) >= MMD2MAX_STUBCM do
                         if (mmd2maxStructErr sNode (normalize sWant)) > MMD2MAX_DIRTOL do badDir += 1
                     )
                 )
@@ -2972,12 +3149,13 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
                         if prio == #pos do
                             mmd2maxLog ("  转角不做 " + t + " 落位优先（Biped 约束骨，转角写不进去）")
                     )
-                    /* 短于 1cm 的是模型自己的显示 stub（香菱 右手首 0.38cm），方向没意义。
+                    /* 短于短骨门限（MMD2MAX_STUBCM，数值住在 targets.STUB_CM）的是模型
+                       自己的显示 stub（香菱 右手首 0.38cm），方向没意义。
                        分两层 if：`length undefined` 会抛，不赌 and 的短路 */
                     if want != undefined do
                     if prio != #pos do
                     if (not onlyDir or prio == #dir) do
-                    if (length want) >= 1.0 do
+                    if (length want) >= MMD2MAX_STUBCM do
                     (
                         local node = getNodeByName (root.name + (substring t 7 -1)) exact:true
                         if node != undefined do
@@ -3258,6 +3436,32 @@ fn mmd2maxLengthAxisIndex node =
     bestAxis
 )
 
+fn mmd2maxLeafLengthAxis node =
+(
+    /* 叶子骨（第三节手指一类）没有子关节，mmd2maxLengthAxisIndex 恒返回 0，
+       于是 widths.tsv 里给它的「长度轴目标」在写入侧会被整段跳过、在回读侧
+       会被记成 read_fail（#139 用户截图：第三节手指盒比原结构长出一节）。
+       借父骨的长度轴：Biped 手指链三节共用同一根局部轴（探针实测三节的
+       ax1 都指向指尖）。父骨也读不到时，退回本地盒跨度最大的那根 —— 细长盒
+       里那根必然是长度方向。只在 widths 表出现末节行时才会走到这里，
+       有子关节的骨一行都不改。 */
+    local p = undefined
+    try ( p = node.parent ) catch ( p = undefined )
+    if p != undefined do
+    (
+        local pa = mmd2maxLengthAxisIndex p
+        if pa > 0 do return pa
+    )
+    local best = 0
+    local bestLen = 0.0
+    for ai = 1 to 3 do
+    (
+        local e = mmd2maxLocalExtent node ai
+        if e > bestLen do ( bestLen = e; best = ai )
+    )
+    best
+)
+
 fn mmd2maxApplyWidths root widths =
 (
     /* 收缩手掌/手指的**横截面**（只动非长度轴，长度轴一律不碰）。
@@ -3274,6 +3478,7 @@ fn mmd2maxApplyWidths root widths =
         if node != undefined do
         (
             local lax = mmd2maxLengthAxisIndex node
+            if lax <= 0 do lax = mmd2maxLeafLengthAxis node
             if lax > 0 do
             (
                 local s = mmd2maxBipedScale node
@@ -3302,6 +3507,32 @@ fn mmd2maxApplyWidths root widths =
                         if wErr != "" do ( mmd2maxLog ("  手部粗细写入抛错 " + name + "：" + wErr) )
                         adjusted += 1
                     )
+                )
+                /* 掌长（#136）：只缩横截面会把「手掌骨盒比手掌大一圈」原样留下 ——
+                   Biped 默认 Hand 是一块按身高给的桨形盒，林尼最终场景里长轴盒跨度
+                   10.24cm，而手掌网格沿腕→指根轴只有 6.5cm。目标来自 widths.tsv
+                   第 3 列（Python 侧量手掌网格 5%~95% 分位），这里按**本地盒跨度**
+                   闭环缩长度轴，与 mmd2maxFitBoneExtent 同一套「量→倍率→写」口径。
+                   长度轴写下去会把五根指根一起推走，但这一步排在初摆位之前，
+                   摆位会把指根按 PMX 目标重新摆回去（apply_widths 已登记 moves=True）。 */
+                local palm = 0.0
+                if item.count >= 3 do palm = item[3]
+                if palm > 0.5 do
+                (
+                    local lenBefore = mmd2maxLocalExtent node lax
+                    if lenBefore > 0.001 then
+                    (
+                        local pf = palm / lenBefore
+                        if pf < 0.20 do pf = 0.20
+                        if pf > 1.20 do pf = 1.20
+                        mmd2maxScaleBoneAxis node lax pf
+                        local lenAfter = mmd2maxLocalExtent node lax
+                        mmd2maxLog ("  掌长拟合 " + name + " 长轴=" + (lax as string) \
+                            + " 目标=" + (palm as string) \
+                            + " 盒长 " + (lenBefore as string) + " -> " + (lenAfter as string) \
+                            + " 倍率=" + (pf as string))
+                    )
+                    else mmd2maxLog ("  掌长拟合 " + name + " 跳过：长度轴本地盒跨度读不到")
                 )
             )
         )
@@ -3351,6 +3582,74 @@ fn mmd2maxWorldSpanAlong node dir =
        调用之后的整段都当参数吞（`abs a1 * e1 + …` 会被读成 `abs (a1*e1 + …)`），
        那样符号能互相抵掉，量出来的就不再是跨度。 */
     (abs a1) * (mx.x - mn.x) + (abs a2) * (mx.y - mn.y) + (abs a3) * (mx.z - mn.z)
+)
+
+fn mmd2maxWorldBoxAABB node =
+(
+    /* #134：把骨盒八个角点搬到世界，取轴对齐包围盒 #(minPoint, maxPoint)（厘米）。
+       与 mmd2maxWorldSpanAlong、与探针 probes/toe_ground.ms 的 worldBoxZ 同一口径：
+       本地角点来自 nodeGetBoundingBox node node.transform（pivot 原点、已乘 #scale 的厘米盒），
+       搬到世界只乘 mmd2maxBipedAxes 的三根单位世界轴（纯旋转）再加世界 pivot 平移。
+       探针 D 段实证：biped.setTransform #pos 把 pivot 搬 -2cm，盒底世界 z 也跟着 -2cm
+       （boxMinDelta==pivotDelta==-2），所以「盒底落地」只能搬 pivot，对象偏移挪不动盒（B 段=0）。
+       穿鞋检测尺拿 [1].z 当盒底世界 z、拿 [1].x/y~[2].x/y 当水平足迹去网格里找鞋底。
+       读不到包围盒或轴返回 undefined，绝不猜。 */
+    local bb = undefined
+    try ( bb = nodeGetBoundingBox node node.transform ) catch ( bb = undefined )
+    if bb == undefined do return undefined
+    local axes = mmd2maxBipedAxes node
+    if axes == undefined do return undefined
+    local p = node.transform.translationpart
+    local mn = bb[1]
+    local mx = bb[2]
+    local lo = [1e9, 1e9, 1e9]
+    local hi = [-1e9, -1e9, -1e9]
+    for cx in #(mn.x, mx.x) do
+        for cy in #(mn.y, mx.y) do
+            for cz in #(mn.z, mx.z) do
+            (
+                local w = p + cx * axes[1] + cy * axes[2] + cz * axes[3]
+                if w.x < lo.x do lo.x = w.x
+                if w.y < lo.y do lo.y = w.y
+                if w.z < lo.z do lo.z = w.z
+                if w.x > hi.x do hi.x = w.x
+                if w.y > hi.y do hi.y = w.y
+                if w.z > hi.z do hi.z = w.z
+            )
+    #(lo, hi)
+)
+
+fn mmd2maxShoeSoleZ meshes boxMin boxMax =
+(
+    /* #134 穿鞋检测：趾盒水平足迹（世界 AABB 的 x/y 范围）内，鞋网格最低点的世界 z（厘米）。
+       顶点用 snapshotAsMesh 取**当前 evaluated** 网格再 getVert（类无关：Editable_Mesh/Poly 都行），
+       乘 node.transform 搬到世界。本尺排在 skin_apply 之前（注册表 toe_shoe requires figure_exit，
+       执行位紧跟 box_verify），此刻网格还没蒙皮、没有 Morpher 副本，evaluated 就是导入的绑定姿态鞋，
+       所以量到的是「鞋这只网格的底」而不是 Skin 变形后的面。
+       足迹内一个顶点都没有返回 undefined（绝不猜 0 —— 那会被拼表当成「鞋底真的在 z0」判绿）。 */
+    local sole = undefined
+    for m in meshes do
+    (
+        local tmesh = undefined
+        try ( tmesh = snapshotAsMesh m ) catch ( tmesh = undefined )
+        if tmesh == undefined do continue
+        local tm = m.transform
+        local nv = tmesh.numVerts
+        for vi = 1 to nv do
+        (
+            local v = undefined
+            try ( v = (getVert tmesh vi) * tm ) catch ( v = undefined )
+            if v != undefined do
+            (
+                if v.x >= boxMin.x and v.x <= boxMax.x \
+                   and v.y >= boxMin.y and v.y <= boxMax.y do
+                (
+                    if sole == undefined or v.z < sole do sole = v.z
+                )
+            )
+        )
+    )
+    sole
 )
 
 fn mmd2maxBoxDims node dir =
@@ -3493,6 +3792,7 @@ fn mmd2maxVerifyBoxes root limbs widths =
         local node = getNodeByName (root.name + (substring name 7 -1)) exact:true
         local lax = 0
         if node != undefined do lax = mmd2maxLengthAxisIndex node
+        if node != undefined and lax <= 0 do lax = mmd2maxLeafLengthAxis node
         if node == undefined or lax <= 0 then
         (
             failed += 1
@@ -3519,7 +3819,78 @@ fn mmd2maxVerifyBoxes root limbs widths =
                 mmd2maxReport "box_rb" "hand_box_cm" name boxMean
                 mmd2maxLog ("  骨盒回读 " + name + " scale 截面=" + (scaleMean as string) \
                     + " 盒跨度截面=" + (boxMean as string) + " 长度轴=" + (lax as string))
-                measured += 1
+                /* 掌长回读（#136）：只在 widths.tsv 给了目标时才报。期望值由 Python
+                   从同一张表的 palm_len 列装进规格，这里一个判定都不写（规则 II）。 */
+                local palm = 0.0
+                if item.count >= 3 do palm = item[3]
+                local lenOk = true
+                if palm > 0.5 do
+                (
+                    local palmLen = mmd2maxLocalExtent node lax
+                    if palmLen <= 0.0001 then
+                    (
+                        lenOk = false
+                        mmd2maxLog ("  骨盒回读 " + name + " 掌长盒跨度读到 0")
+                    )
+                    else
+                    (
+                        mmd2maxReport "box_rb" "hand_length_cm" name palmLen
+                        mmd2maxLog ("  骨盒回读 " + name + " 掌长盒跨度=" + (palmLen as string) \
+                            + " 目标=" + (palm as string))
+                    )
+                )
+                if lenOk then measured += 1 else failed += 1
+            )
+        )
+    )
+    #(measured, failed)
+)
+
+fn mmd2maxVerifyToeShoe root limbs =
+(
+    /* ===== 穿鞋检测（#134）：趾盒底相对鞋底/地面的竖直位置，只读不写 =====
+       两把尺（判定在 Python 侧 verdicts.toe_shoe，这里只报数）：
+         penetration_cm = max(0, 鞋底z − 盒底z)：盒底戳穿鞋底下方多少（穿模量）
+         ground_gap_cm  = 盒底世界 z：盒底离地面（z=0）多远
+       鞋底 z 从网格量（mmd2maxShoeSoleZ：盒水平足迹内最低顶点），盒底 z 从骨盒世界 AABB 量
+       （mmd2maxWorldBoxAABB）—— 两边都在最终场景里读，不是写入侧自述（恒等式看不见穿模）。
+       排在 box_verify 之后、skin_apply 之前：网格还没蒙皮、没有 Morpher 副本，鞋底是绑定姿态鞋。
+       读不到盒或鞋底就跳过该根并留痕（绝不猜 0 —— 那会被拼表当成「盒底真在 z0/真没穿模」判绿；
+       缺行本身会让 Python 侧那条 always 规格红，测量故障不会被静默放行）。返回 #(量到, 读不到)。 */
+    local meshes = mmd2maxMeshes()
+    local measured = 0
+    local failed = 0
+    for item in limbs do
+    (
+        if item.count >= 10 and item[5] == "foot" do
+        (
+            local cName = item[2]
+            local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+            local aabb = if cnode != undefined then mmd2maxWorldBoxAABB cnode else undefined
+            if aabb != undefined then
+            (
+                local boxMinZ = aabb[1].z
+                local sole = mmd2maxShoeSoleZ meshes aabb[1] aabb[2]
+                if sole != undefined then
+                (
+                    local pen = sole - boxMinZ
+                    if pen < 0.0 do pen = 0.0
+                    mmd2maxReport "toe_shoe" "penetration_cm" cName pen
+                    mmd2maxReport "toe_shoe" "ground_gap_cm" cName boxMinZ
+                    mmd2maxLog ("  穿鞋检测 " + cName + " 盒底z=" + (boxMinZ as string) \
+                        + " 鞋底z=" + (sole as string) + " 穿模=" + (pen as string))
+                    measured += 1
+                )
+                else
+                (
+                    failed += 1
+                    mmd2maxLog ("  穿鞋检测 " + cName + " 跳过：盒足迹内没量到鞋底顶点")
+                )
+            )
+            else
+            (
+                failed += 1
+                mmd2maxLog ("  穿鞋检测 " + cName + " 跳过：节点或盒世界包围盒读不到")
             )
         )
     )
@@ -5264,6 +5635,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        排位与 #41 同一条道理：会改骨盒的写必须排在「最后挪动这根骨的 pass」之后，
        否则写入的帧和被验收的帧不是同一帧。 */
     local toeBoxFinal = 0
+    local toeBoxTried = 0
     for item in limbs do
     (
         if item.count >= 10 and item[5] == "foot" do
@@ -5275,8 +5647,15 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
             local toeW = item[9]
             local toeH = item[10]
             local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+            /* #129：守卫与早帧那一道（脚趾两段）是**同一批条件**（书写顺序不同），
+               只剩 `toeLen > 0.001`。原来这里还写着 `toeW > 0.05 and toeH > 0.05` ——
+               那是第二把尺：「截面算不算一个正数」由导出侧 `_box_float`（> 0.02，读不到
+               或非正就在写规格表那一步抛，Max 根本不会被启动）规定，而早帧那一道没有这两个
+               门槛。于一根脚趾落在 0.02~0.05 之间时：早帧收、终帧按这里跳过，而下面那句
+               `fit=false` 只能把这次**合法的**缺席报成红 —— 与 #127 那两把尺互相矛盾同源。 */
+            local fitted = false
             if cnode != undefined and ballPos != undefined and tipPos != undefined \
-               and toeLen > 0.001 and toeW > 0.05 and toeH > 0.05 do
+               and toeLen > 0.001 then
             (
                 /* 与早帧那一道、与画线/链向同一个参考方向（理由见 脚趾两段 里那段）。 */
                 local dir = mmd2maxBoxWantDir cnode.name ballPos ballPos tipPos
@@ -5306,13 +5685,79 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     if cs[10] or cs[11] do msg = msg + "(宽高对缩放没反应，已停)"
                     mmd2maxLog msg
                     mmd2maxLogLocalBox ("趾盒终框 " + cName) cnode
+                    fitted = true
                     toeBoxFinal += 1
                 )
             )
+            else
+            (
+                /* 走到这里一根也没动：这根趾骨的节点找不到，或者脚段的
+                   脚掌位置 / 鞋尖 / toe_len 三样里读不出东西来（上面那道守卫）。
+                   以前这一支**一句都不说**：一双脚跳过一根，日志只剩「最终帧重收 1 根」，
+                   而那一句读起来和「本来就该收 1 根」一模一样。 */
+                mmd2maxLog ("  趾盒 " + cName + " 终帧没重收：节点或脚段列读不出来")
+            )
+            /* 每根趾骨一行，跳过的报 false 而不是不出这一行：`pass/ran/toe_box_final 1`
+               无论跳过几根都成立，所以「终帧这一刀没落下去」以前只在日志里看得见，
+               而 `骨盒回读` 的期望值来自导出表、与哪一帧量的无关，抓不到「留的是早帧那次盒」。 */
+            mmd2maxReport "toe_box_final" "fit" cName fitted
+            toeBoxTried += 1
         )
     )
-    mmd2maxLog ("趾盒收尾：最终帧重收 " + (toeBoxFinal as string) + " 根趾盒截面")
+    mmd2maxLog ("趾盒收尾：最终帧重收 " + (toeBoxFinal as string) + "/" \
+        + (toeBoxTried as string) + " 根趾盒截面")
     mmd2maxReport "pass" "ran" "toe_box_final" 1
+
+    /* ===== 趾盒落地（#134 加、#135 翻默认开）=====
+       MMD2MAX_TOE_GROUND=true（默认）时把每根 Toe0 的 pivot 竖直搬到「盒底世界 z=0」；
+       false 回滚贴鞋、整段跳过。
+       探针 probes/toe_ground.txt D 段实证：biped.setTransform #pos 搬 pivot -2cm，盒底世界 z
+       也跟着 -2cm（boxMinDelta==pivotDelta），盒随 pivot 刚体走；而对象偏移挪不动盒（B 段=0）。
+       所以「盒底落地」只能搬 pivot —— 任务原设想的「不动 pivot」被探针否掉了。
+       代价摆出来：Toe0 pivot 离开 PMX つま先 ⇒ segment/foot_chain 的 Toe0 链偏离 PMX 靶
+       （Toe0 是短骨，placement/struct_dir 的回读清单不含它；第 134 轮 true 态实测
+       segment/len_cm +0.866cm 与 foot_chain/chain_angle_deg +6.5°，两只脚各一行）。
+       #135 用户拍板落地为默认后，这两条在落地态由 Python 降 report（数字照打印、不藏），
+       因为偏离是用户选择的落地形态的定义、不是缺陷；贴鞋态仍 gate/lock。
+       排位：toe_box_final 之后（盒截面已收完，搬的是最终盒）、figure_exit 之前（仍在 Figure 模式，
+       setTransform #pos 这一刻才改骨盒位置；探针 D 是退出 Figure 后读的，盒仍停在搬后位）。
+       只搬竖直分量 newPivot = pivot - [0,0,盒底z]，水平不动。落地质量由后面的 toe_shoe 尺
+       （ground_gap_cm gate 期望 0）回读判定，这里只搬 + 留痕，不自判（规则 II）。 */
+    if MMD2MAX_TOE_GROUND do
+    (
+        local grounded = 0
+        for item in limbs do
+        (
+            if item.count >= 10 and item[5] == "foot" do
+            (
+                local cName = item[2]
+                local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+                if cnode != undefined do
+                (
+                    local aabb = mmd2maxWorldBoxAABB cnode
+                    if aabb != undefined then
+                    (
+                        local boxMinZ = aabb[1].z
+                        local p0 = cnode.transform.translationpart
+                        local gErr = ""
+                        try ( biped.setTransform cnode #pos (p0 - [0.0, 0.0, boxMinZ]) false ) \
+                            catch ( gErr = (getCurrentException() as string) )
+                        local aabb2 = mmd2maxWorldBoxAABB cnode
+                        local afterZ = if aabb2 != undefined then aabb2[1].z else -1.0
+                        local gmsg = "  趾盒落地 " + cName + " 盒底z " + (boxMinZ as string)
+                        gmsg = gmsg + " -> " + (afterZ as string) + "（目标0）"
+                        if gErr != "" do gmsg = gmsg + " 搬pivot抛错=" + gErr
+                        mmd2maxLog gmsg
+                        grounded += 1
+                    )
+                    else mmd2maxLog ("  趾盒落地 " + cName + " 跳过：盒世界包围盒读不到")
+                )
+            )
+        )
+        mmd2maxLog ("趾盒落地：搬了 " + (grounded as string) \
+            + " 根 Toe0 pivot（MMD2MAX_TOE_GROUND=true 默认，落位代价由 segment/foot_chain 的 Toe0 链 report 摆出）")
+        mmd2maxReport "pass" "ran" "toe_ground" 1
+    )
 
     if rotTotal > 0 do
         mmd2maxLog ("转角 pass：接口=" + (rotWay as string) + " 累计尝试=" + (rotTotal as string) \
@@ -5431,7 +5876,14 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     gmsg = gmsg + " 子沿轴=" + (galong as string)
                     gmsg = gmsg + " 盒远端=" + (gfar as string)
                     gmsg = gmsg + " 端面覆盖=" + (cover as string)
-                    if abs ggap > MMD2MAX_GAPTOL or not cover then
+                    /* 单向尺（#139）：ggap>0 才是**空气缝**（#41 那张「牙签 + 悬空
+                       趾骨盒」截图），ggap<0 是父盒盖过子关节、两块盒子更连贯，不是断开。
+                       旧写法用 abs(ggap) 把负值也判成「没接上」，与上面注释里写明的正负
+                       含义自相矛盾：#135 的趾盒落地把 Toe0 pivot 抬 0.71cm，而 #139 把
+                       Toe0 前移到鞋长 58.6% 后 Foot 盒长度轴翻到世界 -Z，于是落地那 0.71cm
+                       第一次直接落在长度轴投影上 ⇒ 读到 ggap=-0.712906、端面覆盖=true。
+                       那不是缺口，是盒盖过关节。正向空气缝的闸与 gap_covered 一概不动。 */
+                    if ggap > MMD2MAX_GAPTOL or not cover then
                     (
                         gmsg = gmsg + "  **没接上**"
                         gapBad = gapBad + 1
@@ -5618,6 +6070,15 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         + " 读不到=" + (boxRb[2] as string) \
         + "（期望来自 limbs 脚段与 widths 表，判定在 Python 侧）")
     mmd2maxReport "pass" "ran" "box_verify" 1
+
+    /* 穿鞋检测（#134）：紧跟骨盒回读，仍在 skin_apply 之前（网格是绑定姿态鞋）。
+       只读不写，量趾盒底世界 z 与盒足迹内鞋底最低顶点，报 toe_shoe 两列；判定在 Python 侧。
+       注册表 toe_shoe requires figure_exit/mesh_import、writes toe_shoe，排在 box_verify 之后。 */
+    local toeShoe = mmd2maxVerifyToeShoe root limbs
+    mmd2maxLog ("穿鞋检测：量到=" + (toeShoe[1] as string) \
+        + " 读不到=" + (toeShoe[2] as string) \
+        + "（盒底/鞋底世界 z，判定在 Python 侧）")
+    mmd2maxReport "pass" "ran" "toe_shoe" 1
 
     /* 把 Biped 节点写回 boneNodes 的对应位置 */
     for k = 1 to targetNames.count do
@@ -6719,6 +7180,17 @@ fn mmd2maxBuildMorpher meshObj morphFile =
     if chUsed > 0 and chNamed < chUsed do
         mmd2maxLog ("Morpher 通道名对不上：" + (chNamed as string) + "/" + (chUsed as string) \
             + " 个通道的名字不是表情名 —— 见上面「通道明细」那一行。")
+    /* 通道建好后，临时副本网格已经「烘焙」进 Morpher 通道，源节点不再被引用，
+       必须删掉 —— 否则场景里会留下几十个和本体完全重叠、点不中也不受 Biped 控制的
+       网格（Scene Explorer 里一堆日文表情名，看着像模型坏了）。旧版本把删除只放在
+       「建失败」分支，成功时一律留着，正是用户看到的 clutter。 */
+    local cleaned = 0
+    for t in targets do
+    (
+        try ( delete t; cleaned += 1 ) catch ( mmd2maxLog ("Morpher 残骸删不掉（" \
+            + (try (t.name) catch ("?")) + "）：" + (getCurrentException() as string)) )
+    )
+    mmd2maxLog ("Morpher 临时副本已清理：" + (cleaned as string) + " / " + (targets.count as string) + " 个")
     true
 )
 
@@ -6775,6 +7247,10 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local cRRMaxY = mmd2maxColPos lines "rigid_rot_max_y"
     local cRRMaxZ = mmd2maxColPos lines "rigid_rot_max_z"
     local cRMode = mmd2maxColPos lines "rigid_physics_mode"
+    /* #126：这一格是 Python 按 `rigid_bone` 那个号**该对应到的场景节点名**
+       （口径在 semantic.node_name，重名骨留空）。名字必须在导出侧算：让 Max 自己去
+       bones.tsv 里查「号 → 名字」，等于用它想验的那条链的另一半来当尺。 */
+    local cRBoneNode = mmd2maxColPos lines "rigid_bone_node"
     local cJName = mmd2maxColPos lines "joint_name"
     local cJJA = mmd2maxColPos lines "joint_rigid_a"
     local cJJB = mmd2maxColPos lines "joint_rigid_b"
@@ -6824,10 +7300,57 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     local worstWorld = 0.0
     local worstName = "—"
     local linkShift = 0
+    /* #131 归因读数（第 104 轮林尼 RB_1：形心搬 0.174527cm，父骨=Bip001 Neck，
+       而香菱 / 克雷薇同一格读 0）。探针 90 的 C1/C2 用的是 Box 父 + Box 子，
+       两步都读不出搬动，所以真跑里搬的那一下到底是①`.parent=` 自己、②写回 transform、
+       ③父骨 TM 在挂父那一刻变了、还是④代理朝向被转（形心离枢轴 9.7cm，转 1 度就搬 0.17cm）
+       —— 四个候选得分开量，不能靠这一轮之后猜。只加读数，不改任何写。 */
+    local dMidWorst = 0.0
+    local dEndWorst = 0.0
+    local rowWorst = 0.0
+    local rowWorstName = "—"
+    local parWorst = 0.0
+    local parWorstName = "—"
+    /* 收尾重发那两句（朝向 / 定心）抛错的根数：抛了就是「这一族写没做完」，
+       与「拽回了但没拽到」是两种病，汇总行要分开说。 */
+    local pinFail = 0
+    /* #132 的两格。orientWorst 与上面那格 rowWorst 量的**不是同一件事**：
+       rowWorst 比「挂父前的世界TM vs 挂父后的世界TM」，两端都是 Max 自己的读回，
+       所以它看不见「早帧那一句自己就写歪了」；orientWorst 比「Python 给的三个度数
+       造出的应当世界矩阵 vs 最终世界矩阵」，两端不同源，早帧写歪也照样红。
+       靶的造法是实测的（探针 99 A，三轴同动 30/40/50）：节点 TM 的线性部分 =
+       `(eulerAngles …) as matrix3` 的**转置**（弦长 1.73776e-07 对 1.7331）。
+       `transpose` 是死调用，所以按行/列下标手转。
+       rotCtrlNative 数的是修法本身（四元数原生控制器）。为什么机制也要一把尺：
+       orientWorst 只在「这一具的父骨姿势正好把局部旋转顶到万向锁」时才响 ——
+       香菱/克雷薇/海灯节 不撞死点，控制器退回去它们照样全绿，正是 #125/#126 那类绿盲。 */
+    local orientWorst = 0.0
+    local orientWorstName = "—"
+    local rotCtrlNative = 0
+    local rotCtrlFail = 0
     local afterFail = 0
     local afterWorst = 0.0
     local afterName = "—"
     local parentScaled = 0
+    /* 挂父那三层条件（`boneNew >= 0` / `< boneNodes.count` / 节点非 undefined）任何一层落空，
+       代理就静静钉在场景根上 —— 而这一族**现有的尺一根都抓不到**：创建计数照样 +1，
+       `off_center` / `world_failed` / `after_failed` 量的是形心在不在 PMX 那个点上，
+       而一个没挂父的代理在绑定姿态下正好就在那儿（那位置是我们自己按 PMX 摆的）。
+       于是「254 根全绿」和「254 根一根都不跟骨动」在这几格里长得一模一样，
+       差别只有把时间轴拖起来才看得见 —— 正是本项目认的那类绿盲。
+       先例：附属骨那三条 `accessory/on_biped|on_bone|no_parent`（:5789），那边有、这边一直没有。
+       口径：只认**回读** `proxy.parent`，不认「我那条 `.parent=` 有没有抛」——
+       「写了但没生效」是不抛错的那一类，只有回读看得见。 */
+    local rigidParented = 0
+    local rigidRooted = 0
+    /* #126 的格子：`rigid_parented` 说「挂上了一根骨」，不说「挂的是表里那一根」。
+       期望名来自表（`rigid_bone_node`），实读名来自场景（`proxy.parent.name`），
+       两边同源不了：一个在 Python 按行序算，一个在 Max 按父级关系读。
+       `nameSkipped` = 挂了骨但表里那个名字是空的（重名骨，见导出侧 _bone_node_names），
+       这几根**不计**，所以闸的期望值也少数它们 —— 两边同一个口径，别在这里偷偷放宽。 */
+    local rigidNamed = 0
+    local nameWrong = 0
+    local nameSkipped = 0
     /* 循环后再读一次要用「这根代理本该在哪儿」，与 rigids 同下标存目标点。 */
     local rigidWant = #()
     for i = 1 to 4096 do append rigidWant undefined
@@ -6906,6 +7429,38 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                 (
                     proxy.name = ("RB_" + (idx as string) + "_" + name)
                     proxy.wirecolor = color 255 128 0
+                    /* #132：旋转控制器换成四元数原生，而且必须在**任何写之前**。
+                       默认的 Euler_XYZ 存不下万向锁上的旋转 —— 探针 97 的 X2 把正确的
+                       局部 quat 直接写进它的 `.value`，读回来是**另一个** quat
+                       （写 0.706299 -0.0337837 …、存 0.705466 -0.0481504 …），
+                       弦长 0.0407014，比产品原来那 0.0183069 还差。所以这不是「写法不对」，
+                       是那个控制器本身的表示能力不够，重发多少句都拽不回来。
+                       死点也不是 PMX 数据带来的：探针 98 离线量了 6 具 1956 根刚体，
+                       导出侧死点 0 根、欧拉往返最大误差 4.834e-10。死点是**父骨姿势**造出来的：
+                       林尼那根 RB_1_首 挂在摆过姿势的 Bip001 Neck 下，局部矩阵第 1 行
+                       = 父TM 第 1 列 = (1.365e-07,-2.634e-06,1) ⇒ 局部欧拉 Y = -89.9999，
+                       正是 XYZ 死点（Max 是行矢量约定：世界 = 局部 × 父，探针 96 W1 逐字核对）。
+                       换 Bezier_Rotation 之后探针 97 X1 走完整产品顺序**每一步**弦长都是 0.0，
+                       连裸 `.parent=` 都不搬了（d=2.45756e-06）；TCB_Rotation 同样 0.0（X3）。
+                       探针 99 B1/B2/B3 三种形状都换得上、写得进、形心不被搬走、世界盒照样读得出。
+                       X4 还量了「已经歪了的那根」：只换控制器不重发仍是 0.018307（旧的坏 quat
+                       被带过来了），所以顺序必须是建出来就换，不能留到收尾再补。 */
+                    local rotCtrlOk = false
+                    local rotCtrlErr = ""
+                    try
+                    (
+                        proxy.rotation.controller = Bezier_Rotation()
+                        rotCtrlOk = true
+                    )
+                    catch ( rotCtrlErr = (getCurrentException() as string) )
+                    if not rotCtrlOk do
+                    (
+                        rotCtrlFail += 1
+                        if rotCtrlFail <= 3 do
+                            mmd2maxLog ("刚体的旋转控制器没换成四元数原生 RB_" + (idx as string) \
+                                + "：这块代理留在 Euler_XYZ 上，父骨姿势一旦把局部旋转顶到万向锁就会歪约 1 度，" \
+                                + rotCtrlErr)
+                    )
                     /* PMX 里这根刚体到底有没有朝向。三根轴全是 0 的代理「转不上也无所谓」，
                        所以汇总行要能看出「旋转失败=0」是转好了还是根本没有朝向可转。 */
                     if (rx != 0.0) or (ry != 0.0) or (rz != 0.0) do rotNonZero += 1
@@ -6968,28 +7523,55 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                     /* MAXScript 的 and **不短路**：boneNew = -1 时 `boneNodes[0]` 会抛
                        "array index must be positive number"（实跑 362/363 里那 1 个失败
                        就是它）。必须拆成嵌套 if 才安全。 */
-                    /* 挂父这一对：探针 90 把「.parent 会把变换按父级重新解释」这条**洗掉了**。
-                       C1（父骨平移 + 绕 Y 转 90 度）与 C2（父骨 scale=[2,2,2]）两种父级下，
-                       `只设 .parent` 之后的 center / tm[4] / 世界盒与写 center 之后逐行相同
-                       （d(形心,目标) 从 4.8e-07 变 5.3e-06，尺寸一分没涨）。
-                       所以那条写回（把记下的矩阵再赋给 transform）写的是刚读到的同一个值 —— 恒等写，
-                       既没保住世界位置（第 69 轮那 38 根不是它治的，是胶囊开始定心治的），
-                       也不会把位置搞坏。留着它的唯一用处是：附属骨那段（:5855）用的是同一对写法，
+                    /* 挂父这一对写 + 收尾重发（#131 改的就是这段的出处）。
+                       探针 90 的 C1（父骨=Box，平移 + 绕 Y 转 90 度）与 C2（父骨 scale=[2,2,2]）
+                       说「只设 .parent」之后的 center / tm[4] / 世界盒与写 center 之后逐行相同，
+                       于是那段把下面这条写回读成「恒等写，留着只为与附属骨那段口径一致」。
+                       **第 105 轮在林尼上把这句推翻了**：父骨是 Biped 骨（Bip001 Neck）时
+                       `.parent=` 自己就把代理搬走 0.174525cm、朝向转了 1.027 度（这根胶囊的形心
+                       离枢轴 9.736cm = 半根胶囊长，转 1 度就搬 0.17cm），而写回那一下只改回
+                       2.987e-05cm —— 它拦不住；父骨自己的 TM 在挂父前后逐字节相同（变化=0.0），
+                       所以也不是「父骨 TM 陈旧」这一族。
+                       香菱 / 克雷薇 / 海灯节 同一格读 0：**为什么它们不响本轮读不出来**，
+                       新装的朝向弦长要下一轮才有那几具的数（别把「没响」当「恒 0」写进注释）。
+                       修法不靠那条写回，用这一段里已经证活的两句重发，顺序照早帧：
+                       先重发朝向（`.rotation` 会把整块绕世界原点画一段弧 —— 探针 91 的 A2/B2，
+                       所以它必须排在定心之前），再重发定心（与 :7142 那一句同一个写法、同一个目标点）。
+                       写回那行留着不动：附属骨那段（:6003 记 / :6007 写回）用的是同一对写法，
                        两处行为一致才不至于「一份探针解释了两份代码」。 */
                     local centerBefore = undefined
                     try ( centerBefore = proxy.center ) catch ( centerBefore = undefined )
                     local worldTM = proxy.transform
+                    local rotBefore = "读不出"
+                    try ( rotBefore = proxy.rotation as string ) catch ( rotBefore = "读不出" )
+                    local rotAfter = "读不出"
+                    local cMid = undefined
+                    local cEnd = undefined
+                    local parTmB = undefined
+                    local parTmA = undefined
                     if boneNew >= 0 do
                         if boneNew < boneNodes.count do
                             if boneNodes[boneNew + 1] != undefined do
                             (
+                                try ( parTmB = boneNodes[boneNew + 1].transform ) catch ( parTmB = undefined )
                                 try
                                 (
                                     proxy.parent = boneNodes[boneNew + 1]
+                                    try ( cMid = proxy.center ) catch ( cMid = undefined )
                                     proxy.transform = worldTM
+                                    try ( cEnd = proxy.center ) catch ( cEnd = undefined )
+                                    /* 收尾重发（#131）：这两句抛错必须记数并记文字 ——
+                                       抛了就等于这一族写没做完，下面的 `挂父搬走` 会替它红，
+                                       但「红是因为抛错」和「红是因为拽不回」得能分开，
+                                       所以两者各留一句（与 #81 的收法同一口径）。 */
+                                    try ( proxy.rotation = (eulerAngles ax ay az) ) \
+                                        catch ( pinFail += 1; if pinFail <= 3 do mmd2maxLog ("挂父收尾的朝向没重发 RB_" + (idx as string) + "：这块代理的朝向停在 .parent 给的那一度上，" + (getCurrentException() as string)) )
+                                    try ( proxy.center = [px, py, pz] ) \
+                                        catch ( pinFail += 1; if pinFail <= 3 do mmd2maxLog ("挂父收尾的定心没重发 RB_" + (idx as string) + "：这块代理不在 PMX 那个点上，" + (getCurrentException() as string)) )
                                 )
                                 catch ( mmd2maxLog ("!! 刚体挂父这一对写没走完 RB_" + (idx as string) \
                                     + "：可能已改父级而世界变换没写回，" + (getCurrentException() as string)) )
+                                try ( parTmA = boneNodes[boneNew + 1].transform ) catch ( parTmA = undefined )
                             )
                     /* 挂父**之后**再读一次世界量（#89/#90）。`.center` 是**世界**量：
                        探针 89 的 A3（pivot 在 (10,20,30) 的 Box 写 center=[10,20,30]，世界盒
@@ -7009,12 +7591,51 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                        更要紧的是那条 `父骨带缩放=202` 数的是**读得到 .scale 的那批**（附属骨/Dummy），
                        254 根里挂在 Biped 上的全被 catch 成「父骨没有scale属性」—— 这一格当时是半盲的。
                        探针 90 的 F2 给了活的尺：缩放 = transform 三行的长度，
-                       scale=2 的父骨量出 2.0/2.0/2.0，纯旋转的父骨量出 1.0，任何节点都有 .transform。 */
+                       scale=2 的父骨量出 2.0/2.0/2.0，纯旋转的父骨量出 1.0，任何节点都有 .transform。
+                       口径要说死：这一格量的是**世界矩阵的行长度**（会不会把挂上来的代理整块放大），
+                       不是 Biped 的**段缩放** —— 后者我们为了凑骨长故意写成非 1（第 89 轮
+                       `肢段 Bip001 L UpperArm -> L Forearm … [20.8675,…] -> [19.5224,…]`），
+                       而同一轮那两根以 UpperArm 为父骨的代理行长度仍读 1.0。两回事，别去「修」。 */
                     local parN = undefined
                     try ( parN = proxy.parent ) catch ( parN = undefined )
+                    if parN != undefined do rigidParented += 1
+                    if parN == undefined do
+                    (
+                        rigidRooted += 1
+                        /* 点名带表里那个骨号与骨骼总数：下一轮不用重跑就能分清
+                           「表写坏了（号在范围外）」和「节点没建出来（号在范围内却读不到）」。
+                           与同段别的计数一样封顶 3 条，后面的只数不写。 */
+                        if rigidRooted <= 3 do
+                            mmd2maxLog ("刚体代理没挂上任何骨 RB_" + (idx as string) \
+                                + "：rigid_bone=" + (boneNew as string) \
+                                + " 骨骼总数=" + (boneNodes.count as string) \
+                                + "（这块代理不跟骨动，仿真时它留在原地）")
+                    )
                     if parN != undefined do
                     (
                         try ( pn = parN.name ) catch ( pn = "父骨名字读不出" )
+                        /* #126：上一格只说「挂上了一根骨」，这一格说「挂的是表里那一根」。
+                           期望名是 Python 从 bones.tsv 那一行算出来后写进 physics.tsv 的，
+                           实读名是 Max 从场景的父级关系上读的 —— 中间隔着「表行序 =
+                           boneNodes 数组序」这句从来没有读数核过的假设（三处闸只核个数）。
+                           表里名字为空 = 重名骨，Max 会给副本加后缀、谁拿裸名没量过，
+                           这几根不计（导出侧与这里同一口径，期望值同样少数它们）。 */
+                        local wantNode = p[cRBoneNode]
+                        if wantNode == undefined do wantNode = ""
+                        if wantNode == "" do nameSkipped += 1
+                        if wantNode != "" and pn == wantNode do rigidNamed += 1
+                        if wantNode != "" and pn != wantNode do
+                        (
+                            nameWrong += 1
+                            /* 点名两个名字：`实挂` 是另一根骨的 PMX 名 = 数组序错位；
+                               `实挂` 是期望名 + 后缀 = Max 给重名节点改名，是命名口径的事。
+                               两种下一步不同，所以两个名都得打出来。 */
+                            if nameWrong <= 3 do
+                                mmd2maxLog ("刚体代理挂的不是表里那一根骨 RB_" + (idx as string) \
+                                    + "：rigid_bone=" + (boneNew as string) \
+                                    + " 期望节点=\"" + (wantNode as string) + "\"" \
+                                    + " 实挂=\"" + (pn as string) + "\"")
+                        )
                         local parT = undefined
                         try ( parT = parN.transform ) catch ( parT = undefined )
                         if parT != undefined do
@@ -7025,11 +7646,89 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                             local psy = (distance parT[2] [0, 0, 0])
                             local psz = (distance parT[3] [0, 0, 0])
                             ps = "(" + (psx as string) + "," + (psy as string) + "," + (psz as string) + ")"
-                            if (abs (psx - 1.0) > 0.001) or (abs (psy - 1.0) > 0.001) or (abs (psz - 1.0) > 0.001) do parentScaled += 1
+                            if (abs (psx - 1.0) > 0.001) or (abs (psy - 1.0) > 0.001) or (abs (psz - 1.0) > 0.001) do (
+                                parentScaled += 1
+                                /* 这一格从 report 升成闸（#124）之后，红的时候必须点名：
+                                   只报一个根数等于把「查是哪根」重新交回给一个读日志的人，
+                                   而那正是 #122 治的病。前 3 根留字，与同段的别的计数一样。 */
+                                if parentScaled <= 3 do
+                                    mmd2maxLog ("父骨的世界矩阵带缩放 RB_" + (idx as string) \
+                                        + "：父骨=" + pn + " 三行长度=" + ps \
+                                        + "（这块代理的尺寸会被整块乘走）")
+                            )
+                        )
+                    )
+                    /* #131 归因：把「搬走」拆成四个候选，每个都自己一个数，全 452 根都过一遍。
+                       dMidWorst = 只设 .parent 那一下；dEndWorst = 写回 transform 那一下；
+                       rowWorst  = 代理自己的朝向（世界矩阵三个行矢量的最大弦长，
+                                  1 度 = 0.01745，所以 0.018 就是转了约 1 度）；
+                       parWorst  = 父骨自己的 TM 在挂父前后变了多少（行矢量 + 平移一起加）。 */
+                    /* tmEnd 不套 try：`proxy.transform` 在探针 87/90/93~99 里每一次都读得到，
+                       而套了 try 之后「读不出」会让 rowWorst 与 orientWorst 双双静默停在 0 ——
+                       两把尺一起变绿盲。真死了就让外层 catch 数进 rigid_failed，那一格是闸。 */
+                    local tmEnd = proxy.transform
+                    try ( rotAfter = proxy.rotation as string ) catch ( rotAfter = "读不出" )
+                    for k = 1 to 3 do
+                    (
+                        local dRow = (distance worldTM[k] tmEnd[k])
+                        if dRow > rowWorst do
+                        (
+                            rowWorst = dRow
+                            rowWorstName = "RB_" + (idx as string) + "_" + (name as string)
+                        )
+                    )
+                    /* #132 的独立靶：从 Python 给的度数造应当的世界旋转矩阵。
+                       转置那一步是探针 99 A 实测的口径（1.73776e-07 对 1.7331），不是推的；
+                       第一版探针 99 B 直接拿 `as matrix3` 当靶，三种形状都读 0.193933
+                       = 2·sin(5.5645 度)，那是坏仪器读数。`transpose` 是死调用，手转。 */
+                    local em = (eulerAngles ax ay az) as matrix3
+                    local wantTM = matrix3 [em[1][1], em[2][1], em[3][1]] \
+                                         [em[1][2], em[2][2], em[3][2]] \
+                                         [em[1][3], em[2][3], em[3][3]] [0, 0, 0]
+                    local dOrient = 0.0
+                    for k = 1 to 3 do
+                    (
+                        local dK = (distance wantTM[k] tmEnd[k])
+                        if dK > dOrient do dOrient = dK
+                    )
+                    if dOrient > orientWorst do
+                    (
+                        orientWorst = dOrient
+                        orientWorstName = "RB_" + (idx as string) + "_" + (name as string)
+                    )
+                    /* 控制器类排在**所有写之后**回读：「换上了但后来被谁换回去」也看得见。
+                       classOf 印出来的大小写不一致（Euler_XYZ 混大小写、bezier_rotation 全小写，
+                       探针 97/99 两份读数），所以用 matchPattern ignoreCase —— 探针 99 B
+                       实测这个参数名活、三种形状都返回 true。 */
+                    if matchPattern ((classOf proxy.rotation.controller) as string) \
+                        pattern:"bezier_rotation" ignoreCase:true do rotCtrlNative += 1
+                    if parTmB != undefined and parTmA != undefined do
+                    (
+                        local dPB = (distance parTmB[4] parTmA[4])
+                        for k = 1 to 3 do dPB = dPB + (distance parTmB[k] parTmA[k])
+                        if dPB > parWorst do
+                        (
+                            parWorst = dPB
+                            parWorstName = pn
+                        )
+                    )
+                    if centerBefore != undefined do
+                    (
+                        if cMid != undefined do
+                        (
+                            local dM = (distance centerBefore cMid)
+                            if dM > dMidWorst do dMidWorst = dM
+                        )
+                        if cMid != undefined and cEnd != undefined do
+                        (
+                            local dE = (distance cMid cEnd)
+                            if dE > dEndWorst do dEndWorst = dE
                         )
                     )
                     /* 归属第一层：挂父这一步自己搬了多少（centerBefore 与 wC 都是世界形心）。
-                       探针 90 说这一步该是 0；真跑里不是 0 就是新事实，必须留字。 */
+                       探针 90 在 **Box 父骨**上读它是 0；#131 第 105 轮在 Biped 父骨上读到
+                       0.174525cm，所以上面那两句重发才是这一步的修法。重发之后这一格该回到
+                       浮点噪声量级；真跑里仍 > 0.01 就是「重发没拽回来」，必须留字。 */
                     if centerBefore != undefined and wC != undefined do
                     (
                         local dLink = (distance centerBefore wC)
@@ -7039,7 +7738,12 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
                             if linkShift <= 3 do
                                 mmd2maxLog ("挂父这一步把代理搬走了 RB_" + (idx as string) \
                                     + "：搬 " + (dLink as string) + " 之前=" + (centerBefore as string) \
-                                    + " 之后=" + (wC as string) + " 父骨=" + pn + " 父骨行长度=" + ps)
+                                    + " 之后=" + (wC as string) + " 父骨=" + pn + " 父骨行长度=" + ps \
+                                    + " [#131 只设parent后=" + (if cMid == undefined then "读不出" else cMid as string) \
+                                    + " 写回后=" + (if cEnd == undefined then "读不出" else cEnd as string) \
+                                    + " 朝向前=" + rotBefore + " 朝向后=" + rotAfter \
+                                    + " 父骨TM前=" + (if parTmB == undefined then "读不出" else parTmB as string) \
+                                    + " 父骨TM后=" + (if parTmA == undefined then "读不出" else parTmA as string) + "]")
                         )
                     )
                     if wC != undefined do
@@ -7199,6 +7903,28 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
         try ( layerJT.isHidden = true; jtHide = (if layerJT.isHidden then "是" else "否写没生效") ) catch ( jtHide = "写抛错" )
     )
     if jtHide != "是" do mmd2maxLog ("!! 关节层没隐藏（" + jtHide + "）：700 个 Dummy 留在视口里挡结构")
+    /* 刚体代理默认隐藏：与关节层同一形状（隐藏 + 回读 + 失败告警）。363 个橙格代理留在
+       视口里会盖住角色，而截图裁剪只认骨节点、碰不到 Sphere/Capsule/Box，所以这里替用户藏掉；
+       要看时在层管理器里打开 mmd2max_physics 即可。汇总那句「隐藏=」两层各报各的，不再只报关节。 */
+    local rbHide = "没建层"
+    if layerRB != undefined do
+    (
+        try ( layerRB.isHidden = true; rbHide = (if layerRB.isHidden then "是" else "否写没生效") ) catch ( rbHide = "写抛错" )
+    )
+    if rbHide != "是" do mmd2maxLog ("!! 刚体层没隐藏（" + rbHide + "）：橙格代理留在视口里盖住角色")
+    /* #131 归因汇总（只进日志，不进判据）：把「挂父搬走」那一格拆成四个候选之后，
+       哪一个是真的必须由这四个数说，而不是由下一轮读日志的人猜。 */
+    mmd2maxLog ("挂父归因：只设parent最大=" + (dMidWorst as string) \
+        + " 写回transform最大=" + (dEndWorst as string) \
+        + " 朝向弦长最大=" + (rowWorst as string) + "@" + rowWorstName \
+        + " 父骨TM变化最大=" + (parWorst as string) + "@" + parWorstName \
+        + "（弦长 0.01745 = 1 度）")
+    /* #132：上面那行的 `朝向弦长最大` 是**自比**（挂父前 vs 挂父后），这一行才是对独立靶。
+       两个数并排放着，因为它们分得开两种病：自比大 = 挂父/收尾把它转走了；
+       对靶大 = 最终朝向就不是 PMX 要的那个（早帧写歪也算）。修法落地后两个都该在噪声里。 */
+    mmd2maxLog ("刚体朝向对靶：弦长最大=" + (orientWorst as string) + "@" + orientWorstName \
+        + " 四元数原生控制器=" + (rotCtrlNative as string) + "/" + (created as string) \
+        + " 没换上=" + (rotCtrlFail as string) + "（弦长 0.01745 = 1 度）")
     local sumMsg = "物理刚体代理：" + (created as string) + "（失败 " + (rigidFail as string) + "）"
     sumMsg = sumMsg + " 关节标记：" + (jointCount as string) + "（失败 " + (jointFail as string) + "）"
     sumMsg = sumMsg + " 旋转失败=" + (rotFail as string)
@@ -7207,19 +7933,84 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
        第 64~66 轮那种「254 根一根没转」反过来也可能变成「0 根其实什么都不用转」。 */
     sumMsg = sumMsg + " 有朝向的刚体=" + (rotNonZero as string)
     sumMsg = sumMsg + " 转后偏心=" + (offFail as string)
+    /* 定心那一步（`proxy.center = [px,py,pz]`）抛错的根数：写不进去的代理**不在** PMX
+       那个点上，而上面两格一个数的是创建、一个数的是转完之后的回读，都不覆盖这一步。
+       它以前只进每条 `!!` 日志（且封顶 3 条），汇总行里没有 —— 判据行有了之后它必须
+       一起报，否则第 4 根以后抛的错在报告表上读成 0。 */
+    sumMsg = sumMsg + " 定心失败=" + (centerFail as string)
     /* 挂父之后那一格才是「代理在不在角色身上」的尺：前面几格都在节点自己的空间里量。
        `最大=` 带名字：第 70 轮 `挂父后世界偏心=4` 只留了前 3 条文字，第 4 根是谁、
        最偏的那根是不是第 4 根，日志里查不到 —— 计数封顶可以，名字不能封顶。 */
     sumMsg = sumMsg + " 挂父后世界偏心=" + (worldFail as string) + " 最大=" + (worstWorld as string) + "@" + worstName
     sumMsg = sumMsg + " 挂父搬走=" + (linkShift as string)
+    /* 收尾重发（朝向 + 定心）抛错的根数：这两句是 #131 的修法本体，抛了就等于修法没落地。
+       它不进判据是量过的决定，不是省事 —— `挂父搬走` 已经会在定心没重发时变红，
+       这一格的作用是让「红了但没人重发」和「绿了但重发被抛掉」在日志里分得开。
+       朝向单独没重发时 centroid 仍然对（定心排在朝向之后，它把点强行搬回去），
+       所以那一半由 #132 的 `orient_worst` 闸负责（对独立靶，不是自比），这一格只留日志。 */
+    sumMsg = sumMsg + " 挂父收尾抛错=" + (pinFail as string)
+    sumMsg = sumMsg + " 朝向对靶最大=" + (orientWorst as string) + "@" + orientWorstName
+    sumMsg = sumMsg + " 控制器没换上=" + (rotCtrlFail as string)
     /* 循环外那一次的读数（#90 第三层归属）：与上面那格成对照。 */
     sumMsg = sumMsg + " 循环后仍偏=" + (afterFail as string) + " 最大=" + (afterWorst as string) + "@" + afterName
+    sumMsg = sumMsg + " 挂上骨=" + (rigidParented as string) + " 没挂上=" + (rigidRooted as string)
+    /* #126：上一行走完，这一行问「挂对了吗」。三个数与 `挂上骨` 的关系是
+       `名字对骨 + 挂错骨 + 名字不计 = 挂上骨`（这个式子在 Max 自己的计数里恒成立，
+       所以它不是判据；判据是 `名字对骨` 对表里那个期望数 —— 见下面那行 report）。 */
+    sumMsg = sumMsg + " 名字对骨=" + (rigidNamed as string) + " 挂错骨=" + (nameWrong as string) \
+        + " 名字不计=" + (nameSkipped as string)
+    /* 上面那格数的是「代理有没有落在某根骨下面」。它与 `刚体代理：N` 是两份数：
+       创建成功不代表挂得上，挂不上的那些在绑定姿态下位置仍然全对。 */
     sumMsg = sumMsg + " 父骨带缩放=" + (parentScaled as string)
     /* 非 0 就说明这一轮的胶囊其实是圆柱：形状退化了，但创建计数仍然好看。 */
     sumMsg = sumMsg + " 胶囊退圆柱=" + (capFalls as string)
     sumMsg = sumMsg + " 层收纳失败=" + (layerFail as string)
-    sumMsg = sumMsg + "；刚体在层 mmd2max_physics，关节在层 mmd2max_joints（隐藏=" + jtHide + "）"
+    sumMsg = sumMsg + "；刚体在层 mmd2max_physics（隐藏=" + rbHide + "），关节在层 mmd2max_joints（隐藏=" + jtHide + "）"
     mmd2maxLog sumMsg
+    /* ── 这串计数落到判据表（#122）────────────────────────────────
+       上面那句汇总从前**只进日志**，于是「刚体少建了 1 个」（第 64/64b 轮）与
+       「挂父后世界偏心=4 最大=94.6242」（第 70/71 轮）都是人一行行读日志读出来的，
+       判据表上那些轮次全绿。现在每一格各报一行，check 名逐字对上 verdicts.py 的
+       physics_rb（契约测试拿两边的字面量对撞）。
+       五条「该有几根」的期望值来自导出的 physics.tsv（Python 那边逐行数出来的
+       `PhysicsExpectation`），不是这里自己的计数 —— 所以 `rigid_created` 不是恒等式：
+       它数的是**这个场景里真建出来的代理**。第 64 轮那种「代理建好了、记账那一步抛了」
+       在这一格里就是 `created` 少数 1、`rigid_failed` 多 1，两行必须一起看。
+       `rigid_parented`（#125）的期望 = 表里 `rigid_bone >= 0` 的行数：它数的是**回读到的
+       `proxy.parent`**，所以「创建成功但挂父那三层条件落空」这一族在别处全绿的错，
+       在这一格里少一根就红。日志里的「没挂上」不给行 —— 它恒等于
+       `rigid_created - rigid_parented`，给一行等于把同一个数判两遍。
+       `world_worst_cm` 是 report（不卡数）：它是最大偏心的厘米数，
+       「有没有偏」已经由 off_center / world_failed / after_failed 三格按阈值卡了。
+       `parent_scaled` 从前也算 report，理由写的是「202 根、父骨本来就可能带缩放」——
+       那句是第 69 轮那把坏尺的读数（读 `parent.scale`，Biped 骨没这属性、逐根抛，
+       只有附属骨/Dummy 进了分母），不是模型属性；换对尺之后每一轮都读 0。
+       现在它卡 0，而且红的时候下面那段会点名是哪几根。
+       #132 新增两行：`rot_ctrl_native` 的期望 = 表里的刚体行数（与 rigid_created 同源），
+       它数的是**所有写做完之后**回读到的控制器类，所以「换上了又被谁换回去」也红；
+       日志里的「没换上」不给行 —— 它恒等于 `rigid_created - rot_ctrl_native`。
+       `orient_worst` 是**闸**而不是 report，这点与 world_worst_cm 相反：朝向此前
+       没有任何一把尺（link_shifted 只量形心，而形心被收尾那句定心强行搬回去了，
+       转歪 1 度它照样绿），所以这个最大弦长本身就是判据，阈值在 verdicts.py 那边。 */
+    mmd2maxReport "physics_rb" "rigid_created" "-" created
+    mmd2maxReport "physics_rb" "rigid_parented" "-" rigidParented
+    mmd2maxReport "physics_rb" "rigid_parent_named" "-" rigidNamed
+    mmd2maxReport "physics_rb" "joint_created" "-" jointCount
+    mmd2maxReport "physics_rb" "rot_oriented" "-" rotNonZero
+    mmd2maxReport "physics_rb" "rot_ctrl_native" "-" rotCtrlNative
+    mmd2maxReport "physics_rb" "rigid_failed" "-" rigidFail
+    mmd2maxReport "physics_rb" "joint_failed" "-" jointFail
+    mmd2maxReport "physics_rb" "rot_failed" "-" rotFail
+    mmd2maxReport "physics_rb" "center_failed" "-" centerFail
+    mmd2maxReport "physics_rb" "off_center" "-" offFail
+    mmd2maxReport "physics_rb" "link_shifted" "-" linkShift
+    mmd2maxReport "physics_rb" "world_failed" "-" worldFail
+    mmd2maxReport "physics_rb" "after_failed" "-" afterFail
+    mmd2maxReport "physics_rb" "cap_cylinder" "-" capFalls
+    mmd2maxReport "physics_rb" "layer_failed" "-" layerFail
+    mmd2maxReport "physics_rb" "world_worst_cm" "-" worstWorld
+    mmd2maxReport "physics_rb" "orient_worst" "-" orientWorst
+    mmd2maxReport "physics_rb" "parent_scaled" "-" parentScaled
     true
 )
 
@@ -7318,18 +8109,22 @@ fn mmd2maxMain =
     if mmd2maxIsInteractive() do
         messageBox ("已保存：\n" + (MMD2MAX_OUTPUT as string)) title:"mmd2max 完成"
 
-    /* 非交互模式跑完就自己退出。
-       为什么这条是硬要求而不是「顺手清理」：上层 tools/obj_run.py 以前一律
-       `taskkill /F /IM 3dsmax.exe` 收尾，强杀让 Max 记下的「上次会话非正常结束」
-       计数一路累积（实测 HKCU\Software\Autodesk\3dsMax\24.0\MiniDump\24.3.0.3404：
-       SessionStartCount=167 / SessionCleanCloseCount=50），于是每次启动都弹
-       "Startup Failure Detection" 模态框，把 -U MAXScript 的自动执行整个挡死 ——
-       用户不在电脑前时这就是死锁。探针实测 quitMax() 可用，且它退出后
-       SessionCleanCloseCount 会追平 SessionStartCount，下一轮启动干净。
-       失败路径留在原地不退出：现场要给人看。 */
-    if not mmd2maxIsInteractive() do
+    /* 装配收尾哨兵（#137）：写在保存 / 判据报告 / 视口截图全部落盘之后、决定退不退之前。
+       上层 tools/obj_run.py 在 KEEPOPEN=true 时靠这一行收尾 —— 只等 success.json 不够，
+       成功标记刻意排在截图之前（截图出错不该毁掉产物），那时截图还没抓完、REPORT 还在写。 */
+    mmd2maxLog "装配收尾完成 MMD2MAX_DONE（保存 / 判据报告 / 视口截图全部落盘）"
+
+    /* 只有显式关掉 MMD2MAX_KEEPOPEN（obj_run 的 --quit）才自己退出。
+       #137 之前这一刀挂在「非交互」上，于是自动装配跑完就把用户想看的场景关掉了；
+       现在默认保留现场，交互位只管弹窗，两者互不牵连。
+       回滚位仍要 clean quitMax：上层以前一律 `taskkill /F /IM 3dsmax.exe`，强杀让 Max
+       记下的「上次会话非正常结束」计数一路累积（实测 SessionStartCount=167 /
+       SessionCleanCloseCount=50），之后每次启动都弹 "Startup Failure Detection" 模态框，
+       把 -U MAXScript 的自动执行整个挡死。quiet:true 不弹「保存更改？」——截图阶段
+       改过 isHidden/EdgeFaces，场景是脏的，裸 quitMax 会被保存提示挡住。 */
+    if not mmd2maxKeepOpen() do
     (
-        mmd2maxLog "非交互模式：quitMax() 正常退出（避免上层 taskkill /F 累积崩溃计数）。"
+        mmd2maxLog "MMD2MAX_KEEPOPEN=false：quitMax() 正常退出（避免上层 taskkill /F 累积崩溃计数）。"
         /* quiet:true 不弹「保存更改？」——截图阶段改过 isHidden/EdgeFaces，场景是脏的，
            裸 quitMax 一旦被保存提示挡住就永远退不出去。写法沿用 tools/make_parse_probe.py
            里已经跑通的同一形式；真抛错再退回裸 quitMax。 */
@@ -7369,14 +8164,13 @@ catch
     (
         try ( messageBox ("转换失败：\n" + message) title:"mmd2max 失败" ) catch ( format "[mmd2max] !! 失败弹窗没弹出来（交互模式下屏幕上看不见这条错误）: %\n" (getCurrentException()) )
     )
-    /* 失败也要自己退。非交互模式下没人盯着屏幕，而错误全文已经落到 error.txt 和
-       日志里；留在原地只会让上层等满 GRACEFUL_EXIT_SECONDS 再 taskkill /F ——
-       那一下又给 Max 记一次异常终止，下次启动就弹崩溃对话框。
-       真·报错弹窗（没被这里 catch 住的）走的是另一条路：obj_run 捕获到弹窗
-       会保留 Max 现场，不杀掉。 */
-    if not mmd2maxIsInteractiveNow() do
+    /* 失败默认也保留现场（#137）：错误全文已经落进 error.txt 和日志，屏幕上这个
+       半成品场景才是排查时最有用的一份证据。只有 --quit（KEEPOPEN=false）才自己退出，
+       那时上层在同一开关下会等 clean quitMax，不会触发 taskkill /F 的崩溃计数。
+       真·报错弹窗（没被这里 catch 住的）走另一条路：obj_run 捕获到弹窗一律保留现场。 */
+    if not mmd2maxKeepOpen() do
     (
-        mmd2maxLog "失败：写完成 error.txt 后 quitMax 退出（现场已在日志与 error.txt 里）。"
+        mmd2maxLog "失败且 MMD2MAX_KEEPOPEN=false：写完成 error.txt 后 quitMax 退出（现场已在日志与 error.txt 里）。"
         try ( quitMax quiet:true ) catch ( try ( quitMax ) catch () ) -- 允许失败：两条 quitMax 都不成时由上层 obj_run 的 GRACEFUL_EXIT_SECONDS 兜底 taskkill；这里再抛会把「错误已落 error.txt」的现场换成一次 Max 崩溃弹窗
     )
 )

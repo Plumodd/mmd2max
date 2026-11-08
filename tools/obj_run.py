@@ -33,14 +33,17 @@ from desktop import (  # noqa: E402
     paste_text,
     press_keys,
 )
-from mmd2max import passes  # noqa: E402
+from mmd2max import app_paths, console, passes  # noqa: E402
 from mmd2max.targets import TARGETS, cfg_values as target_cfg_values  # noqa: E402
 from mmd2max.verdicts import (  # noqa: E402
     REPORT_NAME,
     SPEC_NAME,
     build_spec,
+    export_config,
     parse_table,
     parse_weights,
+    physics_expectation,
+    pricing_note,
     skin_expectation,
     spec_text,
 )
@@ -158,8 +161,8 @@ def max_startup_dirs(exe: Path) -> list[Path]:
     return [p for p in (d / "scripts" / "startup" for d in sorted(root.glob("*")))
             if p.is_dir()]
 
-SHOTS = TOOLS.parent / "outputs" / "shots"
-TEMPLATE = TOOLS.parent / "scripts" / "max_import_obj.ms"
+SHOTS = app_paths.shots_dir()
+TEMPLATE = app_paths.template_ms()
 
 # 启动弹窗白名单：标题关键字 -> 唯一允许点的那个按钮的确切名字。
 # 这两个框都是「点它什么都不改」的确认键；右边那个 "Restore Factory Settings…"
@@ -175,9 +178,11 @@ def log(message: str) -> None:
     try:
         print(line, flush=True)
     except UnicodeEncodeError:
-        # 控制台走本地代码页（这台机是 GBK），而判据消息里有 ⇒、≤ 这类字符：直接 print
-        # 会抛穿整个驱动，装配跑到一半就死（ObjRunWiringTests 用一条含 ⇒ 的消息踩实的）。
-        # 降级成「这条消息的可编码版本」重打一次 —— 丢的只是那几个符号，不是整轮。
+        # 入口已经把 stdout 定成 UTF-8（mmd2max/console.py），所以正常一轮里这条不该走到。
+        # 留着是因为还有一种流改不动：宿主把 sys.stdout 换成 StringIO 之类的流时
+        # `reconfigure` 根本没有，判据消息里的 ⇒ 就会在这里抛穿整个驱动，装配跑到一半就死
+        # （ObjRunWiringTests 用一条含 ⇒ 的消息踩实的）。降级成「这条消息的可编码版本」
+        # 重打一次 —— 丢的只是那几个符号，不是整轮。
         enc = getattr(sys.stdout, "encoding", None) or "ascii"
         print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
 
@@ -296,6 +301,9 @@ CFG_KEYS = (
     *TARGET_CFG_KEYS,
     "MMD2MAX_SKIN", "MMD2MAX_SHOT", "MMD2MAX_SHOTDIR",
     "MMD2MAX_INTERACTIVE",
+    # #137：跑完是否把 3ds Max 留在屏幕上。与 INTERACTIVE 分开 —— 后者一开就会弹
+    # queryBox / messageBox，自动装配没人点会挂死；前者只决定 quitMax 与上层收尾。
+    "MMD2MAX_KEEPOPEN",
 )
 
 # 允许是空串（= 该阶段整段跳过）的键；其余键为空一律在本函数里就拦掉。
@@ -353,7 +361,8 @@ def read_meta(base: Path, stem: str) -> dict:
 
 def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
               suffix: str | None = None, shot: bool = False,
-              physics: bool = False, interactive: bool = False) -> tuple[dict, Path]:
+              physics: bool = False, interactive: bool = False,
+              keep_open: bool = True) -> tuple[dict, Path]:
     """装配用的**全部**输入与开关，集中成一个 key→value 表，落到 <目录>/MMD2MAX.CFG。
 
     v3 的做法是在生成的 .ms 头部逐行注入 22 个 global。那带来一个查不出来的分裂：
@@ -391,11 +400,17 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_SHOT": "true" if shot else "false",
         "MMD2MAX_SHOTDIR": str(base / "shots"),
         # 交互位 = 「这一轮有人盯着屏幕」。只有 --manual / --gen-only 会打开它：自动跑
-        # 点不掉弹窗，所以那边必须是 false（跑完自己 quitMax、重置场景不问人）。以前这个键
+        # 点不掉弹窗，所以那边必须是 false（弹窗没人点、重置场景不问人）。「跑完退不退」
+        # 从 #137 起归下面的 MMD2MAX_KEEPOPEN，不再由这个键决定。以前这个键
         # 恒为 false，于是 .ms 里「保留现场给人看 / 重置前问一句」的分支一次也没跑到过，
         # 而 --manual 的提示语写着「请手动在 Max 中查看」——脚本其实一跑完就把 Max 关了，
         # 话是假的。（另一半短路 MMD2MAX_QUIET 恒为 true，已在本轮一并删掉。）
         "MMD2MAX_INTERACTIVE": "true" if interactive else "false",
+        # #137：默认 True = 装配完把 3ds Max 连同装好的场景留着给用户看，不 quitMax。
+        # --quit 是回滚位（回到 #136 及以前的「跑完自己干净退出」）。
+        # 这格是**条件表达式**不是常量：`test_no_cfg_bool_is_written_as_a_constant`
+        # 会拦下只能取一个值的假开关。
+        "MMD2MAX_KEEPOPEN": "true" if keep_open else "false",
     }
     # 目标值（容差/开关）只有一个来源：mmd2max.targets。以前它们是 .ms 里的 `global X = 3.0`，
     # Python 侧看不见这些判据，也就没法校验（M2 的 verdicts 表要用的正是这几个数）。
@@ -427,10 +442,55 @@ def cfg_text(cfg: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-# 规格表需要的、只能从 meta 拿的两个计数。缺键一律中止，不给默认值：
+# 规格表需要的、只能从 meta 拿的数。缺键一律中止，不给默认值：
 # 「没有 kept_bones 就退化成不检查 Skin 骨数」等于把这条判据删掉，而删掉的判据
 # 不会报错，只会让下一轮全绿。
-META_FOR_SPEC = ("kept_bones", "morph_count")
+# `scale` / `min_weight` / `keep_guides` 是 #106 加的「定价身份」维度：身高、权重阈值、
+# 辅助骨开关；末尾两个 `has_sdef` / `has_qdef` 是 #119 收进来的形变口径 —— 它们从 M1b 起
+# 就没人读了，而「没人读」不等于「不影响读数」：一具含 SDEF 的模型会悄悄继承线性混合那两组的锁。
+# 它们决定锁的数字该不该卡 —— 从命令行拿会分叉（导出的是一轮、判据装的是另一轮），
+# 只能从这一份**跟着产物一起落盘**的 meta 拿。
+# `vertex_count` 是 #121 收进来的：定价「认模型」用的那个数是从权重表数出来的行数
+# （`main` 里数一遍），meta 这一行却从来没被读过 —— 而 `verdicts.py` 的注释早就写着它该是
+# 「meta 的 vertex_count 原文」。读它，那句注释才成立；两份数分叉时也在启动 Max 之前就中止。
+# `role_skeleton` 同批收进来当骨骼表的上限（`len(bones) <= role_skeleton`），理由见下面。
+# `rigid_count` / `joint_count` 是 #122 从「归档」搬下来的：它们在装配时对撞的是
+# **落盘的 physics.tsv 的行数**（`physics_expectation`），而那张表正是 Max 逐行读去建代理的
+# 输入 —— 于是这两行从「PMX 说了几句」变成了「导出层两份数有没有分叉」的尺。
+# 这一段初稿曾把 `shot_rb/clip_bones_total` 当成 Max 侧的可比读数，那是引错了证据：那行逐类
+# 计数数的是**场景里的骨**，与刚体无关。归档理由引错证据与「写了没人读」是同一类病，
+# 而 #121 的形状闸只会查「有没有申报」，查不出申报的话是假的 —— 所以这句留在代码里而不只在文档里。
+META_FOR_SPEC = ("kept_bones", "morph_count", "scale", "min_weight", "keep_guides",
+                 "has_sdef", "has_qdef", "vertex_count", "role_skeleton",
+                 "rigid_count", "joint_count")
+
+# ── meta 里**故意**没有读者的键（#121）──────────────────────────
+#
+# 上面三张名单（META_TO_CFG / META_FOR_SPEC / META_FOR_CHECK）之外，导出还会往 meta 写
+# 好几行。它们不在这三张名单里，就必须在这里被点名，并由契约测试
+# （tests/test_meta_contract.py）逐键核对「写出的 = 有读者的 ∪ 这里申报的」——
+# 这条规矩的来源是 #119：`has_sdef` / `has_qdef` 从 M1b 起没人读，于是元信息看起来
+# 记了「形变口径」，实际上那一维对判据一点影响都没有。留着一行没人读的键**不是中性的**：
+# 它让下一个人以为这件事已经被记下来了。
+#
+# 申报的理由必须是「为什么它当不了一把尺」，不是「它挺有用」。写不出这句的键就该删掉。
+META_HUMAN = {
+    # 只有 0/1，而它记的 mode 其实有三档（useful / humanoid / full）：humanoid 也写 1。
+    # 真正参与「哪一组配置」的是它造成的 `kept_bones`：换档一般就换骨数（香菱 useful
+    # 保留 321 根、full 会连 30 根 control 与 1 根 morph 一起留下），于是「换档却借到
+    # 另一档的锁」被指纹的 bones= 那一维堵住。剩下的那条路 —— humanoid 与 useful 骨数
+    # 恰好相同、留下的却是不同的骨 —— 是 #106「用计数认模型」的固有代价（同一串计数
+    # 就是同一具模型），一行 meta 补不了它，所以这一行只能留给人看。
+    "filter_useless": "模式留痕；后果由 kept_bones 承担，它自己分不清 useful/humanoid",
+    # 和 vertex_count 一起回答「为什么比 PMX 编辑器里的顶点数少」（#13 丢弃未引用顶点）。
+    # 源顶点数没落任何盘，两条数加不出等式 —— 只能给人看。
+    "dropped_verts": "解释 vertex_count 为什么小于源顶点数；源顶点数不在任何产物里",
+    # 三个 role_* 之和 = 源骨总数（分类覆盖每一根骨）。其中 role_skeleton 能当尺
+    # （骨骼表行数不许超过它），这两个不能：它们与保留集之间只有减法关系，
+    # 而「源骨总数」没有第二份产物可比 —— 比不了的数量不是判据，是留痕。
+    "role_control": "与 role_skeleton/role_morph 之和 = 源骨总数；无第二份源骨数可比",
+    "role_morph": "与 role_skeleton/role_control 之和 = 源骨总数；同样无第二份可比",
+}
 
 
 def _ruler(meta: dict, base: Path, prefix: str) -> tuple[tuple, tuple] | None:
@@ -478,8 +538,16 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
 
     取数只走两条路：CFG（路径、开关、目标值）与导出文件（limbs.tsv 的行、meta 的计数）。
     没有第三条 —— 尤其是**不许**从上一轮的日志或报告里取，那正是「拿 Max 自己报的数
-    要求 Max 报这个数」的恒等式。`model=stem` 决定哪些行带「已定价读数」：
-    只有被定价过的那具模型拿数字当锁，换模型时那些行退化成 report（必须出现、不卡数）。
+    要求 Max 报这个数」的恒等式。
+    哪些行带「已定价读数」由**导出事实**决定（#106）：`vertex_count` + `morph_count`
+    认「哪一具模型」（顶点那一半以权重表的行数为准，并与 meta 声明的那份交叉核对，#121），
+    meta 里的 scale / min_weight / keep_guides 加上形变口径两键
+    （has_sdef / has_qdef，#119）认「哪一组配置」。目录名
+    不再参与 —— 它只是 `run_model.py` 给产物起的落盘名，改名、复制、换批次都可能让同一
+    具模型换名字。没被定价过的模型，那些行退化成 report（必须出现、不卡数）；被定价过
+    但这一组配置没定价则**中止**（`export_config` 会抛），因为拿别的配置的数判它是假绿
+    或假红。装配完把定价结论打进日志：「判据少了一整片」必须是看得见的，第 76 轮就输在
+    512 全绿而没人知道锁根本没参与。
     """
     meta = read_meta(base, stem)          # 纯读文件，与 build_cfg 里那次读的是同一份
     missing = [k for k in META_FOR_SPEC if not meta.get(k)]
@@ -502,9 +570,26 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
         raise SystemExit(f"骨骼表 {len(bones)} 行，meta 的 kept_bones 是 {meta['kept_bones']}："
                          "两份导出产物已经分叉，重跑 tools/run_model.py；"
                          "拿分叉的表装出来的判据全是垃圾，不如不跑这一轮")
+    # #121：骨骼表的行数不许超过 meta 说的「role=skeleton 的骨数」。三条模式里这个上限
+    # 都成立：useful 的保留集是 skeleton 骨再减去同坐标躯干重复（香菱 321 ≤ 325），
+    # humanoid / full 没有分类，meta 把 role_skeleton 直接写成源骨总数（上限 = 全集）。
+    # 于是「超过」只有一个意思：分类里是 control/morph（本该被剔除）的骨，骨骼表却把
+    # 它写给了蒙皮 —— 两份产物说的是两件事。
+    if len(bones) > int(meta["role_skeleton"]):
+        raise SystemExit(f"骨骼表 {len(bones)} 行，meta 的 role_skeleton 只有 "
+                         f"{meta['role_skeleton']} 根：按元信息的分类，骨骼表里的骨比"
+                         "「该保留的骨架骨」还多，两份产物已经分叉，重跑 tools/run_model.py")
     if len(weights_rows) != vertex_count:
         raise SystemExit(f"权重表 {len(weights_rows)} 行，CFG 的 MMD2MAX_VERTS 是 {vertex_count}："
                          "权重按顶点序号写入，行数与顶点数不符就是整表错位（#13 那一类）")
+    # #121：定价「认模型」的顶点数取自权重表的行数，而导出侧在 meta 里另写了一份它自己
+    # 以为的顶点数（`len(positions)`）。两边不是同一处代码算的（OBJ、权重、表情各走一遍
+    # vert_remap），对不上就是导出层自己分叉 —— 那时「哪一具模型」这一维说的是一个
+    # 谁也没打算描述的顶点数。在启动 Max 之前中止，比让 Max 报一句「顶点数不符」再看日志。
+    if int(meta["vertex_count"]) != vertex_count:
+        raise SystemExit(f"meta 的 vertex_count 是 {meta['vertex_count']}，权重表实际 "
+                         f"{vertex_count} 行：定价「认模型」用的是后者，两份数分叉说明"
+                         "导出层自己没对上，重跑 tools/run_model.py")
     skin_expect = skin_expectation(bones, weights_rows)
     # 骨盒回读（M4c）的第二把尺：手部粗细表。路径同样取自 CFG，所以 Max 打开的那份
     # 和这边解析的是同一个文件。空串/文件不在 = 这一轮没有粗细表，Max 那边按同一条
@@ -516,11 +601,38 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
     # 附属骨方向回读（#66）的第二份输入：biped_map 说明哪些行被 Biped 节点接管。
     # 路径同样取自 CFG，所以 Max 建骨时用的那张映射表就是这边剔行用的那张。
     _, biped_map = parse_table(Path(cfg["MMD2MAX_MAP"]).read_text(encoding="utf-8"))
+    # 物理段的那几把尺（#122 三把、#125 第四把、#126 第五把）：尺来自**Max 要逐行读的那张表**，不是 meta 里那句 PMX 声明。
+    # CFG 的这一格是空串只有两种可能（`_ascii_inputs`）：这一轮没开 `--physics`，或导出的
+    # physics.tsv 根本不存在 —— 两种都让物理段整段不跑，Max 也就没有 physics_rb 读数，
+    # 规格行退成 `if_present`。给了路径而文件不在是第三种形状（CFG 与产物分叉），
+    # Max 那边会抛「无法打开数据文件」，所以这边同样中止，不许装出一段没人跑的 always 判据。
+    physics = None
+    if cfg["MMD2MAX_PHYSICS"]:
+        phys_path = Path(cfg["MMD2MAX_PHYSICS"])
+        if not phys_path.is_file():
+            raise SystemExit(f"CFG 说物理表在 {phys_path}，文件却不在：这一轮的物理段"
+                             "没有尺可装，重跑 tools/run_model.py")
+        physics = physics_expectation(parse_table(phys_path.read_text(encoding="utf-8"))[1],
+                                      src=str(phys_path))
+        # meta 那两行（PMX 声明的条数）与表里的行数各算各的：`len(model.rigid_bodies)`
+        # 对逐条写行的循环。对不上就是导出层自己分叉 —— 而 #121 之后这两行不再只是留痕，
+        # 它们说的是「同一件事的两份数」，所以这里有资格中止。
+        for key, got in (("rigid_count", physics.rigid_rows),
+                         ("joint_count", physics.joint_rows)):
+            if int(meta[key]) != got:
+                raise SystemExit(f"meta 的 {key} 是 {meta[key]}，{phys_path.name} 实际数出 "
+                                 f"{got} 行：PMX 侧的声明与落盘的表分叉，物理段的期望值是照着"
+                                 "后者装的，重跑 tools/run_model.py")
     chest_bone = _ruler(meta, base, "chest")
     neck_bone = _ruler(meta, base, "neck")
     try:
+        # 「哪一组配置」的六个值全取自 meta：这是跟着产物一起落盘的那一份，命令行说什么都一样。
+        config = export_config(scale=meta["scale"], min_weight=meta["min_weight"],
+                               bones=meta["kept_bones"], guides=meta["keep_guides"],
+                               sdef=meta["has_sdef"], qdef=meta["has_qdef"])
         rows = build_spec(
             model=stem,
+            config=config,
             vertex_count=vertex_count,
             limbs=limbs,
             skin_expect=skin_expect,
@@ -528,8 +640,10 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
             bones=bones,
             biped_map=biped_map,
             morph_count=int(meta["morph_count"]),
+            physics=physics,
             skin=cfg["MMD2MAX_SKIN"] == "true",
             foot_reach=cfg["MMD2MAX_FOOTREACH"] == "true",
+            toe_ground=cfg["MMD2MAX_TOE_GROUND"] == "true",
             rollback=cfg["MMD2MAX_ROLLBACK"] == "true",
             chest_bone=chest_bone,
             neck_bone=neck_bone,
@@ -539,17 +653,22 @@ def verdicts_text(base: Path, stem: str, cfg: dict) -> str:
         # 是为了让重跑导出的人看到「哪个目录 + 缺哪一列」，而不是 traceback 里孤零零一句
         # ValueError；中止本身两边一致：宁可这一轮不跑，也不装一套没有来历的判据。
         raise SystemExit(f"装配判据规格表失败（{base}）：{error}")
+    # 定价结论必须进日志：#106 那一轮 512 全绿的真正问题是「没人知道锁没参与」，
+    # 走 log() 而不是 print()（这台机的控制台是 GBK，消息里有 ⇒ 会抛穿整个驱动）。
+    log(pricing_note(vertex_count=vertex_count, morph_count=int(meta["morph_count"]),
+                     config=config, rows=rows))
     return spec_text(rows)
 
 
 def build_script(base: Path, stem: str, vertex_count: int,
                  skin: bool = True, suffix: str | None = None,
                  shot: bool = False, physics: bool = True,
-                 interactive: bool = False) -> str:
+                 interactive: bool = False, keep_open: bool = True) -> str:
     """生成 `mmd2max_run.ms`：只注入 CFG 路径，模板原样跟在后面。"""
     template = TEMPLATE.read_text(encoding="utf-8")
     cfg, cfg_path = build_cfg(base, stem, vertex_count, skin=skin, suffix=suffix,
-                              shot=shot, physics=physics, interactive=interactive)
+                              shot=shot, physics=physics, interactive=interactive,
+                              keep_open=keep_open)
     cfg_path.write_text(cfg_text(cfg), encoding="utf-8")
     # 指纹算的是**落盘字节**，不是内存里那份正文：`write_text` 在 Windows 上把 `\n`
     # 译成 `\r\n`，两者 sha256 不同，而事后拿 sha256sum/certutil 复核的人手里的就是盘上
@@ -622,6 +741,27 @@ def _capture_best_effort(needle: str) -> None:
 
 
 GRACEFUL_EXIT_SECONDS = 180
+# KEEPOPEN=true 时 Max 不会自己退出，所以「进程已退出」这一条再也不能用来收尾。
+# 万一装配卡在启动弹窗 / CFG 之前（既没 success.json 也没 error.txt），别白等满
+# 3600 秒：到这个时限就停轮询、保留现场，并把原因说清楚。真大型模型正常装配约 1~3 分钟。
+NO_MARKER_TIMEOUT = 900
+
+# .ms 在「保存 / 判据报告 / 视口截图全部落盘」之后打的一行哨兵（mmd2maxMain 收尾）。
+# KEEPOPEN=true 时上层靠它收尾：success.json 刻意排在截图之前（截图出错不该毁掉产物），
+# 只等标记就返回会撞上还在写 REPORT 的截图阶段。
+DONE_SENTINEL = "MMD2MAX_DONE"
+
+
+def max_should_stay_open(keep_open: bool, dialog_seen: bool) -> bool:
+    """这一轮要不要把 3ds Max 连同场景留在屏幕上（#137）。
+
+    keep_open 是用户要的默认行为；报错弹窗现场也一律保留（这条比开关更早存在）。
+    False 才走 #136 及以前那条「等 clean quitMax，超时兜底 taskkill /F」的路。
+    单独成函数是为了让「保留现场 ⇒ 绝不 wait_max_exit / taskkill」能被单测钉住：
+    脚本不退出而上层还在等 180 秒再强杀，正是这次要根除的形状。
+    """
+    return bool(keep_open or dialog_seen)
+
 
 # 每几轮轮询查一次启动弹窗：一次 UIA 查询要起一个 PowerShell 进程（约 1~2 秒），
 # 每 5 秒都查会把轮询本身拖慢。弹窗是模态的，晚 10 秒点掉没有区别。
@@ -814,13 +954,18 @@ def result_code(base: Path, name_part: str, dialog_seen: bool = False,
     return 5
 
 
-def verdict_gate(base: Path) -> int:
+def verdict_gate(base: Path, max_file: Path | None = None) -> int:
     """把本轮的规格表与报告表拼起来判一次，返回退出码。
 
     `0` 判据全过 / `7` 有 FAIL / `8` 两张表不可用（缺文件、列名分叉、报告比规格旧）。
     刻意不复用 result_code 的 3~6：那几个说的是「产物在不在」，这两个说的是
     「产物在，但没人判过」和「判了、没过」。混成同一个数，事后就分不出
     是 Max 没跑成还是跑成了但几何不对 —— 而这两种的下一步完全不同。
+
+    `max_file` 只为失败那一支多说一句。用户 2026-11-06 实跑 林尼 拿到退出码 7 +
+    「本轮验收不通过」，来问的第一句是「为啥又说我失败了」：那句话没回答他真正想知道的
+    —— 那个 .max 还能不能用、要不要重跑。7 号和 5 号（什么都没产出）在读感上一样像白跑，
+    而它们的下一步完全不同。
     """
     from check_verdicts import CHECK_NAME, check as join_verdicts
     code, lines = join_verdicts(base)
@@ -828,14 +973,22 @@ def verdict_gate(base: Path) -> int:
         log(line)
     if code == 0:
         log(f"判据通过，逐行状态见 {base / CHECK_NAME}")
+    elif max_file is not None and max_file.is_file():
+        log(f"注意：{max_file} 已落盘、可以打开 —— 没过的是上面那些判据，"
+            "不是这一轮白跑；重跑同一份输入不会变好，要改的是代码或参数。"
+            f"逐行状态见 {base / CHECK_NAME}")
     return code if code == 0 else (7 if code == 1 else 8)
 
 
 def main() -> int:
+    # 第一句之前先把输出编码定成 UTF-8：判据消息里有 `⇒`，不指定编码时这里的 stdout 跟
+    # 本地代码页（这台机 cp936，而 cp936 编不出 ⇒），冻结的 exe 更是默认就撞上。
+    # 读数进日志 —— 下一轮想知道这轮的公告按什么编码写的，不必拿 `?` 号去猜。
+    log(f"控制台 {console.adopt_utf8_console()}")
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if len(args) < 2:
         log('用法: python tools/obj_run.py <obj目录> <模型名> [--no-skin] [--physics] '
-            '[--shot] [--manual] [--gen-only]')
+            '[--shot] [--manual] [--gen-only] [--quit]')
         return 2
     if len(args) > 2:
         # v2 的第三个位置参数是装配模式（bone / biped）；v3 只剩 Biped + 附属骨。
@@ -861,15 +1014,29 @@ def main() -> int:
     # --gen-only：只生成装配脚本并写出，绝不启动/轮询/杀 Max。用于「用户自己手动
     # 在 Max 里 File▸Run Script」的工作流——助手只交付脚本路径，不做任何进程操作。
     gen_only = "--gen-only" in sys.argv
+    # #137：装配完默认把 3ds Max 连同装好的场景留在屏幕上，用户可以直接转视角检查
+    # 蒙皮/骨盒。--quit 是回滚位（回到 #136 及以前的「跑完自己 quitMax 干净退出」）。
+    # 它和交互位是两件事：交互位一开就会弹 queryBox / messageBox，自动跑点不掉会挂死，
+    # 所以「留在屏幕上」绝不能靠打开 INTERACTIVE 来实现。
+    keep_open = "--quit" not in sys.argv
     # 交互位：这一轮**有人坐在屏幕前**，所以脚本可以问、也绝不自己退出。
     # 上面两个 flag 都算：--manual 是「跑完给人看现场」，--gen-only 更硬 —— 脚本要
     # 在用户自己那个 Max 里跑，而 mmd2maxPrepareScene 的第一刀就是 `resetMaxFile #noPrompt`，
     # 非交互写法会把他没存的场景清干净且一声不吭。自动跑（两个 flag 都没有）必须保持
     # false：点弹窗的是 UIA 那几条白名单名字，任何额外模态框都会把 -U MAXScript 挡死。
     interactive = manual or gen_only
-    log(f"skin={skin} physics={physics} shot={shot} manual={manual} gen_only={gen_only}")
+    log(f"skin={skin} physics={physics} shot={shot} manual={manual} "
+        f"gen_only={gen_only} keep_open={keep_open}")
 
     weights = base / f"{stem}_weights.tsv"
+    # 缺这张表只有一种形状：这一行在**导出之前**被调用（GUI 直接按 ②/③，或换了个空目录）。
+    # 原来这里是裸 `open()` ⇒ 使用者看到的是一句 Python traceback + `FileNotFoundError`，
+    # 分不清「工具坏了」还是「自己少跑一步」（2026-11-06 用户实跑 林尼 就撞在这上面）。
+    # read_meta 那条同样的边界早就有话说，这里补齐。
+    if not weights.is_file():
+        raise SystemExit(f"缺少权重表：{weights}\n"
+                         "装配的每一项数值都来自导出结果，请先跑导出"
+                         "（tools/run_model.py，或 GUI 的 ①）。")
     # 文件第 1 行是表头（vertex_index / bone_weight_pairs），不是顶点，注释行也不算：
     # MMD2MAX_VERTS 必须等于权重**数据**行数，Max 端拿它核对网格顶点数（差 1 就整轮中止）。
     with weights.open(encoding="utf-8") as stream:
@@ -879,7 +1046,7 @@ def main() -> int:
 
     script_text = build_script(base, stem, vertex_count,
                                skin=skin, suffix=suffix, shot=shot, physics=physics,
-                               interactive=interactive)
+                               interactive=interactive, keep_open=keep_open)
     name_part = stem if suffix is None else f"{stem}_{suffix}"
     # 用固定 ASCII 文件名：中文 .ms 路径经 -U MAXScript 启动时容易被按
     # 本地代码页(GBK)误解析，导致 "auto-load script error / line 1" 失败。
@@ -910,8 +1077,8 @@ def main() -> int:
         log(f"已生成脚本（gen-only，不启动 Max）：{out_script}")
         log("请在 3ds Max 菜单 File ▸ Run Script 载入该脚本，或在 MAXScript 监听器执行：")
         log(f'  fileIn @"{out_script}"')
-        log("这一份按交互模式装好（MMD2MAX_INTERACTIVE=true）：场景里有东西会先问你要不要重置，"
-            "跑完也不会自己退出 Max。")
+        log("这一份按交互模式装好（MMD2MAX_INTERACTIVE=true）：场景里有东西会先问你要不要重置；"
+            "MMD2MAX_KEEPOPEN=true，跑完保留 Max 现场（--quit 才自己退出）。")
         return 0
 
     max_exe = find_max_exe()
@@ -938,7 +1105,8 @@ def main() -> int:
         log(f"Max 现已独立运行，脚本保留于：{out_script}")
         log("请手动在 Max 中查看 / 截图 / 调试；如需重跑脚本，可在 MAXScript 监听器执行：")
         log(f'  fileIn @"{out_script}"')
-        log("交互模式（MMD2MAX_INTERACTIVE=true）：跑完不会自己 quitMax，Max 带着场景留着给你看。")
+        log("交互模式（MMD2MAX_INTERACTIVE=true / MMD2MAX_KEEPOPEN=true）：跑完不会自己 "
+            "quitMax，Max 带着场景留着给你看。")
         return 0
 
     marker = base / f"{name_part}.success.json"
@@ -980,10 +1148,12 @@ def main() -> int:
     capture_dir.mkdir(parents=True, exist_ok=True)
 
     deadline = time.time() + 3600
+    stall_deadline = time.time() + NO_MARKER_TIMEOUT
     last_size = -1
     dialog_seen = False
     dialog_path = None
     marker_seen_at = None
+    done_seen = False
     ticks = 0
     try:
         while time.time() < deadline:
@@ -1006,18 +1176,35 @@ def main() -> int:
             size = logfile.stat().st_size if logfile.is_file() else -1
             if size != last_size:
                 last_size = size
-                for line in logfile.read_text(encoding="utf-8",
-                                              errors="replace").splitlines()[-6:]:
+                log_text = logfile.read_text(encoding="utf-8", errors="replace")
+                for line in log_text.splitlines()[-6:]:
                     log(f"  | {line}")
+                # #137：KEEPOPEN=true 时 Max 不会退出，proc.poll() 再也不能当收尾信号。
+                # success.json 又刻意排在截图之前，所以只有这条「保存/报告/截图全落盘」的
+                # 哨兵能说明这一轮可以收尾了；提前 break 会撞上还在写 REPORT 的截图阶段。
+                if DONE_SENTINEL in log_text:
+                    done_seen = True
             if marker.is_file():
                 if marker_seen_at is None:
                     marker_seen_at = time.time()
-                    log("成功标记已出现（.max 已落盘），继续等视口截图抓完、Max 自行退出")
-                if proc.poll() is not None:
+                    if keep_open:
+                        log("成功标记已出现（.max 已落盘），继续等截图/报告收尾 "
+                            "MMD2MAX_DONE，之后保留 Max 现场")
+                    else:
+                        log("成功标记已出现（.max 已落盘），继续等视口截图抓完、Max 自行退出")
+                if keep_open:
+                    if done_seen:
+                        log("装配收尾完成：3ds Max 保留现场，可直接查看装好的场景")
+                        break
+                    # 本轮不该退出；真退了就是异常，别再死等哨兵。
+                    if proc.poll() is not None:
+                        log("3ds Max 提前退出（KEEPOPEN=true 下不该发生）；进入收尾判产物")
+                        break
+                elif proc.poll() is not None:
                     log("3ds Max 已正常退出（崩溃计数未被污染）")
                     break
                 if time.time() - marker_seen_at > GRACEFUL_EXIT_SECONDS:
-                    log(f"标记出现后 {GRACEFUL_EXIT_SECONDS}s 仍未退出，进入收尾")
+                    log(f"标记出现后 {GRACEFUL_EXIT_SECONDS}s 仍未收尾，进入收尾")
                     break
             else:
                 note = failure_note(error_file, cfg_error)
@@ -1029,19 +1216,35 @@ def main() -> int:
                 if proc.poll() is not None:
                     log("3ds Max 已退出，但本轮没有成功标记也没有 error.txt")
                     break
+                # KEEPOPEN=true 下 Max 本来就不退，既没产物也没报错时不能等进程退出，
+                # 限定一个比绝对 deadline 短得多的窗口，到点停轮询但保留现场给人工排查。
+                if keep_open and time.time() > stall_deadline:
+                    log(f"{NO_MARKER_TIMEOUT}s 内没有成功标记也没有 error.txt：停止轮询，"
+                        "Max 现场保留供排查（多半卡在启动弹窗或 CFG 之前）")
+                    break
             time.sleep(5)
         if dialog_seen and not marker.is_file():
             log(f"警告：装配过程中出现 MAXScript 报错对话框，截图：{dialog_path}")
     finally:
-        try:
-            out_script.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
+        stay = max_should_stay_open(keep_open, dialog_seen)
+        if keep_open and not dialog_seen:
+            # 现场留在 Max 里，脚本也留着：用户改完参数可以直接在 MAXScript 监听器重跑。
+            log(f"装配脚本保留于 {out_script}（现场在 Max 里，可直接 fileIn 重跑）")
+        else:
+            try:
+                out_script.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
         if dialog_seen:
             # 保留 Max 与报错弹窗现场：不杀进程，方便人工查看/截图
             log(f"Max 现场保留未杀：报错弹窗截图见 {dialog_path}（如需结束请手动关闭 3ds Max）。")
+        elif stay:
+            # #137 的核心：脚本不 quitMax，上层就不能再等 180 秒再 taskkill /F ——
+            # 那一下正好把用户要看的场景强杀掉，还污染 Max 的干净关闭计数。
+            log("3ds Max 保留现场（MMD2MAX_KEEPOPEN=true）：本轮未等待退出、未 taskkill /F，"
+                "请直接在 Max 里查看装好的场景；再次装配同一目录前建议先关闭该窗口。")
         else:
-            # 装配脚本末尾会自己 quitMax() 正常退出，这里只等它。
+            # --quit 回滚位：装配脚本末尾会自己 quitMax() 正常退出，这里只等它。
             # 以前是无条件 `taskkill /F`，强杀被 Max 记成「上次会话异常终止」，
             # 计数一路累积（实测 HKCU\Software\Autodesk\3dsMax\24.0\MiniDump\
             # 24.3.0.3404：SessionStartCount=167 / SessionCleanCloseCount=50），
@@ -1066,7 +1269,7 @@ def main() -> int:
     # 产物齐不等于这轮成了。v3 交付过「.max 在、日志全绿、判据没人读过」的轮次
     # （#24 的 100 通道假成功）；现在把 M2b 的规格表和 M2c 的报告表拼起来判一次，
     # 任何 FAIL 或缺覆盖都换成非 0 退出码，GUI 就报不出「完成」。
-    return verdict_gate(base)
+    return verdict_gate(base, base / f"{name_part}.max")
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "tools"))
 
+from mmd2max import console  # noqa: E402
 from mmd2max import passes  # noqa: E402
 from mmd2max.passes import PASS_PHASE  # noqa: E402
 # 名单只从 verdicts 一处取（`from ... import` 会漏掉新加的判定，第 36 轮就是这么栽的）。
@@ -57,6 +58,10 @@ PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
 # 状态行的顺序也是报告的阅读顺序：先看挂掉的，再看没量到的，最后才看通过的。
 ORDER = {FAIL: 0, SKIP: 1, PASS: 2}
+
+# `when=if_present` 的行没读数就是这一句话，39 行一模一样 ⇒ 日志里折成一行（见 check()）。
+# 写成常量而不是两处各抄一遍：折叠那一支靠**逐字相等**认出它，抄错一个字就折不上了。
+NO_STEP_NOTE = "本轮没有这一步（when=if_present）"
 
 
 def is_bool_text(text: str) -> bool:
@@ -230,7 +235,7 @@ def check(base: Path, *, spec_path: Path | None = None,
             if row["when"] == "always":
                 status, note = FAIL, f"必须出现的读数没有报（expected {row['expected'] or '—'}）"
             else:
-                status, note = SKIP, "本轮没有这一步（when=if_present）"
+                status, note = SKIP, NO_STEP_NOTE
         else:
             actual, times = hit
             status, note = grade(row, actual)
@@ -272,11 +277,26 @@ def check(base: Path, *, spec_path: Path | None = None,
                         "规格表里没有 pass/ran 行：这一轮的合同早于 M3，时间轴审计不参与"))
 
     results.sort(key=lambda r: (ORDER[r[0]], r[1], r[2], r[3]))
+    no_step: dict[str, int] = {}
     for status, phase, check_name, subject, expected, tol, kind, actual, note in results:
         if status == PASS:
             continue  # 通过的行不刷屏；全量落在 CHECK 文件里
+        if status == SKIP and note == NO_STEP_NOTE:
+            no_step[phase] = no_step.get(phase, 0) + 1
+            continue  # 同一句话的 39 行折成一行，见下面那句注释
         lines.append(f"  [{status}] {phase}/{check_name} {subject} "
                      f"({kind}) 期望={expected or '—'} 实报={actual or '—'} —— {note}")
+    if no_step:
+        # **折叠，不是删除**：这一族以前逐行打，2026-11-06 用户实跑 林尼 那一轮里
+        # 39 行「本轮没有这一步」把唯一的 1 行 FAIL 埋在山底下 —— 他问「为啥又说我失败了」，
+        # 有一半是在那座山里没找到那一条。按**段**给数，而不是按行、也不是干脆不打：
+        # 他那轮折出来是「pass 3、physics_rb 17、rollback 19」，一眼能判「物理和回滚
+        # 这一轮没开」是不是预期 —— 折成一长串行名等于把山搬进一行，只给总数就把
+        # 「哪一段没量」这个唯一有用的信息丢了。
+        # 汇总那句「未跑 39」照旧、CHECK 文件逐行全量照旧 ⇒ 「不逐条刷」不等于「没判」。
+        detail = "、".join(f"{p} {n}" for p, n in sorted(no_step.items()))
+        total = sum(no_step.values())
+        lines.append(f"  [SKIP] {total} 行本轮没有量（when=if_present）：{detail}")
 
     # 参与「硬失败」计数的判定种类。写成一个列表而不是把名字嵌进那句话里：#70 加 `max`
     # 时那句话还写着 gate/lock/min，读数已经按新种类在算了，账面上却看不见 —— 名单与
@@ -333,6 +353,11 @@ def write_check_file(path: Path, results: list[tuple[str, ...]]) -> None:
 
 
 def main() -> int:
+    # 必须先定编码再打结论：这一族消息里唯一带 `⇒` 的那句是「⇒ 本轮验收不通过」，
+    # 而不给编码时 stdout 跟本地代码页（这台机 cp936，编不出 ⇒）。实测那种条件下
+    # 前面每一行都打完了，偏偏在这一行 UnicodeEncodeError —— 轮子挂了，工具在说出
+    # 「这一轮挂了」之前自己先死了。详见 mmd2max/console.py 文件头。
+    console.adopt_utf8_console()
     ap = argparse.ArgumentParser(
         description="把 MMD2MAX.VERDICTS 与 MMD2MAX.REPORT 拼起来判（M2c）")
     ap.add_argument("base", help="导出目录（两张表都在里面）")

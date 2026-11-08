@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import io
 import os
 import queue
@@ -25,13 +26,11 @@ from tkinter import filedialog, messagebox, ttk
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from mmd2max import export_obj                      # noqa: E402
+from mmd2max import app_paths, export_obj           # noqa: E402
 from mmd2max.coords import convert_vec              # noqa: E402
 from mmd2max.pmx import PMXError, load_pmx          # noqa: E402
 
 DEBOUNCE_MS = 200
-TOOLS = Path(__file__).resolve().parent
-OBJ_RUN = TOOLS / "obj_run.py"
 MODES = ("useful", "full", "humanoid")
 MODE_HINT = {
     "useful": "剔除 IK / 物理哑骨 / 表情骨，衣服头发裙摆作附属骨保留（推荐）",
@@ -145,8 +144,24 @@ def build_preview(plan, mesh_limit: int = 1500) -> dict:
             "body_depth": (max(ys) - min(ys)) if verts else 0.0}
 
 
+def _dpi_aware_before_first_window() -> None:
+    """建第一个窗口之前声明 DPI 感知（重复声明会失败，忽略即可）。
+
+    交付的 exe 由 PyInstaller 的 manifest 已经是 per-monitor aware；源码跑的 python.exe
+    默认 unaware，在 125%/150% 的机器上整张界面被系统位图拉伸 —— 字发虚，而且**测试量到的
+    窗口尺寸和交付件量到的不是同一个**（第 83 轮实测：源码 1509x999 / exe 1305x890）。
+    """
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:  # noqa: BLE001
+        with contextlib.suppress(Exception):
+            ctypes.windll.user32.SetProcessDPIAware()
+
+
 class App(tk.Tk):
     def __init__(self, pmx_path: Path | None = None):
+        if sys.platform == "win32":
+            _dpi_aware_before_first_window()
         super().__init__()
         self.title("mmd2max · PMX -> 3ds Max 装配台")
         self.geometry("1180x760")
@@ -373,7 +388,7 @@ class App(tk.Tk):
             code = 1
             try:
                 with subprocess.Popen(
-                        [str(a) for a in argv], cwd=str(ROOT),
+                        [str(a) for a in argv], cwd=str(app_paths.app_dir()),
                         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, encoding="utf-8", errors="replace",
@@ -423,35 +438,48 @@ class App(tk.Tk):
         self._start_job(f"导出 {source.name} → {outdir}", work,
                         lambda code: f"已导出到 {outdir}")
 
+    def _require_export(self, source: Path, outdir: Path) -> bool:
+        """② 与 ③ 共用的前置闸：导出产物在不在。
+
+        两个动作都要读 `<名>_weights.tsv`（顶点数是脚本的第一行配置），而按 ② 之前
+        目录里什么都没有是常态 —— 以前只有 ③ 拦了，② 直接把子进程的 Python traceback
+        甩给用户看（2026-11-06 实跑 林尼 撞中）。
+        """
+        weights = outdir / f"{source.stem}_weights.tsv"
+        if weights.is_file():
+            return True
+        self.status_var.set(f"还没有导出产物：缺 {weights.name}，先按 ①")
+        return False
+
     def _gen_ms(self) -> None:
         checked = self._checked()
         if checked is None:
             return
         source, outdir, _params = checked
+        if not self._require_export(source, outdir):
+            return
         script = outdir / "mmd2max_run.ms"
-        argv = [sys.executable, OBJ_RUN, outdir, source.stem, "--gen-only"]
+        argv = app_paths.obj_run_command(outdir, source.stem, "--gen-only")
         self._run_script(argv, f"生成装配脚本 → {script}",
                          lambda code: (f"脚本已生成：{script}" if code == 0
                                        else "MAXScript 体检没过，见「输出」页"))
 
     def _max_argv(self, outdir: Path, source: Path) -> list:
-        argv = [sys.executable, OBJ_RUN, outdir, source.stem]
+        flags = []
         if self.noskin_var.get():
-            argv.append("--no-skin")
+            flags.append("--no-skin")
         if self.physics_var.get():
-            argv.append("--physics")
+            flags.append("--physics")
         if self.shot_var.get():
-            argv.append("--shot")
-        return argv
+            flags.append("--shot")
+        return app_paths.obj_run_command(outdir, source.stem, *flags)
 
     def _run_max(self) -> None:
         checked = self._checked()
         if checked is None:
             return
         source, outdir, _params = checked
-        weights = outdir / f"{source.stem}_weights.tsv"
-        if not weights.is_file():
-            self.status_var.set(f"还没有导出产物：缺 {weights.name}，先按 ①")
+        if not self._require_export(source, outdir):
             return
         from obj_run import MAX_EXE_HINT, find_max_exe   # 借同一套发现逻辑
         max_exe = find_max_exe()
@@ -467,8 +495,9 @@ class App(tk.Tk):
                 "这一步有两件事会波及你在 Max 里的其它工作，先说清楚：\n"
                 "  1) 装配脚本开头执行 resetMaxFile #noPrompt —— 当前 Max 场景直接"
                 "清空，未保存的内容不会弹提示；\n"
-                "  2) 结束后脚本自己 quitMax 正常退出（只有超时没退才兜底 taskkill /F "
-                "强杀）；期间请不要另外开 3ds Max 场景。\n\n"
+                "  2) 装配结束后 3ds Max 会带着装好的场景留在屏幕上，不会自己退出、"
+                "也不会被兜底 taskkill /F 强杀（要恢复旧的自动退出，命令行加 --quit）；"
+                "再次装配前建议先关闭这个窗口。\n\n"
                 f"启动的可执行文件：{max_exe}\n"
                 "期间请不要动鼠标键盘（脚本要自己处理启动弹窗、抓截图）。\n"
                 "整个过程可能持续几分钟到几十分钟。",
@@ -530,7 +559,7 @@ class App(tk.Tk):
 
     def _job_outdir(self, source: Path) -> Path:
         raw = self.outdir_var.get().strip()
-        return Path(raw) if raw else ROOT / "test_runs" / source.stem
+        return Path(raw) if raw else app_paths.test_runs_dir() / source.stem
 
     # -------------------------------------------------------------- 预览绘制
     def _schedule_redraw(self):
@@ -741,7 +770,7 @@ class App(tk.Tk):
             stem = Path(path).stem
             if not self.outdir_var.get():
                 # 与 tools/run_model.py 同一个落点，产物不必分两棵树
-                self.outdir_var.set(str(ROOT / "test_runs" / stem))
+                self.outdir_var.set(str(app_paths.test_runs_dir() / stem))
             self._kick()
 
     def _browse_dir(self):

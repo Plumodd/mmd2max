@@ -35,6 +35,7 @@
 """
 from __future__ import annotations
 
+import math
 import shutil
 import sys
 from concurrent.futures import ProcessPoolExecutor
@@ -57,8 +58,10 @@ def fmt(value: float) -> str:
 
 # 脚尖改绑（#35）。源 PMX 常把整只鞋（含脚尖）绑在足首上、給 つま先 留 0 个顶点
 # （香菱实测：左/右つま先 权重合计=0.0、顶点数=0），于是 Max 里 Toe0 扳不动脚尖。
-# 这里按「足首→つま先 轴、过 つま先 pivot 的平面」把足首权重的一部分划给 Toe0。
-# 回滚 = 把 TOE_SPLIT 改成 False，一行，改完与源文件权重逐字节相同。
+# 这里按「足首→つま先 的**水平**轴、过 つま先 pivot 的**竖直**平面」把足首权重的
+# 一部分划给 Toe0：竖直平面才把脚尖整个厚度（鞋底到鞋面）一起划走，斜轴平面只会
+# 改绑贴地那一层（#140）。回滚 = 把 TOE_SPLIT 改成 False，一行，改完与源文件权重
+# 逐字节相同；只回滚平面口径 = TOE_SPLIT_VERTICAL_PLANE 改 False。
 TOE_SPLIT = True
 # 过渡带半宽 = 「足首→つま先」骨长的这个比例（分界 0.5/0.5 正好落在 つま先 pivot 平面上，
 # 向前 band 全给 Toe0、向后 band 全留给足首）。0 会除零，所以关掉走上面的开关、不走这里。
@@ -68,6 +71,129 @@ TOE_SPLIT = True
 TOE_SPLIT_BAND = 0.2
 # 可信门：足轴短于小腿（膝→踝）的这个比例就不认为它指得出脚尖方向，直接跳过。同样是比例。
 TOE_SPLIT_MIN_RATIO = 0.05
+# 分界平面必须是**竖直**的（#140）。旧代码拿「踝→趾」的三维斜轴当平面法线，林尼
+# #139 把关节挪到鞋长 58.6% 后这根轴的单位向量变成 (-0.004, -0.579, -0.815) ——
+# 竖直分量比水平分量还大。于是鞋面越高，(p - pivot)·法线 里的 -0.815×Δz 抵消得越狠：
+# 实测脚掌平面前方 1964 个顶点里，z≥3cm 的 1006 个「脚尖上半个体积」一个都没划给
+# Toe0，只有 z≤2.62cm 那 157 个贴地鞋底顶点归它。扳 Toe0 时只有薄薄一层鞋底跟着动，
+# 用户原话「脚尖的体积结构并没有体现出来，就像只有脚底那一层鞋底有结构」。
+# 改成「过趾关节、法线只取水平分量」的竖直平面，脚尖整个厚度一起走。
+# 设 False 即逐字回滚到旧的斜轴平面。
+TOE_SPLIT_VERTICAL_PLANE = True
+
+# 脚掌前/后分界（#139）。PMX 的 `つま先` 骨位置**不是**跨模型常量：香菱放在脚长
+# 约 40% 处（正好是 Biped 的 ball 关节），林尼却几乎贴着鞋尖（实测脚长 88.8% 处）。
+# 旧代码把 つま先 head 直接当 Toe0 pivot，于是林尼的 Foot 一根骨吃掉整只鞋、
+# Toe0 只剩鞋尖 2.23cm（用户红框：分界 83.3%，要的是蓝框 58.6%）。
+# 现在改为从**网格**量鞋跟→鞋尖沿脚轴的跨度，把 Toe0 关节放在这个跨度的固定比例处；
+# 这一个点同时是 limbs 的 child 坐标 / desired_len / toe_len 与权重分界平面的真值源。
+# 比例来自用户 #139 蓝框实测（58.6%），与模型无关；设 None 即回滚到「照抄 PMX つま先」。
+TOE_JOINT_FRAC = 0.586
+# 鞋的轴向窗口：贴地带 + 横向窄带，避免把小腿/裙摆当成鞋跟。
+TOE_JOINT_Z_LO = -3.0
+TOE_JOINT_Z_HI = 4.0
+TOE_JOINT_X_HALF = 6.0
+TOE_JOINT_T_PAD = 6.0   # 相对「踝→つま先」水平距离再允许多少厘米给鞋跟外扩
+# 鞋面窗口上沿（#140）。`_foot_profile` 旧代码写死 `z_cap = 脚掌z + 4.0`，那是照着
+# 「趾关节贴在鞋尖、那一截只剩鞋底」调的。#139 把关节挪回鞋长 58.6% 之后，林尼
+# 在这一截的鞋面高到 7.0cm，窗口却仍把 z>4.08 的顶点全丢掉 ⇒ toe_h 恒等于 4.095，
+# Toe0 骨盒侧视 8.16×4.10 ≈ 2:1 的扁片，正是用户截图里那块「只有鞋底有结构」的框。
+# 改成按踝高压顶：鞋面最高不会超过踝，取 脚掌z + 比例×(踝z - 脚掌z)；同时保留
+# 旧的 +4cm 下限，赤足/薄鞋模型逐字不变。设 0 即回滚到写死 +4cm。
+TOE_CAP_ANKLE_FRAC = 0.8
+
+
+def _structural_toe_ball(positions, scale, ankle, ball):
+    """从网格量鞋跟/鞋尖，返回「结构正确」的 (Toe0 关节位置, 新趾长)。
+
+    沿 踝→つま先 的水平单位轴 (ux,uy) 投影所有鞋部顶点，取投影极值 lo(鞋跟)/hi(鞋尖)，
+    关节 = lo + TOE_JOINT_FRAC*(hi-lo)；新趾长 = hi - 关节投影，即「前部」那一截的长度。
+    z 保持 つま先 的贴地高度（脚掌关节不升高），所以只动水平位置，不破坏贴地/落地判据。
+    量不出鞋（窗口空 / 跨度太短 / 轴退化）返回 None，调用方必须退回 PMX 原位 —— 宁可
+    保持旧行为，也不要按猜出来的点摆关节。
+
+    为什么必须同时返回趾长：`limbs.tsv` 的 child_x/y/z（Toe0 pivot）、desired_len
+    （Foot→Toe0 段长）、toe_len（Toe0 骨盒长）三者和权重分界平面是**同一个点**的四种
+    读法。只改其中一两个 = 骨盒戳出鞋尖或 Foot/Toe0 之间裂开缝（#37/#40 的老坑）。
+    """
+    if TOE_JOINT_FRAC is None or not positions:
+        return None
+    ax, ay, _az = ankle
+    bx, by, bz = ball
+    dx, dy = bx - ax, by - ay
+    horiz = (dx * dx + dy * dy) ** 0.5
+    if horiz < 1e-5:
+        return None
+    ux, uy = dx / horiz, dy / horiz
+    lo = hi = None
+    for p in positions:
+        x, y, z = convert_vec(p, scale)
+        if not (bz + TOE_JOINT_Z_LO <= z <= bz + TOE_JOINT_Z_HI):
+            continue
+        if abs(x - bx) > TOE_JOINT_X_HALF:
+            continue
+        t = (x - bx) * ux + (y - by) * uy
+        if t < -(horiz + TOE_JOINT_T_PAD) or t > horiz + TOE_JOINT_T_PAD:
+            continue
+        if lo is None:
+            lo = hi = t
+        else:
+            lo = min(lo, t)
+            hi = max(hi, t)
+    if lo is None or (hi - lo) < 1.0:
+        return None
+    tj = lo + TOE_JOINT_FRAC * (hi - lo)
+    toe_len = hi - tj
+    # 分界点必须真的落在 踝→つま先 之间且离鞋尖还有一截，否则这个模型不是「正常脚掌」。
+    if toe_len < 0.5 or tj > 0.0:
+        return None
+    return ((bx + ux * tj, by + uy * tj, bz), toe_len)
+
+
+def _relocate_toe_joints(heads, tails, biped_mapping, old_to_new,
+                         positions, scale):
+    """把 Toe0 骨从 PMX 的 `つま先` 位置挪到「鞋长 TOE_JOINT_FRAC」的结构分界点。
+
+    为什么改 heads 而不是改 limbs.tsv 的 child 列：`bones.tsv`（Max 摆位）、
+    `limbs.tsv` 的 child_x/y/z 与 desired_len、`_foot_profile` 的 ball 平面、
+    `_split_toe_weights` 的权重分界平面、判据侧的全部期望值，都读**同一份 heads**。
+    改一处，骨架与权重一起走，且判据不会和产物分叉；只在表里改 child 列则
+    bones.tsv 的 head 仍停在鞋尖，摆位和权重分界立刻分成两套真值（#37/#40 的坑）。
+
+    tail 按同一个 delta 平移，保持 PMX 的竖直 stub 方向不变 —— 结构向判据量的是
+    tail-head，单独挪 head 会把这根骨读成斜的。
+    """
+    notes: list[str] = []
+    if TOE_JOINT_FRAC is None or not positions or not biped_mapping:
+        return notes
+    target_to_new: dict = {}
+    for old, target in biped_mapping.items():
+        if target and old in old_to_new:
+            target_to_new.setdefault(target, old_to_new[old])
+    for side in ("L", "R"):
+        toe = f"Bip001 {side} Toe0"
+        foot = f"Bip001 {side} Foot"
+        ti = target_to_new.get(toe)
+        fi = target_to_new.get(foot)
+        if ti is None or fi is None:
+            continue
+        if not (0 <= ti < len(heads) and 0 <= fi < len(heads)):
+            continue
+        ankle, ball = heads[fi], heads[ti]
+        got = _structural_toe_ball(positions, scale, ankle, ball)
+        if got is None:
+            notes.append(f"  脚掌分界跳过 {toe}：网格量不出鞋跟/鞋尖，保持 PMX つま先 原位")
+            continue
+        new_ball, new_toe_len = got
+        delta = tuple(new_ball[k] - ball[k] for k in range(3))
+        heads[ti] = new_ball
+        if 0 <= ti < len(tails):
+            tails[ti] = tuple(tails[ti][k] + delta[k] for k in range(3))
+        notes.append(
+            f"  脚掌分界 {toe}：Toe0 沿脚轴向鞋跟侧挪 {-delta[1]:.2f}cm "
+            f"到鞋长 {TOE_JOINT_FRAC:.1%} 处，前段趾长 {new_toe_len:.2f}cm"
+            "（骨架与权重分界同一真值源）")
+    return notes
 
 
 def _split_toe_weights(deform, positions, scale, heads, parents,
@@ -99,6 +225,7 @@ def _split_toe_weights(deform, positions, scale, heads, parents,
         toe_head = heads[new_index]
         axis = [toe_head[i] - heads[foot_index][i] for i in range(3)]
         span = sum(v * v for v in axis) ** 0.5
+        horiz = (axis[0] ** 2 + axis[1] ** 2) ** 0.5
         knee_index = parents[foot_index] if 0 <= foot_index < len(parents) else -1
         shin = 0.0
         if 0 <= knee_index < len(heads):
@@ -122,8 +249,18 @@ def _split_toe_weights(deform, positions, scale, heads, parents,
             notes.append(f"  脚尖改绑跳过 {target}：源文件已给它 {pre_toe} 个顶点"
                          f"（{foot_target} {pre_foot} 个），不改作者权重")
             continue
-        band_abs = band * span
-        axis = [v / span for v in axis]
+        # 竖直分界平面（#140）：法线丢掉 z 分量，鞋面上下的顶点在「往前多远」上
+        # 一视同仁。斜轴平面会让高处的鞋面顶点被 -Δz 项抵消，只改绑贴地那层鞋底。
+        # band 也跟着换成水平足长的比例 —— along 现在是水平距离，量纲要一致。
+        if TOE_SPLIT_VERTICAL_PLANE:
+            if horiz < 1e-5:
+                notes.append(f"  脚尖改绑跳过 {target}：足轴水平投影退化，竖直分界平面立不起来")
+                continue
+            band_abs = band * horiz
+            axis = [axis[0] / horiz, axis[1] / horiz, 0.0]
+        else:
+            band_abs = band * span
+            axis = [v / span for v in axis]
         moved = 0
         partial = 0
         for vi, weights in enumerate(deform):
@@ -409,6 +546,25 @@ def _useful_skeleton(model, scale: float, roles: dict,
     kept = [i for i, _b in enumerate(model.bones)
             if roles.get(i) == "skeleton" and (not dropped or i not in dropped)]
     return _build_skeleton_from_kept(model, scale, kept, biped_mapping)
+
+
+def _redirect_bone_pairs(deform, redirect: dict):
+    """按 `{旧骨序号: 新骨序号}` 改写权重里的骨序号，并把落到同一根骨的分量相加。
+
+    用在「并行变形骨（D 骨）改绑」上：改的是**原始 PMX 骨序号空间**，所以必须排在
+    `_remap_humanoid` 之前；否则 D 链一删，权重会沿父链归并到躯干骨上，再也追不回
+    它本来该落在哪根腿骨。
+    """
+    if not redirect:
+        return deform
+    out = []
+    for weights in deform:
+        merged: dict = {}
+        for bone_index, weight in weights:
+            target = redirect.get(bone_index, bone_index)
+            merged[target] = merged.get(target, 0.0) + weight
+        out.append(list(merged.items()))
+    return out
 
 
 def _remap_humanoid(deform, positions, model, kept_set, old_to_new, new_heads,
@@ -996,15 +1152,56 @@ def _bone_radius(positions, scale: float, ph, ch):
     return samples[int(len(samples) * 0.3)]
 
 
+def _palm_span(positions, scale: float, deform, hand_index: int,
+               heads: list, target_to_new: dict, side: str):
+    """沿「腕 → 五指根重心」轴量手掌网格的真实跨度（导出厘米）。
+
+    Biped 的 Hand 链接默认是按身高给的桨形盒：林尼实测最终场景里长轴盒跨度
+    10.24cm，而手掌网格沿掌轴只占 6.5cm —— 只缩横截面（旧行为）会把「手掌骨盒
+    比手掌大一圈」原样留下。这里拿**手掌骨自己占主导权重的顶点**在掌轴上的投影
+    取 5%~95% 分位，量的是网格而不是骨头，所以能直接和用户截图里的蓝圈对照。
+
+    量不到（手掌没有顶点 / 缺指根骨）时退回「腕 → 五指根重心」的骨几何距离：
+    那仍是有来历的数，不是猜的常量；但样本不足 30 个顶点时绝不拿分位数凑。
+    """
+    if hand_index is None or not positions:
+        return None
+    wrist = heads[hand_index]
+    roots = [target_to_new.get(f"Bip001 {side} Finger{i}") for i in range(5)]
+    if any(r is None for r in roots):
+        return None
+    centroid = tuple(sum(heads[r][k] for r in roots) / len(roots) for k in range(3))
+    axis = [centroid[k] - wrist[k] for k in range(3)]
+    span = math.sqrt(sum(v * v for v in axis))
+    if span < 1e-6:
+        return None
+    axis = [v / span for v in axis]
+    projections = []
+    if deform is not None:
+        for vi, weights in enumerate(deform):
+            if not any(b == hand_index and w >= 0.5 for b, w in weights):
+                continue
+            v = convert_vec(positions[vi], scale)
+            projections.append(sum((v[k] - wrist[k]) * axis[k] for k in range(3)))
+    if len(projections) < 30:
+        return span
+    projections.sort()
+    lo = projections[int(len(projections) * 0.05)]
+    hi = projections[int(len(projections) * 0.95)]
+    return max(0.5, hi - lo)
+
+
 def _width_rows(scale: float, old_to_new: dict, heads: list, tails: list,
-                biped_mapping: dict | None, positions=None):
+                biped_mapping: dict | None, positions=None, deform=None):
     """生成「手部粗细表」行：目标世界宽度，供 Max 端收缩 Biped 手掌/手指的粗细。
 
     只处理 Hand / Finger0~4：这几节 Biped 默认最粗，和网格差得最明显。
-    列：biped_target \t width
+    列：biped_target \t width \t palm_len
+    第 3 列只有 Hand 两行有值（沿掌轴量出的真实掌长，见 `_palm_span`）；
+    其余行留空，老产物没有这一列时 Max 与判据侧都沿用旧行为。
     返回 (含表头的正文行, 数据行数)。
     """
-    lines = [_header_line(("biped_target", "width"))]
+    lines = [_header_line(("biped_target", "width", "palm_len"))]
     if not biped_mapping or not positions:
         return lines, 0
 
@@ -1018,8 +1215,15 @@ def _width_rows(scale: float, old_to_new: dict, heads: list, tails: list,
     for old, target in biped_mapping.items():
         if target:
             target_to_old.setdefault(target, old)
+    target_to_new = {target: old_to_new[old]
+                     for target, old in target_to_old.items() if old in old_to_new}
+    palms = {side: _palm_span(positions, scale, deform,
+                              target_to_new.get(f"Bip001 {side} Hand"),
+                              heads, target_to_new, side)
+             for side in ("L", "R")}
 
     count = 0
+    first_width: dict[str, float] = {}
     for target in wanted:
         old = target_to_old.get(target)
         if old is None or old not in old_to_new:
@@ -1033,8 +1237,41 @@ def _width_rows(scale: float, old_to_new: dict, heads: list, tails: list,
         # 手掌算进手的粗细（3.6953 → 58.3399），已回滚。
         if r is None or r <= _WIDTH_MIN_CM:
             continue
-        lines.append(f"{target}\t{r * 2.0:.4f}")
+        side = target.split()[1]
+        palm = palms.get(side) if target.endswith(" Hand") else None
+        palm_text = f"{palm:.4f}" if palm else ""
+        lines.append(f"{target}\t{r * 2.0:.4f}\t{palm_text}")
+        first_width[target] = r * 2.0
         count += 1
+
+    # ---- 第三节（末节）指骨：#139「第三节手指都比原来的结构长了一节」----
+    # 末节是**叶子骨**：`limbs.tsv` 只给「父→子」段定价（没有子关节就没有段），
+    # widths.tsv 原先也只覆盖 Hand + Finger0~4（第一节），于是末节三轴全部保留
+    # Biped 按身高给的默认值。林尼实测末节盒长 3.33/3.88/3.33/2.77cm，
+    # 而 PMX 末节骨 head→tail 只有 2.02/2.22/2.29/1.70cm ⇒ 长出 46~75%。
+    # 拇指 2.93cm 恰好接近默认的 2.77cm，所以用户说「除了大拇指」—— 数据自洽。
+    #
+    # 修法复用 #136 已有的第 3 列长度闭环（Max 侧 mmd2maxApplyWidths 的 palm 分支，
+    # 判据侧 box_rb/hand_length_cm）：把末节骨加进 widths.tsv，第 3 列填 PMX
+    # 末节骨 head→tail 长度。这一列的语义因此从「掌长」扩为「该骨长度轴的目标盒跨度」，
+    # Python 判据与 Max 写入仍读同一张表，不新增通道、不改 GRADED_SURFACE 的 check 集。
+    # 粗细沿用同一根手指第一节的实测值（指尖顶点稀，单独量不稳；同一指粗细相近）。
+    for side in ("L", "R"):
+        for i in range(5):
+            tip = f"Bip001 {side} Finger{i}2"
+            first = f"Bip001 {side} Finger{i}"
+            if first not in first_width:
+                continue
+            ni = target_to_new.get(tip)
+            if ni is None:
+                continue
+            h, t = heads[ni], tails[ni]
+            tip_len = ((h[0] - t[0]) ** 2 + (h[1] - t[1]) ** 2
+                       + (h[2] - t[2]) ** 2) ** 0.5
+            if tip_len <= 0.5:
+                continue
+            lines.append(f"{tip}\t{first_width[first]:.4f}\t{tip_len:.4f}")
+            count += 1
     return lines, count
 
 
@@ -1307,7 +1544,9 @@ def _foot_profile(positions, scale: float, ankle, ball, faces=None,
     Bip001 L/R Toe0 撑成一根大骨头（用户反馈：Toe0 太大了）。
 
     窗口全部由踝/脚掌的相对位置导出，不写死某个模型的绝对坐标：
-      - 贴地：z ≤ 脚掌 z + 4（鞋底到脚背）
+      - 贴地上沿：z ≤ max(脚掌 z + 4, 脚掌 z + 0.8×(踝 z − 脚掌 z))（#140：
+        旧写死 +4 是照「趾关节贴在鞋尖」调的，关节挪到鞋长中段后鞋面高到 7cm，
+        窗口却仍砍在 4cm ⇒ toe_h 恒等于 4.095、骨盒只剩薄薄一层鞋底）
       - 横向：离脚掌 x ≤ 6（两脚相距约 12，不会串到对面）
       - 纵向：从踝往后 2cm 起，往后（裙摆、飘带）一律丢掉
 
@@ -1337,7 +1576,7 @@ def _foot_profile(positions, scale: float, ankle, ball, faces=None,
             "也不要按 Biped 默认朝向猜一只脚出来")
     ux, uy = dx / horiz, dy / horiz
     x_half = 6.0
-    z_cap = bz + 4.0
+    z_cap = max(bz + 4.0, bz + TOE_CAP_ANKLE_FRAC * max(0.0, az - bz))
     pts = [convert_vec(p, scale) for p in positions]
     band = []
     for (x, y, z) in pts:
@@ -1607,7 +1846,27 @@ def _accessory_parent_column(kept, old_to_new, parents, heads, biped_mapping,
     return column
 
 
-def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
+def _bone_node_names(bone_names, kept, biped_mapping):
+    """每根**保留骨**在 Max 场景里的节点名，按新骨序号索引（口径见 `semantic.node_name`）。
+
+    重名的那些返回空串：Max 给重名节点自动加后缀（`名前001`），而「哪个副本拿到裸名」
+    取决于建序 —— 我们没量过 Max 的这套规则，拿它当期望值就是一把坏仪器。
+    所以这两行**不喂给名字尺**：`verdicts.PhysicsExpectation.named_rows` 少数这几根，
+    `rigid_parented` 仍然全量卡住「挂没挂上」，只是「挂的是不是这一根」在重名模型上
+    退成不量 —— 退得看得见（汇总行 `名字不计=N 根`），不假装量到了。
+    """
+    names = []
+    for index in range(len(bone_names)):
+        target = biped_mapping.get(kept[index], "") if biped_mapping else ""
+        names.append(semantic.node_name(target, bone_names[index]))
+    seen: dict = {}
+    for n in names:
+        seen[n] = seen.get(n, 0) + 1
+    return [n if seen[n] == 1 else "" for n in names]
+
+
+def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set,
+                  bone_node_names=(), bone_redirect: dict | None = None):
     """生成刚体 & 关节数据行，供 Max 端构建物理代理（MassFX / 约束）。
 
     刚体引用的 PMX 骨序号会被换算成导出后的新序号（找不到则 -1，挂场景根）。
@@ -1625,6 +1884,11 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
     一个文件两种记录：RIGID 行的列名是表头行，JOINT 行的列名写在紧随其后的 `@JOINT`
     行里（见 _kind_header）—— 同一列号在两种记录里含义不同（第 4 列 RIGID 是 name_en、
     JOINT 是 joint_type），硬合成一行就会有一边读错列。
+
+    `rigid_bone_node`（#126）是这一格 `rigid_bone` 那个号**该对应到的场景节点名**，
+    由 `_bone_node_names` 按 `semantic.node_name` 算出：Max 端回读 `proxy.parent.name`
+    与它比，才有「挂上骨了，但挂的是不是这一根」这条尺。名字在这里算而不是让 Max 去
+    bones.tsv 里查，是因为「号 → 名字」这一步正是我们要独立核的那一段。
     """
     cols = ("row_kind", "rigid_index", "rigid_name", "rigid_name_en",
             "rigid_bone", "rigid_group", "rigid_nocollide_mask", "rigid_shape",
@@ -1633,7 +1897,8 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
             "rigid_rot_x", "rigid_rot_y", "rigid_rot_z",
             "rigid_rot_max_x", "rigid_rot_max_y", "rigid_rot_max_z",
             "rigid_mass", "rigid_move_damping", "rigid_rotation_damping",
-            "rigid_repulsion", "rigid_friction", "rigid_physics_mode")
+            "rigid_repulsion", "rigid_friction", "rigid_physics_mode",
+            "rigid_bone_node")
     joint_cols = ("joint_index", "joint_name", "joint_type",
                   "joint_rigid_a", "joint_rigid_b",
                   "joint_pos_x", "joint_pos_y", "joint_pos_z",
@@ -1646,7 +1911,11 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
                   "joint_rot_spring_x", "joint_rot_spring_y", "joint_rot_spring_z")
     lines: list = [_header_line(cols), _kind_header("JOINT", joint_cols)]
     for ri, rb in enumerate(model.rigid_bodies):
-        bone_new = _to_new_skeleton(model, old_to_new, kept_set, rb.bone_index)
+        # 并行变形骨（D 骨）链已删：刚体也要跟着权重改落到同位的人形骨，
+        # 否则 `_to_new_skeleton` 会沿父链找到「下半身」= Bip001 Spine，
+        # 于是腿上的 16 个刚体代理全挂在腰上（林尼实测）。
+        raw_bone = (bone_redirect or {}).get(rb.bone_index, rb.bone_index)
+        bone_new = _to_new_skeleton(model, old_to_new, kept_set, raw_bone)
         px, py, pz = convert_vec(rb.position, scale)
         # 尺寸与位置必须用同一 scale（早期版本漏乘，代理会比骨架大 1/scale 倍）
         sx, sy, sz = (rb.size[0] * scale, rb.size[1] * scale, rb.size[2] * scale)
@@ -1654,6 +1923,12 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
         # Max 端只负责把三个**度数**写进 `node.rotation`；手性共轭与节点口径
         # 反转全在 coords.rigid_rotation_max 里算（那里的注释记了两条实测依据）。
         mx, my, mz = rigid_rotation_max(rb.rotation)
+        # 期望场景节点名（#126）：Max 那边回读 `proxy.parent.name` 与这一格比。
+        # 表里只有 `rigid_bone` 这个**号**，而「号 → 场景里那根骨」中间隔着 Max 的
+        # boneNodes 数组序；名字是这两端唯一能各算各的公共量。
+        node_name = ""
+        if 0 <= bone_new < len(bone_node_names):
+            node_name = bone_node_names[bone_new]
         lines.append(
             "RIGID\t" + "\t".join([
                 str(ri), rb.name, rb.name_en, str(bone_new),
@@ -1664,6 +1939,7 @@ def _physics_rows(model, scale: float, old_to_new: dict, kept_set: set):
                 fmt(mx), fmt(my), fmt(mz),
                 fmt(rb.mass), fmt(rb.move_damping), fmt(rb.rotation_damping),
                 fmt(rb.repulsion), fmt(rb.friction), str(rb.physics_mode),
+                node_name,
             ]))
     for ji, jt in enumerate(model.joints):
         pos = convert_vec(jt.position, scale)
@@ -1920,6 +2196,21 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         plan.notes.append(f"  脚趾 EX 辅助骨：{len(toe_ex)} 根（含子链）已删除——"
                           "它们与 Biped Toe0 重叠在鞋头里；权重/刚体归并到 つま先、足首")
 
+    # ---- 并行变形骨（D 骨）改绑：必须在权重归并之前，改的是原始 PMX 骨序号 ----
+    # 有些模型（林尼）把整条腿的蒙皮放在「左足D/左ひざD/左足首D/左足先EX」这套
+    # 与标准腿骨同位的副本上，标准骨一根顶点都没有。旧做法把这些 D 骨当附属骨留着，
+    # 于是两条腿的 Skin 挂在 BoneGeometry 上、链根还被改挂到 Pelvis，Biped 腿骨一转
+    # 网格纹丝不动。这里把权重与刚体引用改落到同位的人形骨，再把整条副本链删掉。
+    twin_redirect, twin_drop = semantic.deform_twin_plan(model, biped_mapping)
+    if twin_redirect:
+        deform = _redirect_bone_pairs(deform, twin_redirect)
+        dropped_torso |= twin_drop
+        sample = "、".join(
+            f"{model.bones[i].name}→{model.bones[j].name}"
+            for i, j in sorted(twin_redirect.items())[:4])
+        plan.notes.append(f"  并行变形骨改绑：{len(twin_redirect)} 根（{sample} …）——"
+                          "权重/刚体引用落到同位的 Biped 骨，重复链不再进附属骨")
+
     # ---- 选择保留的骨架骨骼（并剔除无用骨 / 归并权重）----
     # 「辅助骨骼」开关：默认 True = 行为与历轮基线逐字相同。关掉它只丢
     # semantic.guide_bone_indices 判出来的那批骨（既无 Biped 目标、又无蒙皮权重、
@@ -1968,6 +2259,12 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
             deform = _remap_humanoid(deform, positions, model, kept_set, old_to_new,
                                      heads, scale)
 
+    # 脚掌前/后分界（#139）：PMX 的 つま先 骨位不是跨模型常量（香菱在脚长 40%，
+    # 林尼却贴着鞋尖 89%），必须从网格量鞋长重新定价。这一步必须排在
+    # _split_toe_weights / _bone_rows / _limb_rows / _width_rows **之前** —— 它们
+    # 全读同一份 heads，改一处则骨架、权重分界、判据期望一起走，不会分叉。
+    plan.notes.extend(_relocate_toe_joints(
+        heads, tails, biped_mapping, old_to_new, positions, scale))
     # 眼部 tip 骨（目先/瞳）的 tail 在 MMD 里指得很远，画出来像长箭头；压短它
     _clamp_tip_bone_lengths(bone_names, parents, heads, tails)
     # 胸部骨：PMX 给的是一根竖直牙签，改成指向网格里量出来的乳头
@@ -2047,11 +2344,13 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
             f"只导出前 {MAX_MORPH_CHANNELS} 个（其余在 morphs.tsv 里标 CHANNEL_FULL）。"
             "需要全部表情就得分组：复制一份 .max 再换一批通道。")
 
-    physics_lines = _physics_rows(model, scale, old_to_new, kept_set)
+    physics_lines = _physics_rows(model, scale, old_to_new, kept_set,
+                                  _bone_node_names(bone_names, kept, biped_mapping),
+                                  twin_redirect)
     limb_lines, limb_count = _limb_rows(model, scale, old_to_new, heads,
                                         biped_mapping, positions, faces)
     width_lines, width_count = _width_rows(scale, old_to_new, heads, tails,
-                                           biped_mapping, positions)
+                                           biped_mapping, positions, deform)
 
     if roles:
         n_control = sum(1 for r in roles.values() if r == "control")
@@ -2065,6 +2364,16 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     meta_lines = [
         _header_line(("key", "value")),
         f"scale\t{scale!r}",
+        # #106：判据的强度必须由**产物的事实**决定，不认命令行、也不认目录名。
+        # 「这一轮是按哪一组参数导的」只有跟着产物落盘才作数 —— 第 76 轮为了让交付件
+        # 不覆盖金标准夹具而把 PMX 改了个名，验收层就整片退成 report，512 全绿其实是
+        # 「判据没参与」。scale / min_weight / keep_guides 与 kept_bones、vertex_count
+        # 一起构成定价的两把钥匙（哪一具模型 + 哪一组配置）。#119 起下面那两行
+        # has_sdef / has_qdef 也进了配置串 —— 它们从 M1b 起一直没有读者，而「没人读」
+        # 不等于「不影响读数」：含 SDEF 的一轮从此借不到线性混合那两组的锁。
+        # 值一律用 repr：`repr(0.0)` 是 `0.0`，与定价条目里手写的文本同一字形。
+        f"min_weight\t{min_weight!r}",
+        f"keep_guides\t{'true' if keep_guides else 'false'}",
         f"has_sdef\t{1 if 'SDEF' in model.deform_types else 0}",
         f"has_qdef\t{1 if 'QDEF' in model.deform_types else 0}",
         f"filter_useless\t{1 if filter_useless else 0}",
@@ -2287,8 +2596,14 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
         # 诚实提示：Max 端那段「按 has_sdef 开双四元数混合」在 M1b 删掉了 —— 跑过的
         # 五个模型全是 has_sdef=0，那段从没执行过，留着只是看着安心。真遇到 SDEF 模型
         # 时这句是唯一会说「形变口径和源文件不一样」的地方，别把它删了。
-        print("  [提示] 源模型含 SDEF/QDEF 骨，但 Max 端按普通线性混合装配"
-              "（双四元数分支已在 M1b 删除，meta 里的 has_sdef/has_qdef 目前无人读取）。")
+        # #119 之后这两行 meta 不再是死数据：它们进定价指纹（`verdicts.export_config`
+        # 的 `dq=` 那一维），所以含 SDEF 的模型**不会**继承线性混合那两组的锁 ——
+        # 要么整片退成 report（没被定价过的模型），要么当场中止（同网格但配置没定价）。
+        kinds = "/".join(k for k in ("SDEF", "QDEF") if k in model.deform_types)
+        print(f"  [提示] 源模型含 {kinds} 骨，但 Max 端按普通线性混合装配（双四元数分支已在 M1b 删除）；"
+              "这一轮的形变口径由 meta 的 has_sdef / has_qdef 进定价指纹（verdicts.export_config 的 dq= 那一维），"
+              "而「源含 DQ + 线性装配」这一组从没实跑过定价 —— 要么整片退成 report，要么当场中止，"
+              "不会借用线性模型那两组的锁。要判 DQ 模型的形变质量，先在这台 Max 上把双四元数装回来并实跑定价。")
 
     # ---- 材质：只交 .mtl，不再另出清单 ----
     # 以前这里还写一份 <name>_materials.tsv（alpha / spec / sphere / draw_flags），

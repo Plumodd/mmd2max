@@ -1093,6 +1093,7 @@ CFG_STATE: dict[str, str] = {
     "MMD2MAX_BOXAXIS_MAP": "骨盒轴账（只 append）",
     "MMD2MAX_SHOTMESH": "截图段暂存的网格名单",
     "MMD2MAX_SHOTFILL": "截图段暂存的填充设置",
+    "MMD2MAX_SHOTPIXEL": "截图段暂存的像素读数（#115）",
     "MMD2MAX_SHOTCLIP": "截图段暂存的裁剪设置",
 }
 
