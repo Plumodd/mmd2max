@@ -8040,8 +8040,10 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
 
 /* 胸部约束（瓦雷莎类模型的「调整控制器 → 带蒙皮变形骨」关系）：
    不做任何刚体/物理模拟。仅当模型存在「乳房调整控制器」(おっぱい調整) 时生效，
-   把带蒙皮的乳房变形骨（名字含 胸上2/胸下2）用「父级链接（场景图约束）」挂到控制器之下，
-   挂父瞬间保住世界变换、静止位零漂移 —— 复刻 MMD「调控制器 = 动乳房」的绑定关系。
+   把带蒙皮的乳房变形骨（名字含 胸上2/胸下2）用原生 Link Constraint（动画>约束 菜单的
+   变换控制器，非堆栈修改器）挂到控制器，不改场景层级（骨仍挂在原父 Spine2 之下）、仅把
+   变换控制器换成 Link Constraint；bind 帧捕获相对变换，静止位零漂移 —— 复刻 MMD
+   「调控制器 = 动乳房」的绑定关系，且不破坏原有骨层级（利于骨骼导出）。
    tip 子骨保持原有父子链，自然跟随。其余模型（无该控制器）整段跳过，零副作用。 */
 fn mmd2maxBreastConstraints boneNodes =
 (
@@ -8070,21 +8072,29 @@ fn mmd2maxBreastConstraints boneNodes =
         if not isDeform do continue
         if nm == ctrlName do continue
         local b = boneNodes[i]
-        /* 先抓取当前完整世界变换，挂父后原样写回（MaxScript 的 .transform 取/设均为世界坐标），静止位零漂移 */
+        /* 先抓取当前世界位置，加 Link Constraint 后核对静止位是否零漂移。
+           Link Constraint 是变换控制器（动画>约束 菜单那一种），用 b.controller = lc 指派（不是
+           addModifier —— 它无法转成修改器）。关键点：指派控制器的瞬间会把骨的重置到父原点（≈110cm
+           跳变），若立刻 addTarget 会把「跳变后的错误位置」当作 bind 偏移，导致骨吸到控制器（漂移
+           111cm）。所以顺序是：指派控制器 → 立刻把世界变换写回静止位 → 再 addTarget 绑定，
+           此时 bind 捕获的是静止相对偏移，静止位零漂移。不改 b.parent（骨仍挂原父 Spine2）——
+           原生约束、可逆、不破坏骨层级。 */
         local wtm = copy b.transform
         local prePos = copy wtm.pos
         try
         (
-            b.parent = ctrlNode
+            local lc = Link_Constraint()
+            b.controller = lc
             b.transform = wtm
+            lc.addTarget ctrlNode sliderTime
             cnt += 1
-            mmd2maxLog ("  胸部约束：变形骨 " + nm + " 挂到控制器 " + ctrlName + "（父级链接）")
+            mmd2maxLog ("  胸部约束：变形骨 " + nm + " 加 Link Constraint 挂到控制器 " + ctrlName)
         )
         catch
         (
             mmd2maxLog ("  胸部约束失败 " + nm + "：" + (getCurrentException() as string))
         )
-        /* 安全核对：挂父后静止位不应漂移 */
+        /* 安全核对：加 Link Constraint 后静止位不应漂移 */
         try
         (
             local d = distance b.transform.pos prePos
