@@ -12,8 +12,9 @@ for entry in "${models[@]}"; do
   echo "########## $stem : re-export (Stage0 breast re-aim) ##########" >> "$LOG"
   python tools/run_model.py "$pmx" >> "$LOG" 2>&1
   echo "  run_model exit=$?" >> "$LOG"
-  echo "########## $stem : max run (headless --quit --shot --physics) ##########" >> "$LOG"
-  python tools/obj_run.py "test_runs/$stem" "$stem" --shot --quit --physics >> "$LOG" 2>&1
+  echo "########## $stem : max run (keep-open --shot --physics) ##########" >> "$LOG"
+  # 用户 2026-11-09 要求：跑完保留 3ds Max 现场供查看，禁止自动退出（不加 --quit）。
+  python tools/obj_run.py "test_runs/$stem" "$stem" --shot --physics >> "$LOG" 2>&1
   echo "  obj_run exit=$?" >> "$LOG"
 done
 echo "ALL DONE" >> "$LOG"

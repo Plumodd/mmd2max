@@ -877,6 +877,61 @@ def _aim_breast_bones(bone_names, bone_names_en, parents, deform, positions,
     return changed
 
 
+def _aim_bilateral_breast_control(bone_names, parents, heads, tails) -> list[str]:
+    """把「同时控制左右乳房」的双侧控制骨的 tail 指向两乳中间。
+
+    _build_skeleton_from_kept 的兜底是「tail = 第一个保留后代的 head」；对
+    おっぱい調整 来说第一个子骨是 左胸上，于是整根骨斜指向左侧乳房（用户
+    2026-11-09 反馈：「这个控制的是两个乳房，其指向应该指向两个乳房的中间而不是
+    其中一个」）。这里改成「左右配对的直接乳房子骨 head 的中点」：左右对称时
+    x 自然归零，方向落在胸骨中线上，且不需要猜乳头在哪。
+    只对确实存在左右配对乳房子骨的骨生效；Pelvis / Hand 这类多子骨但不含
+    左右乳房对的一律不动，避免把别的骨链方向改坏。
+    """
+    children: dict[int, list[int]] = {}
+    for i, p in enumerate(parents):
+        if 0 <= p < len(bone_names):
+            children.setdefault(p, []).append(i)
+
+    notes = []
+    for parent_idx, kids in children.items():
+        nm = bone_names[parent_idx]
+        if len(kids) < 2 or nm.startswith(("左", "右")):
+            continue
+        # 只认「双侧乳房调整/控制骨」。上半身2 之类躯干中轴骨也挂着
+        # 左胸上2/右胸上2，但它的 tail 必须继续指向 首（脊柱链），错改会把
+        # 整条中轴扭向乳房 —— 首轮实测就踩到这个误伤，所以按名字收紧。
+        low = nm.lower()
+        if not (any(w in nm for w in ("おっぱい", "バスト", "胸"))
+                or any(w in low for w in ("breast", "bust"))):
+            continue
+        if not (any(w in nm for w in ("調整", "調整用"))
+                or any(w in low for w in ("adjust", "control", "ctrl"))):
+            continue
+        paired = [k for k in kids
+                  if bone_names[k].startswith(("左", "右"))
+                  and any(w in bone_names[k] for w in BREAST_WORDS)
+                  and not any(s in bone_names[k] for s in BREAST_SKIP)]
+        if len(paired) < 2:
+            continue
+        if not (any(bone_names[k].startswith("左") for k in paired)
+                and any(bone_names[k].startswith("右") for k in paired)):
+            continue
+        head = heads[parent_idx]
+        mid = tuple(sum(heads[k][j] for k in paired) / len(paired)
+                    for j in range(3))
+        if _dist(head, mid) < 1e-3:
+            continue
+        old = tails[parent_idx]
+        tails[parent_idx] = mid
+        names = "/".join(bone_names[k] for k in paired)
+        notes.append(f"  双侧乳房控制骨 {nm} 指向两乳中间 "
+                     f"({mid[0]:.2f},{mid[1]:.2f},{mid[2]:.2f})；"
+                     f"原尾 ({old[0]:.2f},{old[1]:.2f},{old[2]:.2f})；"
+                     f"配对子骨 {names}")
+    return notes
+
+
 # 瓦雷莎式「おっぱい」结构：乳房的全部顶点权重只落在 左胸上2/右胸上2 上，
 # 而同侧的 胸上/胸先/胸下/胸下先 四根骨一个顶点都没有 —— 骨建出来了、也进了
 # Skin、也会跟着 おっぱい調整 转，但转它网格纹丝不动（2026-11-09 用户报的
@@ -2203,6 +2258,44 @@ def _copy_textures(model, source, outdir, warnings):
     return texture_paths
 
 
+def _png_has_alpha(path: Path) -> bool:
+    """只读 PNG 头判断有没有 alpha 通道（color type 6 = RGBA），不引入 Pillow 依赖。"""
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(26)
+    except OSError:
+        return False
+    return (len(head) >= 26 and head[:8] == b"\x89PNG\r\n\x1a\n"
+            and head[12:16] == b"IHDR" and head[25] == 6)
+
+
+def _hidden_overlay_materials(model, texture_paths, outdir) -> set[int]:
+    """找出 MMD 的 spa/sph 叠加特效层：这些层在 3ds Max 里没有对应机制，需按透明处理。
+
+    MMD 用「贴图 alpha」逐像素隐藏这类层（瓦雷莎 `髮+` 的贴图 99.6% 像素 alpha≈0，
+    且透明区的 RGB 全是 (0,0,0)）；而导出的 .mtl 只写 map_Kd、没有 opacity map，
+    3ds Max 就把透明黑当成不透明黑画出来。`髮+` 又是同一头发的第二次绘制（独立
+    顶点副本、8005 面），整层黑盖住底层 `髮` 的粉色发丝贴图 —— 用户 2026-11-09
+    反馈「瓦雷莎的头发没有正常贴图」。
+
+    识别口径不认模型也不认文件名：贴图带 alpha 通道 + 材质挂了 sphere/spa
+    （sphere_index >= 0 且 sphere_mode != 0）+ diffuse 本身不透明（说明它靠贴图
+    alpha 隐藏，而不是靠 d）。命中者在 MTL 补 `d 0.0000`（mmdmat22 的 d=0 已实测
+    被 Max 的 OBJ 导入器识别）。几何与面数完全不动，底层材质照常显示。
+    """
+    hidden: set[int] = set()
+    for index, material in enumerate(model.materials):
+        if material.sphere_index < 0 or material.sphere_mode == 0:
+            continue
+        if material.diffuse[3] < 1.0:
+            continue          # 已由 MTL 的 d < 1 处理
+        rel = texture_paths[material.texture_index] \
+            if 0 <= material.texture_index < len(texture_paths) else ""
+        if rel and _png_has_alpha(outdir / rel):
+            hidden.add(index)
+    return hidden
+
+
 def _write_lines(path: Path, lines: list) -> None:
     """正文行 -> 文件（每行一个 \\n，末尾也带一个）。空正文写出单个换行，与旧版一致。"""
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -2470,6 +2563,11 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         bone_names, kept_names_en, parents, deform, positions, scale, heads, tails)
     for note in breast_notes:
         plan.notes.append(f"  胸部骨指向乳头：{note}")
+    # 双侧控制骨（おっぱい調整）：指向两乳中间，不再偏向第一个子骨所在的单侧。
+    # 必须排在 _chest_band 之前 —— 胸框按 _is_breast_bone 认骨，不认这根控制骨，
+    # 但 tails 是同一份，顺序错了后面的骨向/盒长都会读到旧值。
+    for note in _aim_bilateral_breast_control(bone_names, parents, heads, tails):
+        plan.notes.append(note)
     # 胸部特写的取景框：跟着量出来的胸骨走，不再按「身高 × 猜的比例」（#70）
     chest_band = _chest_band(bone_names, kept_names_en, heads, tails, positions, scale)
     if chest_band:
@@ -2712,6 +2810,13 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
 
     # ---- 贴图 ----
     texture_paths = _copy_textures(model, source, outdir, warnings)
+    hidden_overlay = _hidden_overlay_materials(model, texture_paths, outdir)
+    if hidden_overlay:
+        warnings.append(
+            "MMD spa/sph 叠加层在 3ds Max 没有对应机制，已按完全透明处理（否则透明黑"
+            "会盖住底层贴图）：材质 " + "、".join(
+                f"mmdmat{i}({model.materials[i].name})"
+                for i in sorted(hidden_overlay)))
 
     # ---- OBJ ----
     obj_path = outdir / f"{source.stem}.obj"
@@ -2734,6 +2839,8 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
             stream.write(f"Kd {d[0]:.4f} {d[1]:.4f} {d[2]:.4f}\n")
             if d[3] < 1.0:
                 stream.write(f"d {d[3]:.4f}\n")
+            elif index in hidden_overlay:
+                stream.write("d 0.0000\n")
             s = material.specular
             stream.write(f"Ks {s[0]:.4f} {s[1]:.4f} {s[2]:.4f}\n")
             stream.write(f"Ns {material.specular_power:.4f}\n")

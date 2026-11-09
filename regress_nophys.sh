@@ -13,6 +13,8 @@ for entry in "${MODELS[@]}"; do
   SRC="${entry%%|*}"; NAME="${entry##*|}"
   echo "===== $NAME (no physics, chest constraint) =====" | tee -a "$LOG"
   python tools/run_model.py "$SRC" 2>&1 | tail -3 | tee -a "$LOG"
-  python tools/obj_run.py "test_runs/$NAME" "$NAME" --shot --quit 2>&1 | grep -iE "胸部约束|判据汇总|失败 [0-9]|崩溃|drift|漂移|!!" | tee -a "$LOG"
+  # 用户 2026-11-09 要求：跑完保留 3ds Max 现场供查看，禁止自动退出。
+  # obj_run.py 默认 MMD2MAX_KEEPOPEN=true；显式 --quit 才会 quitMax，这里不再传。
+  python tools/obj_run.py "test_runs/$NAME" "$NAME" --shot 2>&1 | grep -iE "胸部约束|判据汇总|失败 [0-9]|崩溃|drift|漂移|!!" | tee -a "$LOG"
 done
 echo "ALL DONE" | tee -a "$LOG"
