@@ -877,6 +877,126 @@ def _aim_breast_bones(bone_names, bone_names_en, parents, deform, positions,
     return changed
 
 
+# 瓦雷莎式「おっぱい」结构：乳房的全部顶点权重只落在 左胸上2/右胸上2 上，
+# 而同侧的 胸上/胸先/胸下/胸下先 四根骨一个顶点都没有 —— 骨建出来了、也进了
+# Skin、也会跟着 おっぱい調整 转，但转它网格纹丝不动（2026-11-09 用户报的
+# 「只有右胸上2 能控制模型」）。原始 PMX 里这四根骨既无付与也无外部亲，
+# MMD 侧靠物理或未使用，导入 Max 后就成了纯摆设。
+# 只有四根目标骨全在、且确实零权重、且「2」骨有足够顶点时才动手，
+# 不符合这套命名的模型原样跳过，不影响其他模型。
+_BREAST_TARGETS = ("胸上", "胸先", "胸下", "胸下先")
+_MIN_BREAST_VERTS = 20
+
+
+def _breast_smooth01(x: float) -> float:
+    """0..1 平滑阶跃：权重硬切会在分界处撕出接缝，必须连续过渡。"""
+    x = max(0.0, min(1.0, x))
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _split_breast_weights(deform, bone_names, positions):
+    """把「2」骨的乳房顶点权重按 上/下/最前突 软分给同侧四根骨。
+
+    · 左右归属按「这份权重原本属于哪根 2 骨」判定，不用顶点 x 正负 —— 中轴附近的
+      顶点两侧权重会混，按 x 切会把左胸的点错分给右骨。
+    · positions 是 PMX 原始 Y-up 坐标（未缩放，与 _aim_breast_bones 同一口径）：
+      PMX 的 y 是高度、z 是前后；统一走 convert_vec(v, 1.0) = (x, z, y) 换到
+      Z-up 后取「高度 = 结果[2]、朝前 = -结果[1]」，别直接按下标猜轴。
+      分界从该侧自己的顶点包围盒量出来，跨模型自适应。
+    · 上/下按高度平滑过渡；最前突的一块再分给 tip（先）骨，最多 50%，
+      免得尖端那几根骨把整块乳房抢走。
+    · 「2」骨完全退出蒙皮、回归控制/中枢角色：普通骨挂在 おっぱい調整 下、
+      tip 是「2」骨的子骨，两条链都仍能被 おっぱい調整 带动，
+      所以不会破坏 mmd2maxBreastConstraints 建的 Link Constraint。
+    返回 (新 deform, 说明列表)。
+    """
+    name_to_idx: dict[str, list[int]] = {}
+    for i, nm in enumerate(bone_names):
+        name_to_idx.setdefault(nm, []).append(i)
+
+    totals = [0.0] * len(bone_names)
+    for weights in deform:
+        for b, w in weights:
+            if 0 <= b < len(totals):
+                totals[b] += w
+
+    plans = []
+    for src, nm in enumerate(bone_names):
+        if not (nm.endswith("2") and "胸" in nm):
+            continue
+        if any(s in nm for s in BREAST_SKIP):
+            continue
+        side = nm[0]
+        if side not in ("左", "右"):
+            continue
+        target_names = [side + t for t in _BREAST_TARGETS]
+        target_idx = []
+        ok = True
+        for t in target_names:
+            hits = name_to_idx.get(t, [])
+            if len(hits) != 1:
+                ok = False
+                break
+            target_idx.append(hits[0])
+        if not ok:
+            continue
+        # 四根目标骨必须确实「没绑上」，且「2」骨确实承载了乳房顶点
+        if any(totals[t] > 1e-6 for t in target_idx):
+            continue
+        pts = []
+        for vi, weights in enumerate(deform):
+            for b, w in weights:
+                if b == src and w > 1e-6:
+                    mx = convert_vec(positions[vi], 1.0)
+                    pts.append((float(mx[2]), -float(mx[1])))
+                    break
+        if len(pts) < _MIN_BREAST_VERTS:
+            continue
+        zmin = min(p[0] for p in pts); zmax = max(p[0] for p in pts)
+        fmin = min(p[1] for p in pts); fmax = max(p[1] for p in pts)
+        if zmax - zmin < 1e-5 or fmax - fmin < 1e-5:
+            continue
+        plans.append((src, target_idx, target_names, zmin, zmax, fmin, fmax, len(pts)))
+
+    if not plans:
+        return deform, []
+
+    by_src = {p[0]: p for p in plans}
+    out = []
+    for vi, weights in enumerate(deform):
+        merged: dict[int, float] = {}
+        for b, w in weights:
+            plan = by_src.get(b)
+            if plan is None:
+                merged[b] = merged.get(b, 0.0) + w
+                continue
+            _, targets, _, zmin, zmax, fmin, fmax, _ = plan
+            mx = convert_vec(positions[vi], 1.0)
+            upper = _breast_smooth01((float(mx[2]) - zmin) / (zmax - zmin))
+            front = ((-float(mx[1])) - fmin) / (fmax - fmin)
+            tip = 0.5 * _breast_smooth01((front - 0.55) / 0.45)
+            main = 1.0 - tip
+            lower = 1.0 - upper
+            parts = (
+                (targets[0], w * upper * main),   # 胸上
+                (targets[1], w * upper * tip),    # 胸先
+                (targets[2], w * lower * main),   # 胸下
+                (targets[3], w * lower * tip),    # 胸下先
+            )
+            for tb, tw in parts:
+                if tw > 1e-7:
+                    merged[tb] = merged.get(tb, 0.0) + tw
+        out.append([(b, w) for b, w in merged.items() if w > 1e-7])
+
+    notes = []
+    for src, targets, tnames, zmin, zmax, fmin, fmax, npts in plans:
+        notes.append(
+            f"  胸部权重分区：{bone_names[src]} 的 {npts} 个顶点按 上/下/最前突 分给 "
+            + "/".join(tnames)
+            + f"（高度 {zmin:.2f}~{zmax:.2f}cm、前后 {fmin:.2f}~{fmax:.2f}cm）")
+    return out, notes
+
+
 def _sub(a, b):
     return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
@@ -2314,6 +2434,13 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
     deform, toe_notes = _split_toe_weights(deform, positions, scale, heads, parents,
                                            biped_mapping, old_to_new)
     plan.notes.extend(toe_notes)
+
+    # ---- 胸部权重分区：排在 _aim_breast_bones **之后**（那一刀靠「2」骨有蒙皮才能
+    #      从网格量出乳头点，分区后「2」骨就没顶点了），排在 skin_flag 统计 **之前**
+    #      （新拿到权重的四根骨要能进 Skin，min_weight>0 时尤其关键）。----
+    deform, breast_split_notes = _split_breast_weights(
+        deform, bone_names, positions)
+    plan.notes.extend(breast_split_notes)
 
     # ---- 先确定要加入 Skin 的骨骼（skin_flag），再据此剪枝 deform ----
     bone_total = len(heads)

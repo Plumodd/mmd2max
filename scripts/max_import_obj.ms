@@ -8063,73 +8063,62 @@ fn mmd2maxBreastConstraints boneNodes =
         mmd2maxLog "  胸部约束：未找到乳房调整控制器（おっぱい調整），跳过"
         return 0
     )
-    /* 所有「应以控制器为驱动源」的乳房骨统一用原生 Link Constraint（变换控制器）挂到控制器：
-       - 「2」变形骨（胸上2/胸下2）：PMX 里父是 Spine2、靠外部亲跟随控制器；直接挂 Link Constraint
-         到控制器即可（父不动）。
-       - 普通乳房骨（左胸上/左胸下/右胸上/右胸下）：PMX 里父就是控制器本身。若保持挂在控制器下再挂
-         Link Constraint，会「父级变换 + 约束变换」双重叠加，导致旋转被翻倍。所以先把它们改挂到
-         控制器的父（Spine2 = ctrlNode.parent），再挂 Link Constraint，与普通「2」骨完全同构 ——
-         旋转/位移都跟随控制器，零漂移，且不再「只能位置跟随、不跟旋转」。
-       tip 子骨（左胸先/左胸下先/右胸先/右胸下先）作为上述骨的子级，靠原有父子链自然跟随，不重复挂。
-       管线只有 PMX→TSV 导出、没有从 Max 回读骨骼层级再导出，故改 Max 内父级不影响导出真值
-       （bones.tsv 每次都从 PMX 重新生成）。 */
-    local spineNode = ctrlNode.parent   -- 控制器的父即 Spine2（PMX 父序号 5）
+    /* 胸部骨骼「层级整理」：把「2」变形骨接回 おっぱい調整 之下，让整个乳房骨体系
+       成为一棵连通的树，靠 3ds Max / MMD 原生的父子链传递旋转，不再用 Link Constraint。
+
+       资料依据（2026-11-09 检索，用户要求查资料后修改）：
+       · LearnMMD「Rig a Model: Adding and weighting bones with PMDE」：
+         "Bones in MMD are organized in chains ... When a bone is 'turned',
+          all subsequent bones get the order to move respectively."
+         且链若不能追溯到同一个根，上级骨的命令传不到那段分离的部分。
+       · 巴哈姆特「MMD模型製作基礎觀念 Part II」：左右胸的亲骨是上半身，
+         子骨习惯命名 X胸先，只为让胸骨有方向性。
+       => 旋转传导靠父子链，不是靠约束；父级 + 约束同指一个目标会双重叠加。
+
+       为什么移除 Link Constraint：早先把它当成「普通骨只跟位置、不跟旋转」的补丁，
+       但 2026-11-09 实测证明真正原因是这些骨**顶点权重为 0**（转了网格也不动），
+       与旋转传导无关（已由 export_obj._split_breast_weights 修好）。那个补丁反而把
+       4 根普通骨从 おっぱい調整 下改挂到 Spine2，使控制骨变成没有任何子骨的孤儿、
+       10 根乳房骨散在 Spine2 下靠约束硬连 —— 正是用户所报的「父子级关系紊乱」。
+
+       瓦雷莎 PMX 实测：普通骨 左胸上/左胸下/右胸上/右胸下 的父本就是 おっぱい調整；
+       「2」骨 左胸上2/右胸上2 的父却是 上半身2（与控制骨是兄弟），既无外部亲 0x2000
+       也无付与 0x0100/0x0200 —— 这条断开的链就是层级缺口的来源。所以只需把「2」骨
+       改挂到控制骨，普通骨与 tip 骨的 PMX 父子关系原样保留，整棵树即连通。
+       改父时保存/写回世界变换，静止位零漂移；管线不回读 Max 层级，bones.tsv 仍是 PMX 真值。 */
     local cnt = 0
+    local reparented = 0
     for i = 1 to boneNodes.count do
     (
         if boneNodes[i] == undefined do continue
         local b = boneNodes[i]
         if b == ctrlNode do continue
         local nm = b.name
-        /* 命中条件：名字含 胸上2/胸下2，或当前直接挂在控制器之下（普通乳房骨） */
-        local isDeform = false
-        if (findString nm "胸上2") != undefined or (findString nm "胸下2") != undefined do isDeform = true
-        if b.parent == ctrlNode do isDeform = true
-        if not isDeform do continue
-        /* 若当前挂在控制器下，先改挂到 Spine2，避免「父级 + 约束」双重叠加旋转翻倍 */
-        local wtm0 = copy b.transform
-        if b.parent == ctrlNode and spineNode != undefined do
+        -- 只认「2」变形骨；普通骨/tip 骨的父级由 mmd2maxCreateBones 按 bones.tsv 原样建好
+        if (findString nm "胸上2") == undefined and (findString nm "胸下2") == undefined do continue
+        cnt += 1
+        if b.parent != ctrlNode do
         (
+            local wtm = copy b.transform
+            local prePos = copy wtm.pos
             try
             (
-                b.parent = spineNode
-                b.transform = wtm0
+                b.parent = ctrlNode
+                b.transform = wtm
+                local d = distance b.transform.pos prePos
+                if d > 0.5 do
+                    mmd2maxLog ("  !! 胸部约束（层级整理）" + nm + " 静止位漂移 " + (d as string) + "cm")
+                reparented += 1
+                mmd2maxLog ("  胸部约束（层级整理）：" + nm + " 接回控制器 " + ctrlName + " 之下")
             )
-            catch ( mmd2maxLog ("  胸部约束：改挂 Spine2 失败 " + nm + "：" + (getCurrentException() as string)) )
+            catch
+            (
+                mmd2maxLog ("  胸部约束（层级整理）失败 " + nm + "：" + (getCurrentException() as string))
+            )
         )
-        /* 加 Link Constraint 挂到控制器（顺序：指派 → 写回静止位 → addTarget，零漂移）。
-           Link Constraint 是变换控制器（动画>约束 菜单那一种），用 b.controller = lc 指派（不是
-           addModifier —— 它无法转成修改器）。关键点：指派控制器的瞬间会把骨重置到父原点（≈110cm
-           跳变），若立刻 addTarget 会把「跳变后的错误位置」当作 bind 偏移，导致骨吸到控制器（漂移
-           111cm）。所以顺序是：指派控制器 → 立刻把世界变换写回静止位 → 再 addTarget 绑定，
-           此时 bind 捕获的是静止相对偏移，静止位零漂移。 */
-        local wtm = copy b.transform
-        local prePos = copy wtm.pos
-        try
-        (
-            local lc = Link_Constraint()
-            b.controller = lc
-            b.transform = wtm
-            lc.addTarget ctrlNode sliderTime
-            cnt += 1
-            mmd2maxLog ("  胸部约束：乳房骨 " + nm + " 加 Link Constraint 挂到控制器 " + ctrlName)
-        )
-        catch
-        (
-            mmd2maxLog ("  胸部约束失败 " + nm + "：" + (getCurrentException() as string))
-        )
-        /* 安全核对：加 Link Constraint 后静止位不应漂移 */
-        try
-        (
-            local d = distance b.transform.pos prePos
-            if d > 0.5 do
-                mmd2maxLog ("  !! 胸部约束 " + nm + " 静止位漂移 " + (d as string) + "cm")
-        )
-        catch ( -- 允许失败：transform 读取异常时跳过漂移核对
-            mmd2maxLog ("  胸部约束 " + nm + " 漂移检测读写异常，跳过") )
     )
-    mmd2maxLog ("  胸部约束：共建立 " + (cnt as string) + " 条（控制器驱动乳房骨，无刚体模拟）")
-    return cnt
+    mmd2maxLog ("  胸部约束（层级整理）：找到 " + (cnt as string) + " 根「2」骨，接回 " + (reparented as string) + " 根；旋转靠原生父子链传导，不建 Link Constraint")
+    return reparented
 )
 
 fn mmd2maxMain =
@@ -8161,9 +8150,9 @@ fn mmd2maxMain =
     else
         mmd2maxLog "按 MMD2MAX_SKIN=false 跳过蒙皮（仅网格 + 骨架）。"
 
-    /* 胸部约束：让乳房调整控制器 (おっぱい調整) 驱动带蒙皮的变形骨（瓦雷莎类），
-       复刻 MMD「调控制器 = 动乳房」的绑定关系。不做任何刚体/物理模拟。
-       无该控制器的模型（香菱/林尼等）自动跳过。 */
+    /* 胸部层级整理：把「2」变形骨接回 おっぱい調整 之下，使乳房骨体系成为连通的树，
+       靠原生父子链传导旋转（MMD 的标准机制，见函数内资料引用）。不再改挂普通骨、
+       不再建 Link Constraint。无该控制器的模型（香菱/林尼等）自动跳过。 */
     mmd2maxBreastConstraints boneNodes
 
     /* v2 改进落地：表情 -> Morpher 通道；物理刚体/关节 -> 代理与约束。 */
