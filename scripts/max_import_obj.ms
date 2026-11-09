@@ -42,6 +42,7 @@ global MMD2MAX_WEIGHTS
 global MMD2MAX_MAP
 global MMD2MAX_LIMBS
 global MMD2MAX_WIDTHS
+global MMD2MAX_CENTER_TARGET = #()
 global MMD2MAX_MORPHS
 global MMD2MAX_PHYSICS
 global MMD2MAX_OUTPUT
@@ -1881,6 +1882,22 @@ fn mmd2maxReadLimbs path =
                 append result #(row[cParent], row[cChild], desired, childPos, mode, \
                     footLen, toeLen, tipPos, toeW, toeH, footW, footH)
             )
+        )
+    )
+    /* 中轴均匀三节（用户 2026-11-09）的三段父骨名单。
+       Biped 的 Spine/Spine1/Spine2 是约束骨：setTransform #pos 写不进去，pivot 由
+       父链 link 长度决定，所以「改摆位目标」这条路走不通（实测填了 4 条目标、节点
+       一动不动）。真正被 desired_len 改掉的是**父骨长度轴 scale**（肢段日志：
+       `轴=1 缩放后=9.47713`）。而 mmd2maxSegLen 量的是两关节 pivot 距离，在折线
+       脊柱链里还混进 Neck 相对 Spine2 约 5cm 的横向分量（瓦雷莎 10.334 vs 9.477）。
+       记下这三段的父骨名，段校验按骨盒长度报数，与 Python 的期望同口径。 */
+    MMD2MAX_CENTER_TARGET = #()
+    for item in result do
+    (
+        local pt = item[1]
+        if pt == "Bip001 Spine" or pt == "Bip001 Spine1" or pt == "Bip001 Spine2" do
+        (
+            append MMD2MAX_CENTER_TARGET #(pt, item[4])
         )
     )
     result
@@ -5944,6 +5961,22 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
         if pnode != undefined and cnode != undefined do
         (
             local got = mmd2maxSegLen pnode cnode
+            /* 中轴三节：desired_len 缩的是父骨长度轴 scale，不是两关节 pivot 距离
+               （折线脊柱链里后者含横向分量）。这三段按骨盒长度报数，口径才与
+               Python 从 limbs.desired_len 生成的期望一致；其余段一律量 pivot。 */
+            if MMD2MAX_CENTER_TARGET != undefined do
+            (
+                local isEven = false
+                for ov in MMD2MAX_CENTER_TARGET do
+                    if ov[1] == item[1] do isEven = true
+                if isEven do
+                (
+                    local sc = mmd2maxBipedScale pnode
+                    local ax = mmd2maxLenAxisOf item[1]
+                    if ax < 1 or ax > 3 do ax = 1
+                    if sc != undefined and sc.count >= ax do got = sc[ax]
+                )
+            )
             local err = abs (got - item[3])
             local smsg = "  段校验 " + item[1] + " -> " + item[2]
             smsg = smsg + " 目标=" + (item[3] as string)

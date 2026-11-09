@@ -1091,6 +1091,7 @@ CFG_STATE: dict[str, str] = {
     "MMD2MAX_REFRESHCALL": "redrawViews 第几次的计数",
     "MMD2MAX_LENAXIS_MAP": "肢段拟合逐段记的长度轴账",
     "MMD2MAX_BOXAXIS_MAP": "骨盒轴账（只 append）",
+    "MMD2MAX_CENTER_TARGET": "mmd2maxReadLimbs 从 limbs.tsv 记下的中轴均匀三节父骨名单（段校验按骨盒长度报数用）",
     "MMD2MAX_SHOTMESH": "截图段暂存的网格名单",
     "MMD2MAX_SHOTFILL": "截图段暂存的填充设置",
     "MMD2MAX_SHOTPIXEL": "截图段暂存的像素读数（#115）",

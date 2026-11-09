@@ -1783,6 +1783,49 @@ def _foot_profile(positions, scale: float, ankle, ball, faces=None,
     }
 
 
+def _center_even_segments(center_present, target_to_old, old_to_new, heads):
+    """把 Spine→Spine1→Spine2→Neck 三段沿首尾直线三等分，返回按子关节名索引的覆盖表。
+
+    用户 2026-11-09 要求「胸腔改成均匀三节」（并允许 Biped 关节位偏离 PMX 原骨位）。
+    PMX 的 下半身/上半身 常常挨得极近（瓦雷莎实测 0.744cm），照抄 PMX 骨距会把
+    Biped 的 Spine 一节压成薄片 —— spineLinks 明明是 3，视口里却只看得见两节
+    （装配日志：`Spine -> Spine1 目标=0.744064`，Spine 的 X scale 从 13.3655 缩到
+    0.744064）。这里保持 Spine 与 Neck 两端不动、总跨度守恒，把中间三段沿直线均匀
+    重排；bones.tsv 仍是 PMX 真值，只有 Biped 的目标关节位与段长被改。
+    段校验判据从 limbs.tsv 的 desired_len / child_x~z 生成期望，改表后自动自洽。
+
+    只对「四个节点齐全」的模型生效；缺 Spine2（林尼只有两段）时返回空表 ——
+    不凭空造节点，也不动 Pelvis→Spine 与 Neck→Head。
+    返回 {child_target: (新 child 坐标, 新段长)}。
+    """
+    needed = ("Bip001 Spine", "Bip001 Spine1", "Bip001 Spine2", "Bip001 Neck")
+    if not all(t in center_present for t in needed):
+        return {}
+
+    def head_of(target):
+        old = target_to_old.get(target)
+        if old is None or old not in old_to_new:
+            return None
+        return heads[old_to_new[old]]
+
+    a = head_of("Bip001 Spine")
+    b = head_of("Bip001 Neck")
+    if a is None or b is None:
+        return {}
+    delta = [b[k] - a[k] for k in range(3)]
+    length = sum(x * x for x in delta) ** 0.5
+    if length < 1e-4:
+        return {}
+    unit = [x / length for x in delta]
+    seg = length / 3.0
+    out = {}
+    for i, target in enumerate(("Bip001 Spine1", "Bip001 Spine2", "Bip001 Neck"),
+                               start=1):
+        point = tuple(a[k] + unit[k] * seg * i for k in range(3))
+        out[target] = (point, seg)
+    return out
+
+
 def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
                biped_mapping: dict | None, positions=None, faces=None):
     """生成「Biped 肢段长度表」行，供 Max 端做闭环缩放。
@@ -1824,6 +1867,8 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
     # （用户截图：Pelvis 与 Spine 之间裂开一条缝，胸腔看着错位）。
     center_present = [t for t in CENTER_NODE_ORDER if t in target_to_old]
     center_pairs = list(zip(center_present, center_present[1:]))
+    even_center = _center_even_segments(center_present, target_to_old,
+                                        old_to_new, heads)
 
     overrides = semantic.limb_mode_overrides()
     foot_pairs = {p for p, m in overrides.items() if m == "foot"}
@@ -1832,7 +1877,8 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
     # 默认膝轨道拽向中线（用户：「两个小腿的朝向有问题内八了，实际上并没有」）。
     # 标成 mode=leg 交给 Max 端做闭环；这里只负责**指出是哪两段**，不写角度。
 
-    def emit(parent_target, child_target, po, co):
+    def emit(parent_target, child_target, po, co,
+             child_override=None, desired_override=None):
         """写一行肢段：长度 = 两个关节 head 的真实距离，第 6~8 列写子关节（child head）
         在 Max 坐标系里的位置，第 9 列是 mode（普通段 = link）。
 
@@ -1867,9 +1913,12 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
         这里只给标记不给角度 —— 角度是 Max 里**摆完之后**才存在的量。
         """
         ph = heads[old_to_new[po]]
-        ch = heads[old_to_new[co]]
-        desired = ((ph[0] - ch[0]) ** 2 + (ph[1] - ch[1]) ** 2
-                   + (ph[2] - ch[2]) ** 2) ** 0.5
+        ch = child_override if child_override is not None else heads[old_to_new[co]]
+        if desired_override is not None:
+            desired = desired_override
+        else:
+            desired = ((ph[0] - ch[0]) ** 2 + (ph[1] - ch[1]) ** 2
+                       + (ph[2] - ch[2]) ** 2) ** 0.5
         if desired <= 1e-5:
             return 0
         mode = overrides.get((parent_target, child_target), "link")
@@ -1916,12 +1965,19 @@ def _limb_rows(model, scale: float, old_to_new: dict, heads: list,
         count += emit(parent_target, child_target, po, co)
 
     # ---- 躯干中轴链（Pelvis->Spine->Spine1->Spine2->Neck->Head）----
+    # 中间三段按 _center_even_segments 均匀重排；首尾两段（Pelvis->Spine、
+    # Neck->Head）不在覆盖表里，照抄 PMX 真值。
     for parent_target, child_target in center_pairs:
         po = target_to_old.get(parent_target)
         co = target_to_old.get(child_target)
         if po is None or co is None:
             continue
-        count += emit(parent_target, child_target, po, co)
+        ov = even_center.get(child_target)
+        if ov is not None:
+            count += emit(parent_target, child_target, po, co,
+                          child_override=ov[0], desired_override=ov[1])
+        else:
+            count += emit(parent_target, child_target, po, co)
 
     return lines, count
 
