@@ -813,18 +813,26 @@ def _aim_breast_bones(bone_names, bone_names_en, parents, deform, positions,
         换模型、换朝向都成立。探针里它和「最靠前 25% 均值」读到同一个点（4.55cm /
         与竖直夹 96.4°，即水平略向下），两条独立算法对撞一致才敢当判据。
 
-    只在「这根骨没有保留的后代」时动手：有后代的话 tail 已经指向子关节（真链），
-    覆盖它就是把骨骼链画错。区域太小（<min_region 点）也原样留着 —— 宁可不改，
-    也不拿三五个点编出一个方向。返回改动了哪几根（进 plan.notes，日志里留痕）。
+    只在「这根骨没有带蒙皮的后代」时动手：有带蒙皮的后代（真链）的话 tail 已指向
+    子关节，覆盖它就是把骨骼链画错。区域太小（<min_region 点，零蒙皮控制骨/tip 子骨）
+    也原样留着 —— 宁可不改，也不拿三五个点编出一个方向。返回改动了哪几根
+    （进 plan.notes，日志里留痕）。
+
+    注意一个奇形模型陷阱（瓦雷莎）：乳房变形骨 左胸上2/右胸上2 各带一个**零蒙皮** tip
+    子骨（左胸先/右胸先），原「有子骨就跳过」会把这对变形骨误伤 → tail 保持 PMX 默认
+    竖直、戳进躯干，与乳头方向差 ~43°。所以 skip 只对「子骨本身也是带蒙皮乳房骨」生效；
+    零蒙皮 tip 子骨不阻止父骨重指——它自己也会因区域太小在下面被跳过，不影响形变。
     """
     candidates = [i for i, name in enumerate(bone_names)
                   if _is_breast_bone(name, bone_names_en[i] if i < len(bone_names_en) else "")]
     if not candidates:
         return []
     has_child = [False] * len(bone_names)
-    for i, parent_index in enumerate(parents):
+    children_of: dict[int, list[int]] = {}
+    for c, parent_index in enumerate(parents):
         if 0 <= parent_index < len(has_child):
             has_child[parent_index] = True
+            children_of.setdefault(parent_index, []).append(c)
     region: dict[int, list] = {i: [] for i in candidates}
     for index, weights in enumerate(deform):
         if not weights:
@@ -836,12 +844,23 @@ def _aim_breast_bones(bone_names, bone_names_en, parents, deform, positions,
             region[owner].append(convert_vec(positions[index], scale))
     changed = []
     for i in candidates:
-        if has_child[i]:
-            continue
         pts = region.get(i) or []
-        head = heads[i]
         if len(pts) < min_region:
             continue
+        # 原「有子骨就跳过」会误伤瓦雷莎式「带零蒙皮 tip 子骨的变形骨」：它本身有蒙皮、
+        # tail 该指向乳头，却被当成真链跳过。改为：只有当「子骨里存在带蒙皮的乳房骨」
+        # （真链）时才跳过；零蒙皮 tip 子骨不阻止父骨重指到乳头。
+        if has_child[i]:
+            child_is_real_chain = any(
+                c in children_of
+                and _is_breast_bone(bone_names[c],
+                                    bone_names_en[c] if c < len(bone_names_en) else "")
+                and len(region.get(c, [])) >= min_region
+                for c in children_of.get(i, [])
+            )
+            if child_is_real_chain:
+                continue
+        head = heads[i]
         centroid = tuple(sum(p[k] for p in pts) / len(pts) for k in range(3))
         aim = centroid
         for _ in range(2):
@@ -1501,13 +1520,15 @@ def _foot_link_box(pts, ankle, ball, heelbox=None, flatten=None):
         s_max = max(r[1] for r in band)
         o_min = min(r[2] for r in band)
         o_max = max(r[2] for r in band)
-        # 「这一侧没有网格」= 鞋在这一段是**开口**的（脚口/袜口朝上），
-        # 开口不能当判据：拿它收紧会把骨头压成牙签；拿它放行又会留着穿模。
-        # 所以两个方向各自独立判定：只有「轴两侧都摸得到面」的那一段才有投票权。
+        # 取「轴两侧都摸得到面」的那一圈里、离轴最远一侧的半宽（= 这一圈脚模的实际半宽）；
+        # 所有带里取**最大**（最宽的一圈），脚盒就整圈包住脚模，而不是被「最窄一圈」钉成
+        # 薄片（#foot_style：用户要求 Foot 骨盒像 Toe0 一样包围脚模）。「两侧都有面」这条
+        # 仍保留—— 它挡掉轴偏到脚模一侧时那一圈单侧空带（空带当尺会把骨头压成牙签，也
+        # 不会把单侧宽度算成整宽）；_FOOT_BAND_MIN（≥8 个窗内顶点）再挡掉装饰边带。
         if s_min < -0.05 and s_max > 0.05:
-            tight = min(abs(s_min), abs(s_max))
-            if edge is None or tight < edge:
-                edge = tight
+            extent = max(abs(s_min), abs(s_max))
+            if edge is None or extent > edge:
+                edge = extent
         if o_min < -0.05 and o_max > 0.05:
             room = min(abs(o_min), abs(o_max))
             if vert is None or room < vert:

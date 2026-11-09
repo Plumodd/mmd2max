@@ -152,9 +152,12 @@ THIGH_KNEE_TOL_CM = 0.05
 # 踝是被「重摆」钉回 PMX 目标的，不是迭代逼近的，所以这条是真 gate 而不是锁。
 THIGH_ANKLE_TOL_CM = 0.05
 
-# 脚链（#40/#41）：压平水平轴的定义就是「骨轴与子关节夹角 29.9 度、断开 2 根」，
-# 所以 链向 只能当锁；而「盒隙 没接上=0 根」是用户看得见的东西，是真判据。
-CHAIN_BROKEN_LOCK = 2
+# 脚链（#40/#41）：旧版压平脚盒几何时把 Foot 盒压得太窄、接不上 Toe0，
+# 链向定义成「断开 2 根」，broken_roots 锁在 2。第 81 轮用户把脚盒几何改成
+# 「包围建模」(foot_w 取脚掌半宽，和 Toe0 同款)，接趾之后盒隙接上、链向连续，
+# broken_roots 实测 0 —— 这是修好的**目标态**而非缺陷。锁改成 0：链一旦再被
+# 压断（任何 >0 根）立刻 FAIL，回归护栏一条不少；但已修好的连接态不再被误判。
+CHAIN_BROKEN_LOCK = 0
 CHAIN_ANGLE_LOCKS = {"Bip001 L Foot -> Bip001 L Toe0": 29.8725,
                      "Bip001 R Foot -> Bip001 R Toe0": 29.8929}
 CHAIN_ANGLE_TOL_DEG = 0.5

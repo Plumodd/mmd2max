@@ -6,3 +6,9 @@ outputs/
 __pycache__/
 *.py[cod]
 .tmp_help/
+
+# 回归 / 构建日志（regress_*.sh 生成）
+*.log
+
+# 编辑器 / 临时备份
+*.bak*

@@ -4,6 +4,7 @@
     python tools/run_model.py "C:/Users/Administrator/Desktop/test3"
     python tools/run_model.py "D:/models/xxx" --height 160 --min-weight 0
     python tools/run_model.py "D:/models/xxx" --drop-guides   # 不导出辅助骨骼
+    python tools/run_model.py "D:/models/xxx" --physics        # 同时生成物理刚体/关节代理（默认关）
 
 它做四件事：
   1. 在给定目录里找 .pmx / .pmd（多个时报错让你指定）；
@@ -95,6 +96,7 @@ def main(argv: list[str]) -> int:
     # --drop-guides：不导出「什么都不干的辅助骨」（センター2 / WeaponL·R / 十根指先…）。
     # 默认不传 = 保持历轮行为，基线数字不变。
     drop_guides = "--drop-guides" in argv
+    physics = "--physics" in argv
     for i, item in enumerate(argv):
         if item == "--height" and i + 1 < len(argv):
             height = float(argv[i + 1])
@@ -115,7 +117,8 @@ def main(argv: list[str]) -> int:
           f"骨骼 {info['bone_count']} -> {info['kept_bone_count']}")
 
     print("[2/3] 生成 Max 装配脚本（gen-only，不会启动 Max）")
-    cmd = app_paths.obj_run_command(outdir, pmx.stem, "--shot", "--gen-only")
+    cmd = app_paths.obj_run_command(outdir, pmx.stem, "--shot", "--gen-only",
+                                   *(["--physics"] if physics else []))
     # 不 capture 子进程输出：obj_run 打的是 UTF-8 中文，而 subprocess 在 Windows 上
     # 按本地代码页(GBK)解码管道，真实踩过 UnicodeDecodeError → result.stdout 变 None
     # → write() 抛 TypeError。让子进程直接继承 stdio 既正确又能实时看到进度。

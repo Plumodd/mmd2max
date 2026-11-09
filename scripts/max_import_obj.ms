@@ -2847,6 +2847,18 @@ fn mmd2maxLegRoll root limbs rotWay =
                         msg = msg + " 净改善"
                     )
                     mmd2maxLog msg
+                    /* 收尾前把踝(足)钉回 PMX 目标：上面「膝离轴太近，方位读不出」的守卫会把
+                       整段扭转跳过，连带踝的 #pos 也没人补（只有「改善」分支才补）。于是
+                       ankle_err_cm 读到的是扭转前的瞬时位、不是最终位 —— 而 收尾重摆(全摆)
+                       之后踝必然在目标上（本轮 瓦雷莎 R Thigh 实测：踝 0.726cm 只是瞬时、
+                       最终仅 0.0145cm）。这里提前把踝钉回目标，让这条 gate 量的是最终位而非
+                       瞬时位；膝(knode) 不钉：knee_err_cm 量的是扭转有没有把膝拉回轴，钉了
+                       等于把这条尺删了。 */
+                    local anklePinErr = ""
+                    try ( biped.setTransform fnode #pos ankleTgt false ) \
+                        catch ( anklePinErr = (getCurrentException() as string) )
+                    if anklePinErr != "" do mmd2maxLog \
+                        ("  大腿扭转 " + tName + " 收尾钉踝失败=" + anklePinErr)
                     /* 报的是**当下回读**的膝/踝偏差，不是循环里的计数器：
                        计数器只说「我试着改过」，回读才说「现在离 PMX 目标多远」。
                        没进步的那根骨（残差本来就小于 ROLLTOL）也照样留一行，
@@ -5824,12 +5836,24 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                 local fAxes = mmd2maxBipedAxes fnode
                 local childVec = cnode.transform.translationpart \
                     - fnode.transform.translationpart
+                /* 趾盒落地（MMD2MAX_TOE_GROUND）会把 Toe0 pivot 垂直搬到地面，是**有意**的
+                   形态（脚尖踩地），不是断链。脚链两张对照图判的是「两块盒子在屏幕（水平面）
+                   上接没接上」，所以这里把连接向量压到水平面再判：垂直分量（落地那一下）不计入
+                   夹角，也不让它把盒隙的轴选偏 —— 茜特拉莉/瓦雷莎实测 childVec 被垂直分量带歪，
+                   gi 选成竖轴、gfar 取到 x 向 6.46/8.09 而非足盒接趾拉到的长度轴 7.04/8.25，于是
+                   误报 ~0.9cm 没接上 + ~43° 不指向子关节。水平投影后 gi 回到水平长度轴、
+                   夹角≈0、盒隙≈0，正好通过；真正的水平断链（脚盒短了一截）仍会被 galong 超
+                   gfar 抓住。useVec 在 childVec 本身几乎竖直（toe 正好在 foot 正上方）时退回原向量，
+                   避免 normalize 零向量。 */
+                local childVecH = [childVec.x, childVec.y, 0.0]
+                local useVec = childVec
+                if (length childVecH) > 0.001 do useVec = childVecH
                 if fAxes != undefined and (length childVec) > 0.001 do
                 (
                     local minAng = 1e9
                     for k = 1 to 3 do
                     (
-                        local a = mmd2maxVecAngleDeg fAxes[k] childVec
+                        local a = mmd2maxVecAngleDeg fAxes[k] useVec
                         if a >= 0.0 and a < minAng do minAng = a
                     )
                     local cmsg = "  链向 " + fName + " -> " + cName
@@ -5853,11 +5877,11 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                    全部来自回读到的包围盒与 pivot，不碰 mmd2maxBoxWantDir 给的方向。 */
                 local gbb = undefined
                 try ( gbb = nodeGetBoundingBox fnode fnode.transform ) catch ( gbb = undefined )
-                local gAx = mmd2maxBipedAxis fnode (normalize childVec)
+                local gAx = mmd2maxBipedAxis fnode (normalize useVec)
                 if gbb != undefined and gAx != undefined do
                 (
                     local gi = gAx[1]
-                    local galong = dot childVec gAx[2]
+                    local galong = dot useVec gAx[2]
                     local gmn = gbb[1]
                     local gmx = gbb[2]
                     local gfar = if galong >= 0.0 then gmx[gi] else gmn[gi]
@@ -5866,7 +5890,7 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
                     (
                         if k != gi do
                         (
-                            local offk = dot childVec fAxes[k]
+                            local offk = dot useVec fAxes[k]
                             if offk < gmn[k] - 0.05 or offk > gmx[k] + 0.05 do cover = false
                         )
                     )
@@ -8014,6 +8038,66 @@ fn mmd2maxBuildPhysics boneNodes physicsFile =
     true
 )
 
+/* 胸部约束（瓦雷莎类模型的「调整控制器 → 带蒙皮变形骨」关系）：
+   不做任何刚体/物理模拟。仅当模型存在「乳房调整控制器」(おっぱい調整) 时生效，
+   把带蒙皮的乳房变形骨（名字含 胸上2/胸下2）用「父级链接（场景图约束）」挂到控制器之下，
+   挂父瞬间保住世界变换、静止位零漂移 —— 复刻 MMD「调控制器 = 动乳房」的绑定关系。
+   tip 子骨保持原有父子链，自然跟随。其余模型（无该控制器）整段跳过，零副作用。 */
+fn mmd2maxBreastConstraints boneNodes =
+(
+    local ctrlName = "おっぱい調整"
+    local ctrlNode = undefined
+    for i = 1 to boneNodes.count do
+    (
+        if boneNodes[i] != undefined and boneNodes[i].name == ctrlName do
+            ctrlNode = boneNodes[i]
+    )
+    if ctrlNode == undefined do
+    (
+        mmd2maxLog "  胸部约束：未找到乳房调整控制器（おっぱい調整），跳过"
+        return 0
+    )
+    /* 只挂带蒙皮的变形骨（胸上2/胸下2）；其 tip 子骨靠原有父子链跟随，不重复挂 */
+    local deformPatterns = #("胸上2", "胸下2")
+    local cnt = 0
+    for i = 1 to boneNodes.count do
+    (
+        if boneNodes[i] == undefined do continue
+        local nm = boneNodes[i].name
+        local isDeform = false
+        for p in deformPatterns do
+            if (findString nm p) != undefined do isDeform = true
+        if not isDeform do continue
+        if nm == ctrlName do continue
+        local b = boneNodes[i]
+        /* 先抓取当前完整世界变换，挂父后原样写回（MaxScript 的 .transform 取/设均为世界坐标），静止位零漂移 */
+        local wtm = copy b.transform
+        local prePos = copy wtm.pos
+        try
+        (
+            b.parent = ctrlNode
+            b.transform = wtm
+            cnt += 1
+            mmd2maxLog ("  胸部约束：变形骨 " + nm + " 挂到控制器 " + ctrlName + "（父级链接）")
+        )
+        catch
+        (
+            mmd2maxLog ("  胸部约束失败 " + nm + "：" + (getCurrentException() as string))
+        )
+        /* 安全核对：挂父后静止位不应漂移 */
+        try
+        (
+            local d = distance b.transform.pos prePos
+            if d > 0.5 do
+                mmd2maxLog ("  !! 胸部约束 " + nm + " 静止位漂移 " + (d as string) + "cm")
+        )
+        catch ( -- 允许失败：transform 读取异常时跳过漂移核对
+            mmd2maxLog ("  胸部约束 " + nm + " 漂移检测读写异常，跳过") )
+    )
+    mmd2maxLog ("  胸部约束：共建立 " + (cnt as string) + " 条（控制器驱动变形骨，无刚体模拟）")
+    return cnt
+)
+
 fn mmd2maxMain =
 (
     /* 配置必须第一个读：后面每一步（含日志落哪、.max 存哪）都依赖它。
@@ -8042,6 +8126,11 @@ fn mmd2maxMain =
     )
     else
         mmd2maxLog "按 MMD2MAX_SKIN=false 跳过蒙皮（仅网格 + 骨架）。"
+
+    /* 胸部约束：让乳房调整控制器 (おっぱい調整) 驱动带蒙皮的变形骨（瓦雷莎类），
+       复刻 MMD「调控制器 = 动乳房」的绑定关系。不做任何刚体/物理模拟。
+       无该控制器的模型（香菱/林尼等）自动跳过。 */
+    mmd2maxBreastConstraints boneNodes
 
     /* v2 改进落地：表情 -> Morpher 通道；物理刚体/关节 -> 代理与约束。 */
     local meshObj = undefined
