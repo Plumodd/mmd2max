@@ -84,6 +84,11 @@ class Bone:
     fixed_axis: tuple[float, float, float] | None = None
     local_x: tuple[float, float, float] | None = None
     local_z: tuple[float, float, float] | None = None
+    # 外部親（External Parent，骨骼 flag 0x2000）：MMD 让该骨「刚体式」跟随另一根骨
+    # （位置+旋转都跟），与正常父级是两条独立跟随链。乳房「2」骨（左胸上2 等）正是
+    # 靠它跟随 おっぱい調整 控制器；本管线此前把这一列读出来就丢弃，导致 Max 侧完全
+    # 不知道这些骨要跟控制器 —— 这就是「有些骨没绑上」的根因。-1 = 无外部亲。
+    external_parent: int = -1
 
     @property
     def has_local_axis(self) -> bool:
@@ -445,8 +450,11 @@ def load_pmx(path: str | Path) -> PMXModel:
             if flags & 0x0800:
                 local_x = r.vec3()  # Local X axis.
                 local_z = r.vec3()  # Local Z axis.
+            external_parent = -1
             if flags & 0x2000:
-                r.i32()  # External parent key.
+                # 外部親キー：同一模型内即指向某根骨的序号（self-binding 的乳房「2」骨
+                # 等以控制器为外部亲）；-1 表示无。旧版直接丢弃，这里捕获下来供导出。
+                external_parent = r.i32()
             ik_target_index = -1
             ik_iterations = 0
             ik_angle_limit = 0.0
@@ -475,7 +483,7 @@ def load_pmx(path: str | Path) -> PMXModel:
                 bone_name, bone_name_en, position, parent_index, layer, flags,
                 tail_index, tail_offset, inherit_parent_index, inherit_weight,
                 ik_target_index, ik_iterations, ik_angle_limit,
-                fixed_axis, local_x, local_z,
+                fixed_axis, local_x, local_z, external_parent,
             ))
 
         bone_count = len(bones)

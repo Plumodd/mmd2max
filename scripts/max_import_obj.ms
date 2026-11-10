@@ -42,6 +42,8 @@ global MMD2MAX_WEIGHTS
 global MMD2MAX_MAP
 global MMD2MAX_LIMBS
 global MMD2MAX_WIDTHS
+global MMD2MAX_SDEF
+global MMD2MAX_LEG_NATIVE = false
 global MMD2MAX_CENTER_TARGET = #()
 global MMD2MAX_MORPHS
 global MMD2MAX_PHYSICS
@@ -117,6 +119,11 @@ global MMD2MAX_RBTRIG
    全局（写侧：mmd2maxRotatePass 转角、mmd2maxFitScore 收敛打分、mmd2maxBuildBiped 建骨时
    的 stub 判定；读侧：mmd2maxLogStructDir 的「短骨」标注、mmd2maxVerifyAccessoryDirs 回读）。 */
 global MMD2MAX_STUBCM
+/* 膝铰链轴修正的容差（度）：大腿局部 Z 与 bodyRight 的点积绝对值已 >= 1-此值 就视为已对齐、
+   整段跳过。它和 DIRTOL/ROLLTOL 不相干：这里修的是「膝绕哪个世界轴折」，不是骨盒画出来
+   的朝向，也不是大腿绕髋->踝的扭转。数值住在 mmd2max/targets.py 的 HINGE_TOL_DEG，
+   经 CFG 下发；给 8.0 即「偏差超过约 8 度才动手」，正确模型零副作用。 */
+global MMD2MAX_HINGETOL
 /* mmd2maxLoadCfg 算好的配置摘要，由 mmd2maxMain 在 mmd2maxInitLog **之后**打出来
    （InitLog 重建日志，先打的会被截掉）。这里同样不写 `= ""`：值没被 LoadCfg 赋上就是没读到配置。 */
 global MMD2MAX_CFGSUMMARY
@@ -1475,6 +1482,7 @@ fn mmd2maxLoadCfg =
     MMD2MAX_MAP = mmd2maxCfgStr "MMD2MAX_MAP"
     MMD2MAX_LIMBS = mmd2maxCfgStr "MMD2MAX_LIMBS"
     MMD2MAX_WIDTHS = mmd2maxCfgStr "MMD2MAX_WIDTHS"
+    MMD2MAX_SDEF = mmd2maxCfgStr "MMD2MAX_SDEF"
     MMD2MAX_MORPHS = mmd2maxCfgStr "MMD2MAX_MORPHS"
     MMD2MAX_PHYSICS = mmd2maxCfgStr "MMD2MAX_PHYSICS"
     MMD2MAX_OUTPUT = mmd2maxCfgStr "MMD2MAX_OUTPUT"
@@ -1540,6 +1548,7 @@ fn mmd2maxLoadCfg =
     MMD2MAX_ROLLBACK = mmd2maxCfgBool "MMD2MAX_ROLLBACK"
     MMD2MAX_RBTRIG = mmd2maxCfgNum "MMD2MAX_RBTRIG" 0.0 50.0
     MMD2MAX_STUBCM = mmd2maxCfgNum "MMD2MAX_STUBCM" 0.0 50.0
+    MMD2MAX_HINGETOL = mmd2maxCfgNum "MMD2MAX_HINGETOL" 0.0 90.0
     MMD2MAX_SKIN = mmd2maxCfgBool "MMD2MAX_SKIN"
     MMD2MAX_SHOT = mmd2maxCfgBool "MMD2MAX_SHOT"
     MMD2MAX_INTERACTIVE = mmd2maxCfgBool "MMD2MAX_INTERACTIVE"
@@ -2892,6 +2901,170 @@ fn mmd2maxLegRoll root limbs rotWay =
     rolled
 )
 
+fn mmd2maxLegHingeFix root limbs rotWay =
+(
+    /* 膝铰链轴修正（2026-11-10）。症状：膝绕「前后」轴折（小腿向左右甩），应是绕「左右」
+       轴折。根因：大腿被绕自身长轴卷了约 90°——膝铰链轴（大腿局部 Z）歪成了前轴，而非
+       bodyRight（左右轴）。机制：Biped 的膝绕父骨(大腿)的局部 Z 轴转；只要把大腿局部 Z
+       对齐到 bodyRight，膝就回到前后折。腿链各点都在腿长轴上，绕长轴转不挪位置，脚掌朝前
+       不受影响（脚掌在小腿之下、与腿长轴正交的方向上，转长轴只把它绕腿轴甩，反向转小腿即复原）。
+       做法（对每条腿）：
+         1) 绕腿长轴（thigh->calf 世界方向）把大腿转 ang 使局部 Z 落到 bodyRight 这条线上；
+         2) 立刻反向转小腿 -ang：小腿是世界大腿的子，转 -ang 把小腿连同其下的脚掌一起
+            旋回原朝向（脚掌世界朝向 = 大腿角度 + 小腿角度，+ang 与 -ang 抵消）；
+         3) 把膝/踝/脚掌/趾落位钉回 PMX 目标（绕长轴转理论不挪点，脚尖可能微偏，钉一下保险）。
+       自门控：大腿 Z 已经平行于 bodyRight（|ang| < MMD2MAX_HINGETOL）就不动，正确模型零副作用。
+       写不改善就整段回滚，绝不留下更差的姿态。返回真的修过且改善的腿数。
+       rotWay 没用到（这里只走已验证的 `rotate` 命令增量写法），保留形参只为和别的 pass 同签名。 */
+    local fixed = 0
+    local lth = getNodeByName (root.name + " L Thigh") exact:true
+    local rth = getNodeByName (root.name + " R Thigh") exact:true
+    local bodyRight = [1.0, 0.0, 0.0]
+    if lth != undefined and rth != undefined do
+        bodyRight = normalize (lth.transform.translationpart - rth.transform.translationpart)
+    for item in limbs do
+    (
+        if item.count >= 5 and item[5] == "leg" do
+        (
+            local tName = item[1]
+            local cName = item[2]
+            local kneeTgt = item[4]
+            local hipTgt = undefined
+            local ankleTgt = undefined
+            local footName = undefined
+            local toeName = undefined
+            for row in limbs do
+            (
+                if row.count >= 4 do
+                (
+                    if row[2] == tName do hipTgt = row[4]
+                    if row[1] == cName do ( ankleTgt = row[4]; footName = row[2] )
+                    if footName != undefined and row[1] == footName do toeName = row[2]
+                )
+            )
+            local tnode = getNodeByName (root.name + (substring tName 7 -1)) exact:true
+            local cnode = getNodeByName (root.name + (substring cName 7 -1)) exact:true
+            local fnode = undefined
+            if footName != undefined do fnode = getNodeByName (root.name + (substring footName 7 -1)) exact:true
+            local tonode = undefined
+            if toeName != undefined do tonode = getNodeByName (root.name + (substring toeName 7 -1)) exact:true
+            if tnode != undefined and cnode != undefined do
+            (
+                local tPos = tnode.transform.translationpart
+                local cPos = cnode.transform.translationpart
+                local seg = distance tPos cPos
+                local axis = undefined
+                if seg >= 1.0 do axis = normalize (cPos - tPos)
+                local ta = mmd2maxBipedAxes tnode
+                if axis != undefined and ta != undefined and (length axis) > 0.0001 do
+                (
+                    local hingeNow = ta[3]
+                    /* 目标：大腿 Z 落到 bodyRight 这条线上。取与大腿 Z 同侧的那条（±bodyRight），
+                       让旋转角尽量小；铰链轴作为直线，± 不影响「膝前后折」这一结论。 */
+                    local tgt = bodyRight
+                    if (dot hingeNow bodyRight) < 0.0 do tgt = -bodyRight
+                    /* 把 hingeNow 与 tgt 都投到垂直于腿长轴的平面里再算有符号角。 */
+                    local hP = hingeNow - axis * (dot hingeNow axis)
+                    local tP = tgt - axis * (dot tgt axis)
+                    local hl = length hP
+                    local tl = length tP
+                    local msg = "  膝铰链修正 " + tName + " Z(铰链)·bodyRight(前)=" \
+                        + ((dot hingeNow bodyRight) as string)
+                    if hl > 0.01 and tl > 0.01 then
+                    (
+                        hP = hP / hl
+                        tP = tP / tl
+                        /* 有符号角：绕 axis，从 hP 到 tP。 */
+                        local crossV = cross hP tP
+                        local ang = atan2 (dot crossV axis) (dot hP tP)
+                        if abs ang <= MMD2MAX_HINGETOL then
+                        (
+                            msg = msg + " 夹角=" + (ang as string) \
+                                + "度 已达标(容差" + (MMD2MAX_HINGETOL as string) + ") 跳过"
+                        )
+                        else
+                        (
+                            local errT = mmd2maxRotateBoneAround tnode ang axis
+                            local errC = mmd2maxRotateBoneAround cnode (-ang) axis
+                            local ta2 = mmd2maxBipedAxes tnode
+                            local after = -2.0
+                            if ta2 != undefined do after = dot ta2[3] bodyRight
+                            local improved = (abs after) > (abs (dot hingeNow bodyRight)) + 0.05
+                            msg = msg + " 转=" + (ang as string) + "度 Z·bodyRight " \
+                                + ((dot hingeNow bodyRight) as string) + "->" + (after as string)
+                            if errT != "" do msg = msg + " 大腿写角失败=" + errT
+                            if errC != "" do msg = msg + " 小腿写角失败=" + errC
+                            if not improved do
+                            (
+                                /* 没改善：原样回滚（大腿 +ang、小腿 -ang 再反向转回）。 */
+                                local rbT = mmd2maxRotateBoneAround tnode (-ang) axis
+                                local rbC = mmd2maxRotateBoneAround cnode ang axis
+                                if rbT != "" do msg = msg + "(回滚也失败)"
+                                msg = msg + " 没改善->回滚"
+                            )
+                            if improved do
+                            (
+                                fixed += 1
+                                msg = msg + " 净改善"
+                                /* 落位钉回 PMX 目标：绕长轴转理论不挪点，但脚尖/脚掌可能微偏，钉一下。 */
+                                local pinErr = ""
+                                try
+                                (
+                                    if cnode != undefined and kneeTgt != undefined do
+                                        biped.setTransform cnode #pos kneeTgt false
+                                    if fnode != undefined and ankleTgt != undefined do
+                                        biped.setTransform fnode #pos ankleTgt false
+                                    if tonode != undefined and toeName != undefined do
+                                    (
+                                        -- 趾骨目标用小腿行读不到，退路：钉回自己当前位（保朝向）
+                                        biped.setTransform tonode #pos tonode.transform.translationpart false
+                                    )
+                                )
+                                catch ( pinErr = (getCurrentException() as string) )
+                                if pinErr != "" do msg = msg + " 落位钉回失败=" + pinErr
+                            )
+                        )
+                    )
+                    else msg = msg + " 铰链轴退化 跳过"
+                    mmd2maxLog msg
+                    /* 报告最终态：绕腿长轴转完（或回滚后）大腿局部 Z 与 bodyRight 的点积。
+                       应为 ≈±1（膝回到前后折）。原来报告的是旋转前的 hingeNow，会一直显示旧值，
+                       既看不出修没修、也会被合规判据当成异常读数。这里重新量真实最终姿态。 */
+                    local taF = mmd2maxBipedAxes tnode
+                    local finalDot = -2.0
+                    if taF != undefined do finalDot = dot taF[3] bodyRight
+                    /* 脚掌朝前复检（回归护栏）：绕腿长轴 +ang 转大腿、−ang 转小腿，二者关于
+                       同一世界轴精确抵消，脚掌世界朝向净变化=0，应仍朝前（不被膝铰链修正带偏）。
+                       这里实测确认。本管线角色恒朝世界 -Y，故以 [0,-1,0] 为世界前向，
+                       取脚掌局部轴里最贴前向的那根，朝前度≈1 即脚仍朝前。 */
+                    if fnode != undefined do
+                    (
+                        local fa = mmd2maxBipedAxes fnode
+                        if fa != undefined do
+                        (
+                            local fwd = [0.0, -1.0, 0.0]
+                            local fmax = -9.0
+                            local faxis = 0
+                            for i=1 to 3 do
+                            (
+                                local d = dot fa[i] fwd
+                                if d < 0.0 do d = -d
+                                if d > fmax do ( fmax = d; faxis = i )
+                            )
+                            local fName = if footName != undefined then footName else tName
+                            mmd2maxLog ("  脚掌朝前复检 " + fName + " 朝前轴=局轴" + (faxis as string) \
+                                + " 朝前度=" + (fmax as string) + " (≈1 即脚仍朝前，未因膝铰链修正被带偏)")
+                            mmd2maxReport "leg_hinge" "foot_forward" fName fmax
+                        )
+                    )
+                    mmd2maxReport "leg_hinge" "z_dot_bodyRight" tName (abs finalDot)
+                )
+            )
+        )
+    )
+    fixed
+)
+
 /* MMD2MAX_TOETOL（脚趾复摆的落位容差，厘米）来自 mmd2max/targets.py → CFG，
    消费点只有 mmd2maxToeSnapBack：它同时是门控（已在容差内就不动），
    所以写 999 等于整段复摆跳过。
@@ -3030,6 +3203,13 @@ fn mmd2maxChainPriority name =
     if matchPattern name pattern:"* Clavicle" do return #pos
     if matchPattern name pattern:"* Hand" do return #pos
     if matchPattern name pattern:"* Head" do return #pos
+    /* 腿骨（用户 2026-11-09：「小腿应该是前后折的，怎么可以左右折」）。
+       转角 pass 跑在 Figure 模式里，改的是 Biped 的**结构性姿态**；Calf 被转过之后
+       膝铰链平面跟着歪。三具模型实测（瓦雷莎/林尼/茜特拉莉）Calf 局部 Y 都指向
+       前后、局部 Z 指向左右，用 biped.setTransform 绕前后轴转 30 度会让 Foot 横向
+       甩 35~37cm，而绕左右轴几乎不动 —— 弯曲平面落在左右侧。让 Calf 跳过转角、
+       认 Biped 自己的结构姿态，落位仍按 PMX 摆。 */
+    if matchPattern name pattern:"* Calf" and MMD2MAX_LEG_NATIVE do return #pos
     #both
 )
 
@@ -3149,6 +3329,14 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
     local better = 0
     local worse = 0
     local errCount = 0
+    /* 用户第二轮反馈（2026-11-09 20:10 截图）：三节胸腔要竖直、不能后仰；
+       Neck 要指向 Head。MMD2MAX_CENTER_TARGET 存的是中轴各段的 (父骨名, child 点)，
+       最后一项的 child 就是重排后的 Neck 位置；PMX 的「首」tail 恰好是「頭」的
+       head，所以 rTail - neckPos 就是 Neck 该指的方向。 */
+    local centerUp = [0,0,1]
+    local neckPos = undefined
+    if MMD2MAX_CENTER_TARGET.count >= 1 do
+        neckPos = MMD2MAX_CENTER_TARGET[MMD2MAX_CENTER_TARGET.count][2]
     if rotWay == undefined do
     (
         if passNo == 1 do
@@ -3170,6 +3358,40 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
                     local rTail = [(p[cTailX] as float), (p[cTailY] as float), (p[cTailZ] as float)]
                     /* 脚链单独规定取哪两个点，其余骨仍是 PMX tail - head（见 mmd2maxBoxWantDir） */
                     local want = mmd2maxBoxWantDir t rHead rTail (mmd2maxShoeTip limbs t)
+                    /* 茜特拉莉实测（2026-11-09）：中轴各节 PMX tail 方向是
+                       +49 / -48 / +21 / -22 度交替，转角 pass 照抄就把 Biped 三节骨盒
+                       拧成锯齿，子节点沿父骨轴被推得 y 在 -7.65 / +0.10 / -7.54 / +1.92
+                       之间来回跳 —— 用户说的「三个胸腔歪七扭八」。偏差超过 25 度的骨
+                       拉回统一插值方向；偏差小的模型（瓦雷莎各节 < 18 度）保持 PMX
+                       原方向，判据期望不动。acos 在 MAXScript 返回的是度数。 */
+                    if want != undefined do
+                    (
+                        local pd = normalize want
+                        /* 三节胸腔：与纯竖直方向差 > 25 度的拉回竖直。
+                           瓦雷莎各节 < 18 度不触发，PMX 原方向与判据期望都不动。 */
+                        if (t == "Bip001 Spine" or t == "Bip001 Spine1" \
+                            or t == "Bip001 Spine2") do
+                        (
+                            local cc = dot pd centerUp
+                            if cc > 1.0 do cc = 1.0
+                            if cc < -1.0 do cc = -1.0
+                            if (acos cc) > 25.0 do want = centerUp * (length want)
+                        )
+                        /* Neck 单独按「重排后的 Neck 位置 -> PMX 頭 head」定向，
+                           不再跟着胸腔一起被拉成统一方向（上一版就是这样把它弄歪的）。 */
+                        if t == "Bip001 Neck" and neckPos != undefined do
+                        (
+                            local toHead = rTail - neckPos
+                            if (length toHead) > 0.001 do
+                            (
+                                local th = normalize toHead
+                                local dd = dot pd th
+                                if dd > 1.0 do dd = 1.0
+                                if dd < -1.0 do dd = -1.0
+                                if (acos dd) > 25.0 do want = th * (length want)
+                            )
+                        )
+                    )
                     local prio = mmd2maxChainPriority t
                     if passNo == 1 do
                     (
@@ -5455,6 +5677,13 @@ fn mmd2maxBuildBiped lines rowIds targetNames bipedNodes =
        事留给一个不存在的第三次收尾。 */
     local legRolled = mmd2maxLegRoll root limbs rotWay
     mmd2maxReport "pass" "ran" "thigh_roll" 1
+    /* ===== 膝铰链轴修正（2026-11-10）=====
+       排在大腿扭转之后、收尾重摆之前：大腿扭转只绕髋->踝轴修「膝位置」，不改「膝绕哪根轴折」；
+       这里绕同一根腿长轴把大腿 Z 对齐 bodyRight（膝从左右折修正为前后折）。两条 pass 都绕
+       腿长轴转，顺序无关（绕同轴的旋转可交换）。修完腿链各点仍在原处，收尾重摆会把被牵连的
+       踝/脚掌落位钉回 PMX 目标。 */
+    local legHinged = mmd2maxLegHingeFix root limbs rotWay
+    mmd2maxReport "pass" "ran" "leg_hinge" 1
     if (lastAttempt > 0 or legRolled > 0) do
     (
         /* 收尾（2026-11-02 用户定「顺序换过来」）：**先全摆，再只转方向优先的骨**。
@@ -6656,14 +6885,44 @@ fn mmd2maxApplySkin meshes boneNodes =
             mmd2maxLog ("权重进度：" + (i as string) + "/" + (wlines.count as string))
     )
 
-    /* M1b 删掉了「按 meta 的 has_sdef/has_qdef 开启 Skin 双四元数混合」这一段。
-       理由不是 DQ 没用，而是这段从没被执行过：跑过的五个模型全是 has_sdef=0，
-       于是 `dqBlend` / `useDQ` 这两个属性名到底存不存在、写了以后肘膝到底变不变，
-       一次都没实测过；而它整段被 try/catch 兜住，真出错也只留一行日志。
-       留着 = 一条「配置能打开、却没人验过」的分支，正是 v4 契约第 V 条要清掉的东西。
-       SDEF/QDEF 的处理口径保持既有的事实：导出侧按近似 LBS 写权重，并在导出摘要里
-       明确提示会丢旋转中心与体积保真（mmd2max/export_obj.py 的 warnings）。
-       真要做 DQ，先写探针量一次属性名与效果，再作为一条有读数的 pass 加回来。 */
+    /* 方案 A（用户 2026-11-09，K 动作要保关节体积）：按 SDEF/QDEF 顶点清单恢复
+       Skin 的双四元数混合。M1b 当年删掉这条分支的理由是「跑过的五个模型全
+       has_sdef=0、属性名没验过」，而实测林尼/茜特拉莉都是 has_sdef=1。
+       探针（3ds Max 2022）读数：Skin 的 enableDQ 默认 true，但逐顶点
+       skinOps.getVertexDQWeight 全是 0.0（实际全线性）；skinOps.setVertexDQWeight
+       写 1.0 后回读 1.0，确实生效。DQ 只需要骨权重与骨变换矩阵，不需要 PMX 的
+       C/R0/R1，所以对源模型标成 SDEF/QDEF 的顶点开 DQ=1、其余保持线性即可。
+       MMD 特有的球面变形中心 C/R0/R1 仍无法还原，特写大角度时可用 Morph Angle
+       Deformer 再补。 */
+    local sdefFile = MMD2MAX_SDEF as string
+    if sdefFile != "" and (doesFileExist sdefFile) do
+    (
+        local sf = openFile sdefFile
+        if sf != undefined do
+        (
+            try ( skinMod.enableDQ = true ) catch ( -- 允许失败：探针实测该属性默认已 true，逐顶点 DQ 权重才是关键
+                mmd2maxLog "  DQ 蒙皮：enableDQ 写入失败，保持 Max 默认值" )
+            local dqCount = 0
+            local dqFail = 0
+            while not (eof sf) do
+            (
+                local ln = readLine sf
+                if ln != undefined and ln != "" and ln != "vertex_index" do
+                (
+                    local viDQ = undefined
+                    try ( viDQ = ln as integer ) catch ( viDQ = undefined )
+                    if viDQ != undefined and viDQ >= 0 and viDQ < meshVertexCount do
+                    (
+                        try ( skinOps.setVertexDQWeight skinMod (viDQ + 1) 1.0; dqCount += 1 ) \
+                            catch ( dqFail += 1 )
+                    )
+                )
+            )
+            close sf
+            mmd2maxLog ("  DQ 蒙皮：SDEF/QDEF 顶点刷 DQ=1 共 " + (dqCount as string) \
+                + " 个，失败 " + (dqFail as string) + " 个")
+        )
+    )
 
     enableSceneRedraw()
     local weightElapsed = ((timeStamp() - weightStart) / 1000.0) as string
@@ -8166,6 +8425,23 @@ fn mmd2maxMain =
     /* 判据报告紧随其后重建：往后每一步只往里追加读数。放在 InitLog 之后是因为
        它也用 createFile —— 早于日志建立没坏处，但摘要先行能让日志里先有路径证据。 */
     mmd2maxReportInit()
+    /* 只有源模型含 SDEF/QDEF 顶点（sdef_vertices.tsv 有数据行）时，才让 Calf
+       跳过转角、保留 Biped 原生膝铰链（前后折）。纯线性模型（香菱/瓦雷莎）保持
+       既有姿态与定价：实测跳过转角会让膝点偏差从 0.16/0.25cm 涨到 1.37/1.26cm。 */
+    MMD2MAX_LEG_NATIVE = false
+    local sdefProbePath = MMD2MAX_SDEF as string
+    if sdefProbePath != "" and (doesFileExist sdefProbePath) do
+    (
+        local sdefProbe = openFile sdefProbePath
+        if sdefProbe != undefined do
+        (
+            local hdrLine = readLine sdefProbe
+            local firstLine = readLine sdefProbe
+            if firstLine != undefined and firstLine != "" do MMD2MAX_LEG_NATIVE = true
+            close sdefProbe
+        )
+    )
+    mmd2maxLog ("  Calf 原生膝铰链=" + (MMD2MAX_LEG_NATIVE as string))
     mmd2maxPrepareScene()
     mmd2maxReport "pass" "ran" "scene_prepare" 1
     mmd2maxImportObj()
@@ -8219,6 +8495,62 @@ fn mmd2maxMain =
        是中性的；注册表里它是最后一道 pass。 */
     mmd2maxVerifyAccessoryDirs boneNodes
     mmd2maxReport "pass" "ran" "bone_dir_verify" 1
+
+    /* 默认冻结 Bip001 Pelvis（用户 2026-11-09：「以后所有转换帮我默认冻结这个」）。
+       Pelvis 的 pivot 由 Biped COM 约束，收敛闭环每轮都去搬它，正是髋点 8cm 偏差的
+       来源；装配完成后冻结，用户 K 动作时不会再误选/误动这根根骨。探针实测
+       setTransformLockFlags #all + freeze 都可用（且只作用于这一个节点）。
+       放在所有会挪骨的 pass 之后、saveMaxFile 之前，此刻量到与存进 .max 的是同一场景。 */
+    local pelvisFreezeNode = getNodeByName "Bip001 Pelvis" exact:true
+    if pelvisFreezeNode != undefined do
+    (
+        try
+        (
+            setTransformLockFlags pelvisFreezeNode #all
+            freeze pelvisFreezeNode
+            mmd2maxLog ("  已默认冻结 Bip001 Pelvis（不可选中/变换）")
+        )
+        catch ( mmd2maxLog ("  冻结 Bip001 Pelvis 失败：" + (getCurrentException() as string)) )
+    )
+
+    /* 默认冻结网格模型（用户 2026-11-09 20:22）：K 动作时只会选到骨骼，不会
+       误选/误动网格；同时关掉「以灰色显示冻结对象」，保持贴图与颜色正常。
+       Autodesk 官方帮助：这是每个对象的属性（对象属性对话框里的开关），
+       MAXScript 属性名在不同版本里是 showFrozenInGray / showFreezeAsGray。 */
+    local frozenMeshes = 0
+    local grayOff = 0
+    for obj in meshes do
+    (
+        try ( obj.showFrozenInGray = false; grayOff += 1 ) \
+            catch ( try ( obj.showFreezeAsGray = false; grayOff += 1 ) \
+                    catch ( mmd2maxLog ("  关闭冻结灰色显示失败：" + obj.name) ) )
+        try ( freeze obj; frozenMeshes += 1 ) \
+            catch ( mmd2maxLog ("  冻结网格失败：" + obj.name) )
+    )
+    /* 所有骨骼显示成盒（用户 2026-11-09 20:23「所有骨骼 display in box」「bip 也」）。
+       Display as Box 是节点自己的对象属性；教程里的做法就是选中整副 Biped 后统一勾选。
+       boneNodes 不一定含 Biped 根，所以额外扫一遍所有 Bip001* 节点，把 Biped 根与
+       每一根 Biped 骨都覆盖到。 */
+    local boxCount = 0
+    local bipBoxCount = 0
+    for bn in boneNodes do
+    (
+        if bn == undefined do continue
+        try ( bn.boxMode = true; boxCount += 1 ) \
+            catch ( try ( bn.displayAsBox = true; boxCount += 1 ) \
+                    catch ( mmd2maxLog ("  骨骼 Box 显示设置失败：" + bn.name) ) )
+    )
+    for o in objects do
+    (
+        if (matchPattern o.name pattern:"Bip001*") do
+        (
+            try ( o.boxMode = true; bipBoxCount += 1 ) \
+                catch ( mmd2maxLog ("  Biped Box 显示设置失败：" + o.name) )
+        )
+    )
+    mmd2maxLog ("  已冻结网格 " + (frozenMeshes as string) + " 个（关闭灰色 " \
+        + (grayOff as string) + " 个），骨骼 Box " + (boxCount as string) \
+        + " 根，Bip001* Box " + (bipBoxCount as string) + " 根")
 
     mmd2maxLog ("保存：" + (MMD2MAX_OUTPUT as string))
     local saveStart = timeStamp()

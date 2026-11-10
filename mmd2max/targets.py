@@ -25,6 +25,12 @@ DIR_TOL_DEG = 3.0
 # 同时是「整段不转腿」的回滚开关：把它改成 999 ⇒ 每根都在容差内被跳过。
 ROLL_TOL_DEG = 1.0
 
+# 膝铰链轴修正容差（度）。只有 mmd2maxLegHingeFix 消费：大腿局部 Z 与 bodyRight 的点积
+# 绝对值已 >= 1-此值（即膝铰链轴已经基本平行于左右轴）就视为对齐、整段跳过，正确模型零副作用。
+# 给 8.0 即「偏差超过约 8 度才动手」。它和 ROLL_TOL_DEG（大腿绕髋→踝扭转）不相干：这里修的是
+# 「膝绕哪个世界轴折」（左右轴=前后折、前后轴=左右折），不是膝的扭转位置。
+HINGE_TOL_DEG = 8.0
+
 # 段校验的容差（厘米）：**只当尺、不进 CFG** —— Max 那边不拿它做门控。0.05 是第十二轮
 # 以来一直在用的口径（`段校验 … 误差 ≤0.05`），比 pivot 回读噪声（~4e-06）大三个数量级，
 # 比人眼能看出的错位（~0.3cm）小。
@@ -243,6 +249,7 @@ TARGETS: dict[str, tuple[float | bool, str, float, float]] = {
     "MMD2MAX_ROLLBACK":   (ROLLBACK,     "bool", 0.0,    0.0),
     "MMD2MAX_RBTRIG":     (RB_TRIG_CM,   "cm",   0.0,   50.0),
     "MMD2MAX_STUBCM":     (STUB_CM,      "cm",   0.0,   50.0),
+    "MMD2MAX_HINGETOL":   (HINGE_TOL_DEG, "deg", 0.0,   90.0),
 }
 
 

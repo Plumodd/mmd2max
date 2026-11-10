@@ -1865,19 +1865,30 @@ def _center_even_segments(center_present, target_to_old, old_to_new, heads):
 
     a = head_of("Bip001 Spine")
     b = head_of("Bip001 Neck")
+    lt = head_of("Bip001 L Thigh")
+    rt = head_of("Bip001 R Thigh")
     if a is None or b is None:
         return {}
-    delta = [b[k] - a[k] for k in range(3)]
-    length = sum(x * x for x in delta) ** 0.5
-    if length < 1e-4:
+    # Bip001 的水平中点 = 左右大腿根的中点（Max 侧 mmd2maxHipAnchor / COM 锚点
+    # 用的正是这两个点）。用户 2026-11-09 第二轮反馈：Spine 必须从 Bip001 的
+    # 水平中点正上方起来，三节胸腔要竖直、不能沿 PMX 的斜线后仰。
+    if lt is not None and rt is not None:
+        hip = tuple((lt[k] + rt[k]) * 0.5 for k in range(3))
+    else:
+        hip = head_of("Bip001 Pelvis")
+        if hip is None:
+            hip = a
+    z0, z1 = a[2], b[2]
+    if z1 - z0 < 1e-4:
         return {}
-    unit = [x / length for x in delta]
-    seg = length / 3.0
-    out = {}
+    seg = (z1 - z0) / 3.0
+    x, y = hip[0], hip[1]
+    spine_pos = (x, y, z0)
+    pel_len = sum((hip[k] - spine_pos[k]) ** 2 for k in range(3)) ** 0.5
+    out = {"Bip001 Spine": (spine_pos, pel_len)}
     for i, target in enumerate(("Bip001 Spine1", "Bip001 Spine2", "Bip001 Neck"),
                                start=1):
-        point = tuple(a[k] + unit[k] * seg * i for k in range(3))
-        out[target] = (point, seg)
+        out[target] = ((x, y, z0 + seg * i), seg)
     return out
 
 
@@ -2456,10 +2467,14 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
                 humanoid_only=humanoid_only, filter_useless=filter_useless,
                 accessory_parent=accessory_parent, keep_guides=keep_guides)
     warnings = plan.warnings
-    warnings.extend(model.warnings)
+    # pmx.py 里那两条 SDEF/QDEF 警告是「按近似 LBS」时代的口径（该文件有用户未提交的
+    # 半成品，不动它）；装配侧现已按顶点恢复 DQ 蒙皮，这里换掉旧说法，避免同一份
+    # 摘要里出现两套互相矛盾的结论。其余模型级警告照常保留。
+    warnings.extend(w for w in model.warnings
+                    if "SDEF" not in w and "QDEF" not in w)
     if "SDEF" in model.deform_types or "QDEF" in model.deform_types:
-        warnings.append("已按近似 LBS 处理 SDEF/QDEF：旋转中心与体积保真会丢失，"
-                        "仅适合近似静态姿态。")
+        warnings.append("已输出 SDEF/QDEF 顶点清单，Max 侧按 DQ 蒙皮混合；"
+                        "MMD 特有的球面旋转中心 C/R0/R1 仍无法还原。")
 
     positions = [v.position for v in model.vertices]
     normals = [v.normal for v in model.vertices]
@@ -2900,21 +2915,33 @@ def export(source: Path, outdir: Path, plan: Plan, obj_y_up: bool = True) -> dic
             warnings.append(f"{empty} 个顶点导出为空权重行（兜底后仍无法映射）。")
             raise PMXError(f"导出发现 {empty} 个空权重顶点，已中止以避免静默丢失权重。")
 
+    # ---- SDEF/QDEF 顶点清单：装配侧据此给 Skin 刷 DQ 蒙皮权重 ----
+    # 3ds Max 的 Skin 有 enableDQ 开关（默认 true），但逐顶点 DQ 权重默认全 0，
+    # 于是实际仍是线性混合。DQ 只需要骨权重与骨变换矩阵，不需要 PMX 的 C/R0/R1，
+    # 所以把源模型标成 SDEF/QDEF 的顶点交给 Max，在这些关节用 DQ 混合、其余保持线性。
+    # 顶点经过紧凑化，序号要按 vert_remap 从 PMX 原序映射到导出序。
+    sdef_path = outdir / f"{source.stem}_sdef.tsv"
+    with sdef_path.open("w", encoding="utf-8") as stream:
+        stream.write("vertex_index\n")
+        remap = plan.vert_remap
+        for old_i, vertex in enumerate(model.vertices):
+            if getattr(vertex, "deform_type", "") not in ("SDEF", "QDEF"):
+                continue
+            new_i = remap[old_i] if 0 <= old_i < len(remap) else old_i
+            if new_i >= 0:
+                stream.write(f"{new_i}\n")
+
     # ---- 元数据（装配口径见 MMD2MAX.CFG：obj_run.py 按这份 meta 生成）----
     meta_path = outdir / f"{source.stem}_meta.tsv"
     _write_lines(meta_path, plan.meta_lines)
     if "SDEF" in model.deform_types or "QDEF" in model.deform_types:
-        # 诚实提示：Max 端那段「按 has_sdef 开双四元数混合」在 M1b 删掉了 —— 跑过的
-        # 五个模型全是 has_sdef=0，那段从没执行过，留着只是看着安心。真遇到 SDEF 模型
-        # 时这句是唯一会说「形变口径和源文件不一样」的地方，别把它删了。
-        # #119 之后这两行 meta 不再是死数据：它们进定价指纹（`verdicts.export_config`
-        # 的 `dq=` 那一维），所以含 SDEF 的模型**不会**继承线性混合那两组的锁 ——
-        # 要么整片退成 report（没被定价过的模型），要么当场中止（同网格但配置没定价）。
+        # 装配侧已按顶点恢复 DQ（见 max_import_obj.ms 的 mmd2maxApplySkin）；
+        # meta 的 has_sdef / has_qdef 仍进定价指纹（verdicts.export_config 的 dq= 那一维），
+        # 含 SDEF 的模型不会借用纯线性模型那两组的锁。
         kinds = "/".join(k for k in ("SDEF", "QDEF") if k in model.deform_types)
-        print(f"  [提示] 源模型含 {kinds} 骨，但 Max 端按普通线性混合装配（双四元数分支已在 M1b 删除）；"
-              "这一轮的形变口径由 meta 的 has_sdef / has_qdef 进定价指纹（verdicts.export_config 的 dq= 那一维），"
-              "而「源含 DQ + 线性装配」这一组从没实跑过定价 —— 要么整片退成 report，要么当场中止，"
-              "不会借用线性模型那两组的锁。要判 DQ 模型的形变质量，先在这台 Max 上把双四元数装回来并实跑定价。")
+        print(f"  [提示] 源模型含 {kinds} 顶点：已输出 sdef_vertices.tsv，"
+              "Max 侧按这些顶点刷 DQ 蒙皮以保住弯肘/拧腕体积；"
+              "meta 的 has_sdef / has_qdef 仍进 dq= 定价指纹。")
 
     # ---- 材质：只交 .mtl，不再另出清单 ----
     # 以前这里还写一份 <name>_materials.tsv（alpha / spec / sphere / draw_flags），

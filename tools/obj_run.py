@@ -203,6 +203,7 @@ def _ascii_inputs(base: Path, stem: str, physics: bool) -> dict:
         "widths": (base / (stem + "_widths.tsv"), base / "widths.tsv"),
         "morphs": (base / (stem + "_morphs.tsv"), base / "morphs.tsv"),
         "physics": (base / (stem + "_physics.tsv"), base / "physics.tsv"),
+        "sdef": (base / (stem + "_sdef.tsv"), base / "sdef_vertices.tsv"),
     }
     out = {}
     for key, (src, dst) in mapping.items():
@@ -283,6 +284,7 @@ CFG_KEYS = (
     # 就永远没法验收，那是「绿日志 + 没证据」，正是本项目反复踩的那类事故。
     "MMD2MAX_VERDICTS", "MMD2MAX_REPORT",
     "MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_LIMBS", "MMD2MAX_WIDTHS",
+    "MMD2MAX_SDEF",
     "MMD2MAX_SPINE_LINKS", "MMD2MAX_FINGERS", "MMD2MAX_FINGER_LINKS",
     "MMD2MAX_FOOTBOXFLAT",
     # 两张特写的取景框：以前这里是 .ms 里的「场景包围盒 ±10cm 与 高度 × 猜的比例」——
@@ -312,6 +314,7 @@ CFG_KEYS = (
 # 取景框那 12 条是「允许空的数值键」：模型里认不出胸骨 / 没有颈链时导出量不出框，
 # Max 那侧退回旧的场景包围盒带（mmd2maxCfgNumOpt 空串 → undefined）。
 CFG_EMPTY_OK = ("MMD2MAX_MORPHS", "MMD2MAX_PHYSICS", "MMD2MAX_WIDTHS",
+                "MMD2MAX_SDEF",
                 *(key for prefix in FRAMINGS for key in framing_cfg_keys(prefix)))
 
 # meta 里装配侧必须拿到的键 -> CFG 里的键（键名 = MAXScript 全局名，两边同一套词）。
@@ -390,6 +393,7 @@ def build_cfg(base: Path, stem: str, vertex_count: int, skin: bool = True,
         "MMD2MAX_PHYSICS": str(inputs["physics"]),
         "MMD2MAX_LIMBS": str(inputs["limbs"]),
         "MMD2MAX_WIDTHS": str(inputs["widths"]),
+        "MMD2MAX_SDEF": str(inputs["sdef"]),
         # 凡是从 meta 搬进 CFG 的键都只有 META_TO_CFG 这一处来历（脊柱节数、手指、脚盒轴、
         # 两张特写的取景框…）。以前这里是逐行手写的，于是 #71 加颈部那六条时 CFG_KEYS 长了、
         # 这里没长 —— 结尾那条自查会抓，但抓在「装配已经跑到一半」的地方；从表里派生就不是
