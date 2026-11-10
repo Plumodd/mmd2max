@@ -8435,8 +8435,14 @@ fn mmd2maxMain =
         local sdefProbe = openFile sdefProbePath
         if sdefProbe != undefined do
         (
-            local hdrLine = readLine sdefProbe
-            local firstLine = readLine sdefProbe
+            /* 这台 Max 的 readLine 在文件结尾会抛 "Read past end of file"（不是返回
+               undefined），所以表头之下没有数据行的文件（纯线性模型，零 SDEF 顶点）
+               第二句 readLine 会直接炸。用 try/catch 兜底成 undefined：有数据行才把
+               Calf 设回 Biped 原生膝铰链，无数据行（firstLine=undefined）保持 false。 */
+            local hdrLine = undefined
+            local firstLine = undefined
+            try ( hdrLine = readLine sdefProbe ) catch ( hdrLine = undefined )
+            try ( firstLine = readLine sdefProbe ) catch ( firstLine = undefined )
             if firstLine != undefined and firstLine != "" do MMD2MAX_LEG_NATIVE = true
             close sdefProbe
         )
