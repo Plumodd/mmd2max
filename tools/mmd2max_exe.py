@@ -31,7 +31,7 @@ USAGE = "\n".join([
     "mmd2max —— PMX → 3ds Max 2022",
     "",
     "  (无参数) / --gui [pmx]                  图形界面",
-    "  --model <目录|.pmx> [--drop-guides] [--height N] [--min-weight N]",
+    "  --model <目录|.pmx> [--drop-guides] [--height N] [--min-weight N] [--clavicle-trim N]",
     "                                        导出 OBJ 与数据表（+ 生成装配脚本）",
     "  --obj-run <obj目录> <模型名> [--no-skin] [--physics] [--shot] [--manual] [--gen-only] [--quit]",
     "                                        驱动 3ds Max 装配",

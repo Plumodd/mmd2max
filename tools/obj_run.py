@@ -494,6 +494,10 @@ META_HUMAN = {
     # 而「源骨总数」没有第二份产物可比 —— 比不了的数量不是判据，是留痕。
     "role_control": "与 role_skeleton/role_morph 之和 = 源骨总数；无第二份源骨数可比",
     "role_morph": "与 role_skeleton/role_control 之和 = 源骨总数；同样无第二份可比",
+    # 锁骨权重裁剪阈值（默认 0=关）。它是**导出时**的参数，装配侧拿它做不了任何
+    # 门控：裁完的结果已经落进 weights.tsv，改这一行不会重算权重。留着它只为回答
+    # 「这份权重是按哪个 T 导的」，没有第二份产物可比 ⇒ 当不了一把尺。
+    "clavicle_trim_cm": "导出参数留痕；后果由 weights.tsv 承担，装配侧改它不生效",
 }
 
 

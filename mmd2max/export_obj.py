@@ -31,7 +31,7 @@
     （见 semantic.guide_bone_indices）。默认 True，保持历轮基线不变。
 
 用法: python -m mmd2max.export_obj <input.pmx> <outdir> [scale] [min_weight]
-      [humanoid|full] [accessory_parent] [--drop-guides]
+      [humanoid|full] [accessory_parent] [--clavicle-trim N] [--drop-guides]
 """
 from __future__ import annotations
 
@@ -607,6 +607,75 @@ def _remap_humanoid(deform, positions, model, kept_set, old_to_new, new_heads,
         total = sum(merged.values())
         remapped.append([(k, w / total) for k, w in merged.items()])
     return remapped
+
+
+def _trim_clavicle_weights(deform, positions, scale, biped_mapping,
+                           old_to_new, trim_cm):
+    """可选：把 Clavicle（左/右肩）靠身体中线那一片的权重让给同顶点已有的骨。
+
+    开关 `trim_cm <= 0` ⇒ 原样返回 deform，逐字不变（**默认关闭**，零回归）。
+    `trim_cm = T > 0` ⇒ 右肩裁 x > -T、左肩裁 x < T 的顶点；被裁掉的肩骨权重
+    按「该顶点其余骨的原权重比例」重新分配，权重总和保持不变。
+
+    为什么按 x 而不是按骨名硬删：原 PMX 作者把锁骨内侧到上胸一片刷给肩骨，
+    这在 MMD 里是「抬臂时领口跟随」的设计；但转到 Biped 后 Clavicle 成了整条
+    手臂的根，一转就甩手臂 + 带上胸，观感上像带错了权重。这是**动画意图的取舍**，
+    不是缺陷，所以做成默认关的可选开关，不擅自改变任何既有产物。
+
+    接收方不硬编码：实测林尼 T=2 档 404 个受影响顶点全部本来就有「上半身2」
+    (Bip001 Spine1) 权重，归一化后自然由它接手；只有整根顶点只剩肩骨时才
+    兜底给胸腔骨。这样不会凭空造出「原来没有的骨影响这个顶点」。
+
+    实测影响面（林尼 24037 顶点）：T=0 ⇒ 129 顶点/让出 2.9；T=2 ⇒ 404/21.3；
+    T=4 ⇒ 941/102.4；T=6 ⇒ 1197/203.9；全削 ⇒ 2687/833.3。
+    温和档几乎看不出变化，要明显改善需 T>=4，代价是偏离原作者绑定。
+    """
+    if trim_cm <= 0.0:
+        return deform, []
+
+    target_to_new: dict[str, int] = {}
+    for old, target in (biped_mapping or {}).items():
+        if target and old in old_to_new:
+            target_to_new.setdefault(target, old_to_new[old])
+    r_clav = target_to_new.get("Bip001 R Clavicle")
+    l_clav = target_to_new.get("Bip001 L Clavicle")
+    fallback = next((target_to_new[t] for t in
+                     ("Bip001 Spine1", "Bip001 Spine2", "Bip001 Spine")
+                     if t in target_to_new), None)
+    if (r_clav is None and l_clav is None) or fallback is None:
+        return deform, []
+
+    moved_verts = 0
+    moved_weight = 0.0
+    no_receiver = 0
+    out = []
+    for vi, weights in enumerate(deform):
+        x = convert_vec(positions[vi], scale)[0]
+        cut = set()
+        for b, _w in weights:
+            if b == r_clav and x > -trim_cm:
+                cut.add(b)
+            elif b == l_clav and x < trim_cm:
+                cut.add(b)
+        if not cut:
+            out.append(weights)
+            continue
+        total = sum(w for _b, w in weights)
+        rest = [(b, w) for b, w in weights if b not in cut]
+        rest_sum = sum(w for _b, w in rest)
+        moved_weight += total - rest_sum
+        if rest_sum > 1e-9:
+            rebuilt = [(b, w * total / rest_sum) for b, w in rest]
+        else:
+            rebuilt = [(fallback, total)]
+            no_receiver += 1
+        out.append(rebuilt)
+        moved_verts += 1
+
+    note = (f"  锁骨权重裁剪（T=±{trim_cm:g}cm）：{moved_verts} 个顶点，"
+            f"让出肩骨权重 {moved_weight:.1f}，由同顶点已有骨按原比例接手"
+            + (f"（{no_receiver} 个顶点无其他骨，兜底给胸腔骨）" if no_receiver else ""))
+    return out, [note]
 
 
 def _prune_weights(deform, skin_flag, new_parent):
@@ -2404,6 +2473,8 @@ class Plan:
     filter_useless: bool
     accessory_parent: str
     keep_guides: bool = True
+    # 锁骨权重裁剪阈值（cm）。0 = 关闭，逐字保持原 PMX 权重。
+    clavicle_trim_cm: float = 0.0
 
     # ---- 网格 ----
     positions: list = field(default_factory=list)
@@ -2466,7 +2537,8 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
                humanoid_only: bool = False, filter_useless: bool = True,
                max_skin_bones: int | None = None,
                accessory_parent: str = "nearest",
-               keep_guides: bool = True, model=None) -> Plan:
+               keep_guides: bool = True, clavicle_trim_cm: float = 0.0,
+               model=None) -> Plan:
     """把参数换算成 Plan。除读 PMX 外不产生任何副作用。
 
     model：已解析的 PMXModel，GUI 反复调参时传进来，省掉每次重新解析（大模型 ~2MB）。
@@ -2478,7 +2550,8 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
 
     plan = Plan(source=source, model=model, scale=scale, min_weight=min_weight,
                 humanoid_only=humanoid_only, filter_useless=filter_useless,
-                accessory_parent=accessory_parent, keep_guides=keep_guides)
+                accessory_parent=accessory_parent, keep_guides=keep_guides,
+                clavicle_trim_cm=clavicle_trim_cm)
     warnings = plan.warnings
     # pmx.py 里那两条 SDEF/QDEF 警告是「按近似 LBS」时代的口径（该文件有用户未提交的
     # 半成品，不动它）；装配侧现已按顶点恢复 DQ 蒙皮，这里换掉旧说法，避免同一份
@@ -2624,6 +2697,12 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         deform, bone_names, positions)
     plan.notes.extend(breast_split_notes)
 
+    # ---- 锁骨权重裁剪（可选开关，默认关）：必须排在 skin_flag 统计之前，
+    #      让出权重后各骨的 totals 才是对的。----
+    deform, clav_notes = _trim_clavicle_weights(
+        deform, positions, scale, biped_mapping, old_to_new, clavicle_trim_cm)
+    plan.notes.extend(clav_notes)
+
     # ---- 先确定要加入 Skin 的骨骼（skin_flag），再据此剪枝 deform ----
     bone_total = len(heads)
     totals = [0.0] * bone_total
@@ -2727,6 +2806,9 @@ def build_plan(source: Path, scale: float = 0.08, min_weight: float = 0.0,
         # MMD2MAX.CFG，MAXScript 按 bool 读，一条链上没有任何取反（M1b 之前
         # FOOT_BOX_FLAT→foot_pitch→FOOTPITCH→`if not` 连反三次，翻开关的人数不清自己翻到哪儿了）。
         f"foot_box_flat\t{'true' if FOOT_BOX_FLAT else 'false'}",
+        # 锁骨权重裁剪阈值留痕：这一份 weights.tsv 是按哪个 T 导的。装配侧没有
+        # 读者（obj_run 的 META_HUMAN 里已申报），裁完的结果就写在 weights.tsv 里。
+        f"clavicle_trim_cm\t{clavicle_trim_cm!r}",
         # #70/#71：两张特写的取景框 + subject 极值，各 12 条（导出单位的绝对坐标）。
         # 空串 = 这具模型认不出那几根骨，Max 那侧退回旧的场景包围盒带。写成 12 个键而不是
         # 三个「x y z」串：CFG 的每个值都是单个数，Max 用 mmd2maxCfgNumOpt 直接验数，
@@ -3019,9 +3101,27 @@ def main(argv: list[str]) -> int:
     # --drop-guides 是开关而不是位置参数：插在任意位置都生效，免得为它重排 5~7 号槽
     keep_guides = "--drop-guides" not in argv
     argv = [a for a in argv if a != "--drop-guides"]
+    # 锁骨权重裁剪：--clavicle-trim <cm>，默认 0 = 关。命名开关而非第 8 个位置参数，
+    # 免得为了开它必须把前面 5 个位置槽全填一遍。
+    clavicle_trim = 0.0
+    if "--clavicle-trim" in argv:
+        ci = argv.index("--clavicle-trim")
+        if ci + 1 >= len(argv):
+            print("--clavicle-trim 需要跟一个厘米数")
+            return 1
+        try:
+            clavicle_trim = float(argv[ci + 1])
+        except ValueError:
+            print(f"--clavicle-trim 的值不是数字：{argv[ci + 1]!r}")
+            return 1
+        if clavicle_trim < 0.0:
+            print("--clavicle-trim 不能为负")
+            return 1
+        argv = argv[:ci] + argv[ci + 2:]
     if len(argv) < 3:
         print("用法: python -m mmd2max.export_obj <input.pmx> <outdir> "
-              "[scale|auto] [min_weight] [humanoid|full] [--drop-guides]")
+              "[scale|auto] [min_weight] [humanoid|full] [accessory_parent] "
+              "[--clavicle-trim N] [--drop-guides]")
         return 1
     source = Path(argv[1])
     outdir = Path(argv[2])
@@ -3048,7 +3148,7 @@ def main(argv: list[str]) -> int:
     info = export(source, outdir, build_plan(
         source, scale, min_weight, humanoid_only=humanoid_only,
         filter_useless=filter_useless, accessory_parent=accessory,
-        keep_guides=keep_guides))
+        keep_guides=keep_guides, clavicle_trim_cm=clavicle_trim))
     for key in ("obj", "bones", "weights", "morphs", "physics"):
         print(f"  {key}: {info[key]}")
     print(f"  顶点 {info['vertex_count']}  三角面 {info['face_count']}  "

@@ -93,6 +93,8 @@ def main(argv: list[str]) -> int:
     folder = Path(args[0]).resolve()
     height = 160.0
     min_weight = 0.0
+    # 锁骨权重裁剪阈值（cm），0 = 关。默认不传 = 逐字保持原 PMX 权重。
+    clavicle_trim = 0.0
     # --drop-guides：不导出「什么都不干的辅助骨」（センター2 / WeaponL·R / 十根指先…）。
     # 默认不传 = 保持历轮行为，基线数字不变。
     drop_guides = "--drop-guides" in argv
@@ -102,6 +104,8 @@ def main(argv: list[str]) -> int:
             height = float(argv[i + 1])
         if item == "--min-weight" and i + 1 < len(argv):
             min_weight = float(argv[i + 1])
+        if item == "--clavicle-trim" and i + 1 < len(argv):
+            clavicle_trim = float(argv[i + 1])
 
     pmx = find_model(folder)
     outdir = app_paths.test_runs_dir() / pmx.stem
@@ -111,7 +115,8 @@ def main(argv: list[str]) -> int:
     print(f"[1/3] 导出：{pmx.name}  scale={scale}（目标身高 {height}cm）"
           + ("　[--drop-guides] 辅助骨骼不导出" if drop_guides else ""))
     plan = export_obj.build_plan(pmx, scale=scale, min_weight=min_weight,
-                                 keep_guides=not drop_guides)
+                                 keep_guides=not drop_guides,
+                                 clavicle_trim_cm=clavicle_trim)
     info = export_obj.export(pmx, outdir, plan)
     print(f"      顶点 {info['vertex_count']}  面 {info['face_count']}  "
           f"骨骼 {info['bone_count']} -> {info['kept_bone_count']}")

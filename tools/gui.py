@@ -195,6 +195,8 @@ class App(tk.Tk):
         self.path_var = tk.StringVar()
         self.mode_var = tk.StringVar(value="useful")
         self.accessory_var = tk.StringVar(value="nearest")
+        # 锁骨权重裁剪阈值（cm）：0 = 关，逐字保持原 PMX 权重。
+        self.clavicle_trim_var = tk.StringVar(value="0")
         self.min_weight_var = tk.StringVar(value="0.0")
         # 「保留辅助骨骼」：默认勾上 = 与历轮基线逐字相同。取消勾选就丢掉
         # 什么都不干的骨（センター2 / WeaponL·R / 十根指先 …），见 semantic.guide_bone_indices
@@ -683,6 +685,18 @@ class App(tk.Tk):
                                          sticky="w", pady=(0, 8))
 
         row += 1
+        ttk.Label(panel, text="锁骨权重裁剪（cm，0=关）").grid(row=row, column=0, sticky="w")
+        row += 1
+        ttk.Spinbox(panel, from_=0.0, to=30.0, increment=1.0,
+                    textvariable=self.clavicle_trim_var, width=10,
+                    command=self._changed).grid(row=row, column=0, sticky="w",
+                                                padx=(10, 0))
+        row += 1
+        ttk.Label(panel, text="把靠中线的肩骨权重让给胸腔骨；改了需重新导出 PMX 才生效",
+                  wraplength=300, foreground="#666").grid(
+                      row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        row += 1
         ttk.Label(panel, text="min_weight（低于此总权重的骨不蒙皮）").grid(
             row=row, column=0, sticky="w")
         row += 1
@@ -783,17 +797,22 @@ class App(tk.Tk):
         try:
             scale = float(self.scale_var.get())
             min_weight = float(self.min_weight_var.get())
+            clavicle_trim = float(self.clavicle_trim_var.get())
         except ValueError:
-            self.status_var.set("scale / min_weight 需要填数字")
+            self.status_var.set("scale / min_weight / 锁骨裁剪 需要填数字")
             return None
         if scale <= 0:
             self.status_var.set("scale 必须大于 0")
+            return None
+        if clavicle_trim < 0.0:
+            self.status_var.set("锁骨裁剪阈值不能为负")
             return None
         return {"scale": scale, "min_weight": min_weight,
                 "humanoid_only": mode == "humanoid",
                 "filter_useless": mode != "full",
                 "accessory_parent": self.accessory_var.get(),
-                "keep_guides": self.keep_guides_var.get()}
+                "keep_guides": self.keep_guides_var.get(),
+                "clavicle_trim_cm": clavicle_trim}
 
     def _source(self) -> Path | None:
         raw = self.path_var.get().strip()
