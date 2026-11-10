@@ -1304,6 +1304,19 @@ def build_spec(*, model: str, config: str, vertex_count: int,
         rows.append(row("thigh_roll", "ankle_err_cm", subject, 0,
                         THIGH_ANKLE_TOL_CM, "gate"))
 
+    # ── 膝铰链轴修正（2026-11-10）：这一刀的四行自检读数 ──────────
+    # Max 侧 mmd2maxLegHingeFix 报「大腿局部 Z 对齐 bodyRight 后的 |点积|」
+    # 与「脚掌仍朝前」的复检值。它们只回答「这一刀有没有把腿带偏」，
+    # 不另设阈值（report）；但规格表里必须有行，否则会被判成 orphan。
+    # 无腿模型或自门控提前返回时两族读数可能整族缺席 ⇒ if_present。
+    # pass/ran/leg_hinge 由 passes.spec_rows 自动装成 always，不在这里重复。
+    for limb in leg_rows:
+        rows.append(row("leg_hinge", "z_dot_bodyRight", limb["parent_target"],
+                        None, None, "report", when="if_present"))
+    for limb in foot_rows:
+        rows.append(row("leg_hinge", "foot_forward", limb["parent_target"],
+                        None, None, "report", when="if_present"))
+
     # ── 脚趾复摆（#38）+ 接趾后复摆：主体 = mode=foot 的行 ────────
     # 复摆残差的上限就是 CFG 里的 MMD2MAX_TOETOL：同一个数在两侧各写一遍的日子
     # 已经结束（M2a），规格表直接引用 targets。

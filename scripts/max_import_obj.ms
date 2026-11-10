@@ -2082,6 +2082,43 @@ fn mmd2maxRememberBoxAxis nm ax =
     ax
 )
 
+/* 宽/高轴账（2026-11-10，桌面版林尼实跑）。只有长度轴记账不够：
+   mmd2maxWidthHeightAxes 是「两根候选局轴里谁更贴近世界 Z 谁是高」，
+   这个大小关系会随骨的世界朝向翻转。写入侧（mmd2maxFitCrossSection）在
+   摆位/转角之前算出宽高轴=3/2，回读侧（mmd2maxBoxDims）在收尾之后
+   现场重判就变成 2/3 —— 于是实报 width=10.8277、height=6.81425，
+   正好把写入侧的 宽=6.81425 / 高=10.8277 对调，4 条 gate 全红。
+   Toe0 那次没翻转所以没红，更坐实是回读口径而非几何。
+   记下写入那一刻选中的宽/高轴，回读先认账、认不到才退回现场判据。 */
+global MMD2MAX_BOXWH_MAP = #()
+
+fn mmd2maxBoxWHOf nm =
+(
+    if nm == undefined do return undefined
+    for e in MMD2MAX_BOXWH_MAP do
+    (
+        if e[1] == nm do return #(e[2], e[3])
+    )
+    undefined
+)
+
+fn mmd2maxRememberBoxWH nm wIdx hIdx =
+(
+    /* 同一根骨可能被缩两遍（趾盒终帧重收），后一遍才是终态 ⇒ 覆盖。 */
+    if nm == undefined do return 0
+    if wIdx <= 0 or hIdx <= 0 do return 0
+    for i = 1 to MMD2MAX_BOXWH_MAP.count do
+    (
+        if MMD2MAX_BOXWH_MAP[i][1] == nm do
+        (
+            MMD2MAX_BOXWH_MAP[i] = #(nm, wIdx, hIdx)
+            return 1
+        )
+    )
+    append MMD2MAX_BOXWH_MAP #(nm, wIdx, hIdx)
+    1
+)
+
 fn mmd2maxLogStructDir label axes headPos want gotPos nodeNm =
 (
     /* 「结构方向」复核：PMX 每根骨自带 head 与 tail，骨头的**显示方向**就是
@@ -3644,6 +3681,9 @@ fn mmd2maxFitCrossSection node dir targetW targetH =
     local wIdx = oA
     local hIdx = oB
     if wh != undefined do (wIdx = wh[1]; hIdx = wh[2])
+    /* 把这一刻选中的宽/高轴记进账：回读侧在收尾之后现场重判会翻转，
+       见 MMD2MAX_BOXWH_MAP 的注释。 */
+    mmd2maxRememberBoxWH node.name wIdx hIdx
     local rW = mmd2maxFitBoneExtent node wIdx targetW
     local rH = mmd2maxFitBoneExtent node hIdx targetH
     #(rW[1], rH[1], wIdx, hIdx, eA, eB, ai, rW[2], rH[2], rW[3], rH[3])
@@ -3739,8 +3779,14 @@ fn mmd2maxApplyWidths root widths =
                 if cur > 0.001 do
                 (
                     local f = target / cur
+                    /* 放大上限 1.20 太紧（2026-11-10 桌面版林尼）：拇指网格实测
+                       3.1608cm，Biped 默认 2.39221cm ⇒ 需要 ×1.321，被截到
+                       2.87066，L/R Finger0 与 Finger02 共 4 条 hand_scale gate
+                       全红（差 0.29014cm）。其余四指都是缩小方向，不受影响。
+                       目标值是网格实测直径，放到 1.50 仍留着防「离谱目标一次
+                       撑飞骨盒」的护栏；足盒接趾那边的倍率限幅本来就是 0.2~5。 */
                     if f < 0.20 do f = 0.20
-                    if f > 1.20 do f = 1.20
+                    if f > 1.50 do f = 1.50
                     if (abs (f - 1.0)) > 0.05 do
                     (
                         for ai = 1 to 3 do if ai != lax do comps[ai] = comps[ai] * f
@@ -3917,7 +3963,10 @@ fn mmd2maxBoxDims node dir =
        别的轴的数，而 gate 会红在尺子上 —— 读者只会去改几何。 */
     local pinned = mmd2maxBoxAxisOf node.name
     if pinned > 0 do ai = pinned
-    local wh = mmd2maxWidthHeightAxes node ai
+    /* 宽/高轴也先认写入侧那笔账，认不到才退回现场判据（会被收尾后的
+       骨朝向翻转，2026-11-10 桌面版林尼 4 条 gate 全红的根因）。 */
+    local wh = mmd2maxBoxWHOf node.name
+    if wh == undefined do wh = mmd2maxWidthHeightAxes node ai
     if wh == undefined do return undefined
     local wid = mmd2maxLocalExtent node wh[1]
     local hei = mmd2maxLocalExtent node wh[2]

@@ -143,11 +143,18 @@ PASSES: tuple[Pass, ...] = (
           gate=("converge", "exit_reason", "gate")),
     _pass("thigh_roll", "大腿扭转闭环（#36）", requires=("converge",),
           writes=("thigh_roll",), moves=True),
+    # 膝铰链轴修正（2026-11-10）：绕腿长轴转大腿使局部 Z 对齐 bodyRight，
+    # 再反向转小腿把脚掌朝向复原。脚本里排在 thigh_roll 之后、收尾重摆之前；
+    # 它会挪动腿链（踝/脚掌），故 moves=True，由紧随其后的收尾与复摆重测。
+    # 之前只报了 pass/ran/leg_hinge 与 leg_hinge/* 四行读数却没登记，
+    # 每轮都产生 5 条 orphan + 1 条 timeline 噪声。
+    _pass("leg_hinge", "膝铰链轴修正（小腿前后折）", requires=("thigh_roll",),
+          writes=("leg_hinge",), moves=True),
     # 收尾是**两道写**（先全摆、再只转方向优先的骨），算一个 pass：它可能整段不跑
     # （没有任何骨被转走或被拽走时本就不该跑），所以 optional。
-    _pass("finish_pose", "收尾重摆 + 收尾转角", requires=("thigh_roll",),
+    _pass("finish_pose", "收尾重摆 + 收尾转角", requires=("leg_hinge",),
           writes=("pose_end", "rotate_end"), moves=True, optional=True),
-    _pass("toe_snap_roll", "扭转后脚趾复摆", requires=("thigh_roll",),
+    _pass("toe_snap_roll", "扭转后脚趾复摆", requires=("leg_hinge",),
           writes=("toe_snap",), moves=True,
           reads=(("toe_snap", "residual_after_roll_cm"),)),
     # 足盒接趾（#41）：#scale 把 Toe0 沿轴推走 ⇒ 复摆必须跟在它后面重测。
