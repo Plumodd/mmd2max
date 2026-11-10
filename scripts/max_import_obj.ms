@@ -3330,13 +3330,22 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
     local worse = 0
     local errCount = 0
     /* 用户第二轮反馈（2026-11-09 20:10 截图）：三节胸腔要竖直、不能后仰；
-       Neck 要指向 Head。MMD2MAX_CENTER_TARGET 存的是中轴各段的 (父骨名, child 点)，
-       最后一项的 child 就是重排后的 Neck 位置；PMX 的「首」tail 恰好是「頭」的
-       head，所以 rTail - neckPos 就是 Neck 该指的方向。 */
+       Neck 要指向 Head。胸腔三节用 centerUp 拉直（见下面那段 25 度判据）。
+       Neck 不需要额外兜底：PMX 的「首」tail 恰好就是「頭」的 head，
+       所以 want = rTail - rHead 天生指向 Head。
+       2026-11-10 修复（茜特拉莉「脖子那块骨骼在模型外面」）：删掉了原来那段
+       「取 MMD2MAX_CENTER_TARGET 末项 child 点当重排后的 Neck 位置，再用
+       rTail - neckPos 覆盖 want」的兜底。因在 export_obj._center_even_segments
+       把中轴四点的 x/y 一律压成髋中点常数（本模型 Neck 的 y 从 PMX 真值
+       +1.9227 变成 -3.8946），该 child 点已不是真实 Neck 位置：算出的方向
+       倾角为 +19.79°，与 PMX 真值 -21.83° 差 41.6° > 25 度门槛 ⇒ want 被
+       覆盖成 +19.79°；而 Neck 骨盒此刻继承 Spine2 的 21.02°，与新 want 只差
+       1.2°（< MMD2MAX_DIRTOL=3）⇒ 转角 pass 判定「已达标」整根跳过，
+       最终 结构向 Neck 夹角=42.8499 且差偏航=180°，8.24cm 的 Neck 骨盒
+       朝反方向戳出模型。删掉兜底后 want 恒为 PMX 真值，转角 pass 恢复把
+       42.8499 修到 0（与 baseline 及林尼/瓦雷莎一致）。
+       不动胸腔摆位：用户要的三节竖直保留，只修 Neck 骨盒方向。 */
     local centerUp = [0,0,1]
-    local neckPos = undefined
-    if MMD2MAX_CENTER_TARGET.count >= 1 do
-        neckPos = MMD2MAX_CENTER_TARGET[MMD2MAX_CENTER_TARGET.count][2]
     if rotWay == undefined do
     (
         if passNo == 1 do
@@ -3377,20 +3386,9 @@ fn mmd2maxRotatePass root lines rowIds targetNames limbs rotWay passNo onlyDir =
                             if cc < -1.0 do cc = -1.0
                             if (acos cc) > 25.0 do want = centerUp * (length want)
                         )
-                        /* Neck 单独按「重排后的 Neck 位置 -> PMX 頭 head」定向，
-                           不再跟着胸腔一起被拉成统一方向（上一版就是这样把它弄歪的）。 */
-                        if t == "Bip001 Neck" and neckPos != undefined do
-                        (
-                            local toHead = rTail - neckPos
-                            if (length toHead) > 0.001 do
-                            (
-                                local th = normalize toHead
-                                local dd = dot pd th
-                                if dd > 1.0 do dd = 1.0
-                                if dd < -1.0 do dd = -1.0
-                                if (acos dd) > 25.0 do want = th * (length want)
-                            )
-                        )
+                        /* Neck 既不参与上面三节的拉直，也不再做「重排位置 -> Head」
+                           的方向覆盖：PMX「首」tail = 「頭」head，want 本就指向 Head。
+                           删兜底的实测依据见本函数开头 2026-11-10 的说明。 */
                     )
                     local prio = mmd2maxChainPriority t
                     if passNo == 1 do
