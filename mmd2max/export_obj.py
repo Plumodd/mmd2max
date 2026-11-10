@@ -2060,6 +2060,9 @@ def _accessory_parent_column(kept, old_to_new, parents, heads, biped_mapping,
     两种策略各有代价，所以做成可选：
       - "nearest"（默认）：挂到「离该骨 head 最近的 Biped 节点」。用户要求：
         裙摆根部在腰线上，就贴腰线那根骨（本模型实测 = Bip001 Spine1）。
+        2026-11-10 收窄：只对「原父在腰以下（Pelvis/Spine）」的链根提级；
+        原父已是中轴上段（Spine1/Spine2/Neck/Head）的链根保持 PMX 原父。
+        依据与实测见下面循环内那段注释（+KnotF CF A01 被吸到脖子的回归）。
       - "hierarchy"：完全跟随 MMD 层级（裙摆跟『下半身』走）。
         动画语义上更贴近 MMD 原作者意图，但视觉贴合度差。
     """
@@ -2089,6 +2092,16 @@ def _accessory_parent_column(kept, old_to_new, parents, heads, biped_mapping,
         parent_target = biped_mapping.get(kept[parent_new])
         if not parent_target:
             # 父级不是 Biped 骨（还在附属骨链内部），不动
+            continue
+        # 2026-11-10：原父已是中轴上段（胸腔及以上）时尊重 PMX 层级，不再用
+        # 「几何最近」覆盖。nearest 的初衷只针对「裙摆挂在下半身、根部却在
+        # 腰线」这类视觉错位；无差别作用到所有链根时，会把 PMX 明确挂在
+        # 上半身2 的领口骨 +KnotF CF A01 吸到几何更近的「首」上
+        # （瓦雷莎实测：距 Spine2 13.47cm vs 距 Neck 10.71cm ⇒ 父 5 -> 6，
+        #  用户反馈「不是应该系在胸腔上吗，怎么父级是脖子」）。
+        # 腰以下（Pelvis / Spine）仍照常提级：裙摆、腰取消、尾巴行为不变；
+        # 原父不在中轴池的（手指尖等）本就走不到这个分支，也不受影响。
+        if parent_target in CENTER_NODE_ORDER[2:]:
             continue
         # 原本挂在躯干上的附属骨（裙摆/头发）只在躯干链里选最近节点：
         # 否则侧面的裙根会因为「离手臂更近」而被挂到 UpperArm 上，
@@ -3024,9 +3037,10 @@ def main(argv: list[str]) -> int:
     mode = argv[5].lower() if len(argv) > 5 else "useful"
     humanoid_only = (mode == "humanoid")
     filter_useless = (mode != "full")
-    # 第 7 参数：附属骨（裙摆/头发等）挂到哪个 Biped 节点
-    #   hierarchy = 跟随 MMD 层级（默认，动画语义正确）
-    #   nearest   = 挂到离链根最近的 Biped 节点（视觉更贴合，但改变动画归属）
+    # 第 7 参数：附属骨（裙摆/头发等）挂到哪个 Biped 节点，默认 nearest
+    #   hierarchy = 跟随 MMD 层级（动画归属与原作者一致，但可能浮在半空）
+    #   nearest   = 挂到离链根最近的 Biped 节点（视觉更贴合；只对原父在腰
+    #               以下的链根提级，原父已是胸腔及以上的保持 PMX 原父）
     accessory = argv[6].lower() if len(argv) > 6 else "nearest"
     if accessory not in ("hierarchy", "nearest"):
         print(f"  未知 accessory_parent={accessory!r}，回退 nearest")
